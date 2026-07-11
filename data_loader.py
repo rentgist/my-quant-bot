@@ -6,10 +6,10 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import concurrent.futures
-import requests_cache
+# import requests_cache
 
 # yfinance용 캐시 세션 (1시간 유지) - 429 Rate Limit 방지 및 속도 최적화
-yf_session = requests_cache.CachedSession('yfinance.cache', expire_after=3600)
+# yf_session = ...
 
 import FinanceDataReader as fdr
 import streamlit as st
