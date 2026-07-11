@@ -1379,6 +1379,8 @@ def get_ai_signal(d):
     macd = d.get('MACD_dir') or ""
     roe  = d.get('ROE')
     op_m = d.get('Op_Margin')
+    change = d.get('Change', 0)
+    ma5 = d.get('MA5', cp)
 
     if rsi is None or cp is None or ma20 is None: return "⚪ 데이터 부족 (판단 보류)"
 
@@ -1386,7 +1388,11 @@ def get_ai_signal(d):
     cp_f     = float(cp)
     ma20_f   = float(ma20)
     vol_f    = float(vol) if vol is not None else 100.0
+    change_f = float(change)
+    ma5_f    = float(ma5)
+    
     ma20_gap = (cp_f - ma20_f) / ma20_f * 100
+    ma5_gap  = (cp_f - ma5_f) / ma5_f * 100 if ma5_f > 0 else 0
 
     roe_f  = float(roe)  if roe  is not None else None
     op_m_f = float(op_m) if op_m is not None else None
@@ -1396,7 +1402,11 @@ def get_ai_signal(d):
     if rsi_f >= 75 and ma20_gap > 15: return "🔵 과매수 (익절/관망)"
     if 60 <= rsi_f < 75 and cp_f > ma20_f and "상승" in macd and vol_f > 120: return "🚀 추세 탑승 (불타기)"
     if 45 <= rsi_f < 60 and cp_f >= ma20_f: return "🟢 얕은 눌림목 (분할매수)"
-    if rsi_f < 45: return "🔥 바닥 줍줍 (적극매수)"
+    if rsi_f < 45:
+        # 떨어지는 칼날 방어
+        if change_f <= -3.0 or ma5_gap <= -4.0:
+            return "⚠️ 떨어지는 칼날 (매수 대기)"
+        return "🔥 바닥 줍줍 (적극매수)"
     return "🟡 방향성 탐색 (관망)"
 
 
