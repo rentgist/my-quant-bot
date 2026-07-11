@@ -562,7 +562,7 @@ with tab2:
             f"padding:15px; border-radius:8px; margin-bottom:10px;'>"
             f"<div style='font-size:1.4em; font-weight:900;'>🇺🇸 {us_tier_label}</div>"
             f"<div style='font-size:0.95em; font-weight:600; color:{us_tier_color}; margin:4px 0;'>{us_tier_sub}</div>"
-            f"<div style='font-size:0.85em; color:#ddd;'>{us_tier_msg}</div>"
+            f"<div style='font-size:0.85em; color:#333;'>{us_tier_msg}</div>"
             f"</div>",
             unsafe_allow_html=True
         )
@@ -575,7 +575,7 @@ with tab2:
             f"padding:15px; border-radius:8px; margin-bottom:10px;'>"
             f"<div style='font-size:1.4em; font-weight:900;'>🇰🇷 {kr_tier_label}</div>"
             f"<div style='font-size:0.95em; font-weight:600; color:{kr_tier_color}; margin:4px 0;'>{kr_tier_sub}</div>"
-            f"<div style='font-size:0.85em; color:#ddd;'>{kr_tier_msg}</div>"
+            f"<div style='font-size:0.85em; color:#333;'>{kr_tier_msg}</div>"
             f"</div>",
             unsafe_allow_html=True
         )
