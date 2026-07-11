@@ -344,7 +344,7 @@ def get_sector_baseline():
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=1))
 def fetch_ticker_history(ticker_str, period="1y"):
-    df = yf.Ticker(ticker_str, session=yf_session).history(period=period)
+    df = yf.Ticker(ticker_str).history(period=period)
     if not df.empty and 'Close' in df.columns:
         df = df.dropna(subset=['Close'])
     return df
