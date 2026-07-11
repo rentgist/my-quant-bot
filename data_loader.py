@@ -329,50 +329,6 @@ def get_1m_investor_flow():
         pass
     return 0, 0, 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(fetch_macro, k, v) for k, v in tickers.items()]
-        for future in concurrent.futures.as_completed(futures):
-            k, df = future.result()
-            result[k] = df
-
-    # KOSPI 및 환율은 실시간성이 더 좋은 FinanceDataReader(fdr) 사용
-    start_10y = (pd.Timestamp.now() - pd.DateOffset(years=10)).strftime('%Y-%m-%d')
-    try:
-        df_kospi = fetch_fdr_history("KS11", start_10y)
-        if not df_kospi.empty:
-            df_kospi.index = pd.to_datetime(df_kospi.index).tz_localize(None).normalize()
-            result["kospi_10y"] = df_kospi[~df_kospi.index.duplicated(keep='last')]
-    except Exception:
-        result["kospi_10y"] = pd.DataFrame()
-
-    try:
-        df_usdkrw = fetch_fdr_history("USD/KRW", start_10y)
-        if not df_usdkrw.empty:
-            df_usdkrw.index = pd.to_datetime(df_usdkrw.index).tz_localize(None).normalize()
-            result["usdkrw_10y"] = df_usdkrw[~df_usdkrw.index.duplicated(keep='last')]
-    except Exception:
-        result["usdkrw_10y"] = pd.DataFrame()
-
-    # ── VKOSPI 3단 폴백 체인 ──
-    vkospi_source = "yfinance (^VKOSPI)"
-    if result.get("vkospi_10y", pd.DataFrame()).empty:
-        try:
-            vk = fetch_vkospi_krx()
-            vk.index = pd.to_datetime(vk.index).normalize()
-            result["vkospi_10y"] = vk
-            vkospi_source = "KRX 정보데이터시스템 직조회"
-        except Exception:
-            pass
-    if result.get("vkospi_10y", pd.DataFrame()).empty:
-        proxy = build_vkospi_proxy(result.get("kospi_10y", pd.DataFrame()))
-        if not proxy.empty:
-            result["vkospi_10y"] = proxy
-            vkospi_source = "프록시 (KOSPI 실현변동성 EWMA·20일 병행, 과거 수익률 기반 후행지표)"
-        else:
-            vkospi_source = "없음 (전체 소스 실패)"
-    result["vkospi_source"] = vkospi_source
-
-    return result
 
 @st.cache_data(ttl=1800)
 def get_sector_baseline():
@@ -388,7 +344,7 @@ def get_sector_baseline():
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=1))
 def fetch_ticker_history(ticker_str, period="1y"):
-    df = yf.Ticker(ticker_str).history(period=period)
+    df = yf.Ticker(ticker_str, session=yf_session).history(period=period)
     if not df.empty and 'Close' in df.columns:
         df = df.dropna(subset=['Close'])
     return df
