@@ -552,11 +552,11 @@ with tab2:
 
     def _render_tier_card(flag, score, rec_score, danger):
         label, sub, action_badge, action_color, border_color, body = _compute_tier(score, rec_score, danger)
-        body_html = "".join(f"<div style='margin:4px 0; font-size:0.88em; color:#fff;'>· {line}</div>" for line in body)
+        body_html = "".join(f"<div style='margin:4px 0; font-size:0.88em; color:inherit;'>· {line}</div>" for line in body)
         st.markdown(
             f"<div style='background:{border_color}18; border-left:5px solid {border_color}; "
             f"padding:14px 16px; border-radius:8px; margin-bottom:6px;'>"
-            f"<div style='font-size:1.3em; font-weight:900; color:#fff;'>{flag} {label}</div>"
+            f"<div style='font-size:1.3em; font-weight:900; color:inherit;'>{flag} {label}</div>"
             f"<div style='font-size:0.9em; font-weight:700; color:{border_color}; margin:3px 0 8px;'>{sub}</div>"
             f"<div style='display:inline-block; padding:3px 10px; border-radius:12px; "
             f"background:{action_color}30; border:1px solid {action_color}; "
@@ -869,7 +869,16 @@ with tab2:
 
 with tab4:
     st.subheader("🚀 섹터별 텐배거 마스터 레이더 (미래 지표 및 트렌드 필터)")
-    from config import TENBAGGER_UNIVERSE as UNIVERSE
+    # ── 텐배거 유니버스 선택 ──
+    # (사용자가 원하는 종목군을 카테고리별로 관리)
+    UNIVERSE = {
+        "🇺🇸 미국 AI & 클라우드":              ["PLTR","CRWD","SNOW","DDOG","NET","SOUN","MDB","ZS","MNDY"],
+        "🇺🇸 미국 혁신성장 (우주/바이오/테크)": ["IONQ","SOFI","RIVN","CELH","RKLB","ASTS","CRSP","LUNR","SYM","HOOD"],
+        "🇰🇷 한국 반도체 소부장 (HBM/AI)":        ["피에스케이홀딩스", "한미반도체", "테크윙", "HPSP", "이수페타시스", "에이직랜드", "와이아이케이", "원익IPS", "에스티아이", "주성엔지니어링", "리노공업", "하나마이크론"],
+        "🇰🇷 한국 K-뷰티 & K-푸드":            ["실리콘투","클리오","파마리서치","삼양식품","에이피알","브이티","코스메카코리아"],
+        "🇰🇷 한국 바이오 & 헬스케어":          ["알테오젠","HLB","삼천당제약","리가켐바이오","에이비엘바이오","파마리서치"],
+        "🇰🇷 한국 전력기기 & 로봇":             ["HD현대일렉트릭","두산로보틱스","레인보우로보틱스","LS ELECTRIC"],
+    }
     selected_theme = st.selectbox("스캔할 섹터:", list(UNIVERSE.keys()))
     if st.button("해당 섹터 레이더 가동"):
         is_korea = "한국" in selected_theme
