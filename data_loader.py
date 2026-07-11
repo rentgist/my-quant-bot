@@ -6,10 +6,10 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import concurrent.futures
-# import requests_cache
+import requests_cache
 
 # yfinance용 캐시 세션 (1시간 유지) - 429 Rate Limit 방지 및 속도 최적화
-# yf_session = ...
+yf_session = requests_cache.CachedSession('yfinance_v2.cache', expire_after=3600)
 
 import FinanceDataReader as fdr
 import streamlit as st
@@ -344,7 +344,7 @@ def get_sector_baseline():
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=1))
 def fetch_ticker_history(ticker_str, period="1y"):
-    df = yf.Ticker(ticker_str).history(period=period)
+    df = yf.Ticker(ticker_str, session=yf_session).history(period=period)
     if not df.empty and 'Close' in df.columns:
         df = df.dropna(subset=['Close'])
     return df

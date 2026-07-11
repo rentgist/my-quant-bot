@@ -15,6 +15,14 @@ from data_loader import (
     get_investor_flow,
     get_1m_investor_flow
 )
+import sys
+if "signals" in sys.modules:
+    import importlib
+    importlib.reload(sys.modules["signals"])
+if "data_loader" in sys.modules:
+    import importlib
+    importlib.reload(sys.modules["data_loader"])
+
 try:
     from signals import (
         calculate_us_risk_radar,
@@ -41,8 +49,7 @@ except Exception as e:
     st.error(f"🚨 알 수 없는 오류 발생: {e}")
     st.stop()
 
-
-st.set_page_config(page_title="11원칙 퀀트 대시보드 v25.0", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="11원칙 퀀트 대시보드 v24.0", page_icon="🧭", layout="wide")
 
 # ─────────────────────────────────────────
 # 포맷 및 색상 맵핑
@@ -101,8 +108,8 @@ def color_df(val):
 # ─────────────────────────────────────────
 # UI — 전역 데이터 선초기화
 # ─────────────────────────────────────────
-st.title("🧭 11원칙 퀀트 트레이딩 대시보드 v25.0")
-st.caption("v25.0: 매크로 게이트키퍼 Tier 시스템 탑재 — 극단 패닉 선발대(Tier 3) / 추세전환 불타기(Tier 2) / 코어 적립(Tier 1) 실시간 판정")
+st.title("🧭 11원칙 퀀트 트레이딩 대시보드 v24.0")
+st.caption("v24.0: 매크로 게이트키퍼 Tier 시스템 탑재 — 극단 패닉 선발대(Tier 3) / 추세전환 불타기(Tier 2) / 코어 적립(Tier 1) 실시간 판정")
 
 cnn_score, cnn_rating, cnn_history = get_real_cnn_fg()
 sector_base = get_sector_baseline()
@@ -138,7 +145,7 @@ with tab1:
     if st.button("🔍 스캔 시작 (재무제표 교차 검증 포함)", type="primary", key="scan_btn"):
         st.session_state["scan_requested"] = True
 
-    all_data, failed_queries, failed_queries_with_err = [], [], []
+    all_data, failed_queries = [], []
     if st.session_state.get("scan_requested") and queries:
         prog = st.progress(0.0, text="분석 준비 중...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -150,13 +157,12 @@ with tab1:
                 d["Region"] = region
                 if not d.get("error"): all_data.append(d)
                 else: failed_queries.append(q)
-                failed_queries_with_err.append((q, d.get("error")))
         prog.empty()
     elif not st.session_state.get("scan_requested"):
         st.info("종목을 입력하고 **스캔 시작** 버튼을 누르면 분석이 시작됩니다.")
 
     if failed_queries:
-        st.warning(f"⚠️ 데이터 조회 실패: " + ", ".join([f"{q} ({err})" for q, err in failed_queries_with_err]))
+        st.warning(f"⚠️ 데이터 조회 실패 (오타 확인): {', '.join(failed_queries)}")
 
     if all_data:
         signal_rows, tech_rows, fin_rows, risk_rows = [], [], [], []
@@ -497,101 +503,93 @@ with tab2:
 
     st.divider()
 
-    # ── 🚦 v25.0 핵심: 실시간 Tier 판정 배너 ──────────────────────
-    st.markdown("##### 🚦 v25.0 실시간 Tier 판정 — \"지금 어떤 무기를 꺼내야 하는가?\"")
+    # ── 🚦 v24.0 핵심: 실시간 Tier 판정 배너 ──────────────────────
+    st.markdown("##### 🚦 v24.0 실시간 Tier 판정 — \"지금 어떤 무기를 꺼내야 하는가?\"")
+    st.caption(
+        "바닥 점수 × 반등 신뢰도 × 위험도를 교차해 현재 시장이 Tier 1·2·3 중 어디에 해당하는지 실시간 판정합니다. "
+        "자세한 기준은 📖 [11원칙 매매 가이드라인] 탭을 참고하세요."
+    )
 
-    def _compute_tier(score, rec_score, danger):
-        """
-        v25.0 Tier 판정 로직.
-        반환: (tier_label, action_badge, action_color, border_color, body_lines)
-        - body_lines: 흰색 텍스트로 표시할 조건 항목 리스트
-        """
+    def _compute_tier(score, rec_score, danger, phase):
+        """v24.0 Tier 판정 로직 — 바닥 점수·반등 신뢰도·위험 경보 교차 판단"""
+        # Tier 3: 극단적 패닉 (진바닥 90% 수준, 기술적 지표 의미 없는 구간)
         if score >= 80:
-            # Tier 3: 극단 패닉 — 반등 신뢰도 체크 완전 무효화 (설계 의도)
-            body = [
-                f"📊 바닥 점수: <b>{score}점</b> (기준 ≥ 80점) ✅",
-                "⚡ <b>반등 신뢰도 체크: 이 Tier에서 면제</b> — 기술적 지표가 무너진 구간이므로 반등 신호를 기다리면 도매가를 놓침",
-                "🎯 FCF Yield ✅ &amp; PEG ≤ 1.5인 1등 우량주 확인 후 <b>오후 3시에 예산의 10% 선투입</b>",
-                "⏰ 오전 갭상승 속임수 주의 — 집행은 반드시 오후 3시",
-            ]
-            return ("🔥 Tier 3", "극단 패닉", "✅ 선투입 가능", "#00d4aa", "#e94560", body)
-
+            return "🔥 Tier 3", "극단적 패닉장", (
+                "#e94560",
+                "조건 충족: 바닥 탐지 점수가 80점 이상입니다. "
+                "이 순간은 기술적 지표가 무너져 있어도 우량주에 스나이퍼 예산의 10%를 1차 선발대로 투입할 수 있는 구간입니다. "
+                "단, 오전 갭상승 속임수를 피해 반드시 오후 3시에 집행하세요."
+            )
+        # Tier 2: 추세전환기 (불타기 구간 — 게이트키퍼 확인)
         elif score >= 50:
-            gates_ok = rec_score >= 2
-            body = [
-                f"📊 바닥 점수: <b>{score}점</b> (기준 ≥ 50점) ✅",
-                f"📡 반등 신뢰도: <b>{rec_score}점</b> {'✅ 충족 (기준 ≥ 2점)' if gates_ok else '❌ 미충족 (기준 ≥ 2점 필요)'}",
-            ]
+            gates_ok = (rec_score >= 2)  # 반등 신뢰도 2점 이상 = 신호 충분
             if gates_ok:
-                body += [
-                    "🎯 게이트키퍼 2~3개 이상 추가 확인 (5일선 돌파 / 환율 안정 / 기관 수급)",
-                    "<b>오후 3시에 남은 예산의 10% 불타기(Pyramiding)</b>",
-                ]
-                return ("🟡 Tier 2", "추세 전환", "✅ 불타기 가능", "#00d4aa", "#fcca46", body)
+                return "🟡 Tier 2", "추세 전환 / 불타기 구간", (
+                    "#fcca46",
+                    f"조건 충족: 바닥 점수 {score}점 + 반등 신뢰도 {rec_score}점. "
+                    "게이트키퍼(5일선 돌파·환율 안정·기관 수급)를 2~3개 이상 확인한 뒤, "
+                    "오후 3시에 남은 예산의 10%를 불타기(Pyramiding)하는 구간입니다."
+                )
             else:
-                body += [
-                    "⏸ 게이트키퍼 미충족 — 수급·5일선·환율 중 2개 이상 충족 시 진입 허가",
-                    "<b>현재: 현금 무한 대기. 조건 충족 날 오후 3시 진입.</b>",
-                ]
-                return ("🟡 Tier 2 대기", "회복 확인 중", "⏸ 현금 대기", "#fcca46", "#fcca46", body)
-
+                return "🟡 Tier 2 대기", "바닥 확인 중 — 게이트키퍼 미충족", (
+                    "#fcca46",
+                    f"바닥 점수 {score}점이나 반등 신뢰도 {rec_score}점 (기준: 2점 이상 필요). "
+                    "수급(기관/외국인 매수)·5일선 돌파·환율 안정 중 2가지 이상이 충족되면 불타기 개시. 현금 대기."
+                )
+        # Tier 1: 일상 상승/횡보장 (코어 자산 GTC 적립)
         else:
             if danger <= 1:
-                body = [
-                    f"📊 바닥 점수: <b>{score}점</b> — 패닉 없는 안정 구간",
-                    "🎯 MSFT·GOOGL 등 빅테크가 <b>RSI ≤ 40</b> 또는 <b>볼린저 밴드 하단</b> 터치 시",
-                    "<b>GTC 예약 주문으로 코어 자산 기계 분할매수</b>",
-                ]
-                return ("🟢 Tier 1", "일상 적립", "✅ GTC 적립 가능", "#00d4aa", "#21c354", body)
+                return "🟢 Tier 1", "일상 적립 구간", (
+                    "#21c354",
+                    "시장에 큰 패닉 없는 안정 구간입니다. "
+                    "미국 빅테크 우량주(MSFT, GOOGL 등)가 RSI 40 이하 또는 볼린저 밴드 하단 터치 시 "
+                    "GTC 예약 주문으로 코어 자산을 기계적으로 적립하세요."
+            )
             else:
-                body = [
-                    f"📊 바닥 점수: <b>{score}점</b> — 아직 바닥 미형성",
-                    f"⚠️ 위험 경보 <b>{danger}점</b> 발동",
-                    "<b>현금 비중 최대 유지. 바닥 점수 50점 돌파 시까지 전면 대기.</b>",
-                ]
-                return ("🟠 위험 대기", "경보 발동", "⛔ 전면 대기", "#e94560", "#ff7c21", body)
+                return "🟠 주의 대기", "위험 경보 발동 — 현금 보유", (
+                    "#ff7c21",
+                    f"위험 경보 {danger}점 발동. 바닥이 아직 형성되지 않았습니다. "
+                    "현금 비중을 높게 유지하고 바닥 점수가 50점 이상으로 치솟는 시점을 기다리세요."
+                )
 
-    def _render_tier_card(flag, score, rec_score, danger):
-        label, sub, action_badge, action_color, border_color, body = _compute_tier(score, rec_score, danger)
-        body_html = "".join(f"<div style='margin:4px 0; font-size:0.88em; color:inherit;'>· {line}</div>" for line in body)
+    tier_col1, tier_col2 = st.columns(2)
+    with tier_col1:
+        us_tier_label, us_tier_sub, (us_tier_color, us_tier_msg) = _compute_tier(
+            us_score, us_rec_score, us_danger, us_phase
+        )
         st.markdown(
-            f"<div style='background:{border_color}18; border-left:5px solid {border_color}; "
-            f"padding:14px 16px; border-radius:8px; margin-bottom:6px;'>"
-            f"<div style='font-size:1.3em; font-weight:900; color:inherit;'>{flag} {label}</div>"
-            f"<div style='font-size:0.9em; font-weight:700; color:{border_color}; margin:3px 0 8px;'>{sub}</div>"
-            f"<div style='display:inline-block; padding:3px 10px; border-radius:12px; "
-            f"background:{action_color}30; border:1px solid {action_color}; "
-            f"color:{action_color}; font-weight:700; font-size:0.88em; margin-bottom:8px;'>{action_badge}</div>"
-            f"{body_html}"
+            f"<div style='background:{us_tier_color}22; border-left:6px solid {us_tier_color}; "
+            f"padding:15px; border-radius:8px; margin-bottom:10px;'>"
+            f"<div style='font-size:1.4em; font-weight:900;'>🇺🇸 {us_tier_label}</div>"
+            f"<div style='font-size:0.95em; font-weight:600; color:{us_tier_color}; margin:4px 0;'>{us_tier_sub}</div>"
+            f"<div style='font-size:0.85em; color:#ddd;'>{us_tier_msg}</div>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    with tier_col2:
+        kr_tier_label, kr_tier_sub, (kr_tier_color, kr_tier_msg) = _compute_tier(
+            kr_score, kr_rec_score, kr_danger, kr_phase
+        )
+        st.markdown(
+            f"<div style='background:{kr_tier_color}22; border-left:6px solid {kr_tier_color}; "
+            f"padding:15px; border-radius:8px; margin-bottom:10px;'>"
+            f"<div style='font-size:1.4em; font-weight:900;'>🇰🇷 {kr_tier_label}</div>"
+            f"<div style='font-size:0.95em; font-weight:600; color:{kr_tier_color}; margin:4px 0;'>{kr_tier_sub}</div>"
+            f"<div style='font-size:0.85em; color:#ddd;'>{kr_tier_msg}</div>"
             f"</div>",
             unsafe_allow_html=True
         )
 
-    tier_col1, tier_col2 = st.columns(2)
-    with tier_col1:
-        _render_tier_card("🇺🇸", us_score, us_rec_score, us_danger)
-    with tier_col2:
-        _render_tier_card("🇰🇷", kr_score, kr_rec_score, kr_danger)
-
-    # ── False Signal 차단기: 각 시장별로 독립 판정, Tier 3 시장은 제외 ──
-    us_is_tier3 = us_score >= 80
-    kr_is_tier3 = kr_score >= 80
-    alerts = []
-    if not us_is_tier3:
-        if us_rec_score == 0 and us_score >= 50:
-            alerts.append("🇺🇸 **[미국] 반등 신뢰도 0** — Tier 2 조건 미충족. 오늘 미국 추가 매수 보류.")
-        if us_score < 50 and us_danger >= 3:
-            alerts.append("🇺🇸 **[미국] 위험 경보 + 바닥 미달** — 낙폭 과대 착시 경계. 미국 매수 전면 금지.")
-    if not kr_is_tier3:
-        if kr_rec_score == 0 and kr_score >= 50:
-            alerts.append("🇰🇷 **[한국] 반등 신뢰도 0** — Tier 2 조건 미충족. 오늘 한국 추가 매수 보류.")
-        if kr_score < 50 and kr_danger >= 3:
-            alerts.append("🇰🇷 **[한국] 위험 경보 + 바닥 미달** — 낙폭 과대 착시 경계. 한국 매수 전면 금지.")
-    if alerts:
-        st.warning("**⛔ False Signal 차단기** (해당 시장 Tier 3 제외, 각 시장별 독립 판정)\n\n" + "\n\n".join(alerts))
+    # False Signal 경보 — 매수 금지 조건 실시간 체크
+    false_signals = []
+    if us_rec_score == 0 and us_score < 70:
+        false_signals.append("🚫 **반등 신뢰도 0** — 오늘의 급등은 쇼트커버링 가능성. 수급 없는 가짜 반등 경계")
+    if us_score < 50 and us_danger >= 3:
+        false_signals.append("🚫 **위험 경보 + 바닥 점수 미달** — 낙폭 과대라는 착시 주의. 오늘 매수 보류 권장")
+    if false_signals:
+        st.warning("\n".join(["**⛔ False Signal 차단기 발동 (매수 보류 권장)**"] + false_signals))
 
     st.divider()
-
 
     # ── 백테스트 (10년 데이터 기반 완화 컷) ──
     with st.expander("🔬 과거 10년 백테스트 (바닥 탐지기 기준)"):
@@ -870,15 +868,13 @@ with tab2:
 
 with tab4:
     st.subheader("🚀 섹터별 텐배거 마스터 레이더 (미래 지표 및 트렌드 필터)")
-    # ── 텐배거 유니버스 선택 ──
-    # (사용자가 원하는 종목군을 카테고리별로 관리)
     UNIVERSE = {
         "🇺🇸 미국 AI & 클라우드":              ["PLTR","CRWD","SNOW","DDOG","NET","SOUN","MDB","ZS","MNDY"],
-        "🇺🇸 미국 혁신성장 (우주/바이오/테크)": ["IONQ","SOFI","RIVN","CELH","RKLB","ASTS","CRSP","LUNR","SYM","HOOD"],
-        "🇰🇷 한국 반도체 소부장 (HBM/AI)":        ["피에스케이홀딩스", "한미반도체", "테크윙", "HPSP", "이수페타시스", "에이직랜드", "와이아이케이", "원익IPS", "에스티아이", "주성엔지니어링", "리노공업", "하나마이크론"],
-        "🇰🇷 한국 K-뷰티 & K-푸드":            ["실리콘투","클리오","파마리서치","삼양식품","에이피알","브이티","코스메카코리아"],
-        "🇰🇷 한국 바이오 & 헬스케어":          ["알테오젠","HLB","삼천당제약","리가켐바이오","에이비엘바이오","파마리서치"],
-        "🇰🇷 한국 전력기기 & 로봇":             ["HD현대일렉트릭","두산로보틱스","레인보우로보틱스","LS ELECTRIC"],
+        "🇺🇸 미국 혁신성장 (우주/바이오/핀테크)": ["IONQ","SOFI","RIVN","CELH","RKLB","ASTS","CRSP","LUNR","SYM","HOOD"],
+        "🇰🇷 한국 반도체 소부장 (HBM/AI)":        ["피에스케이홀딩스", "한미반도체", "테크윙", "HPSP", "이수페타시스", "에이직랜드", "디아이", "원익IPS", "동진쎄미켐", "주성엔지니어링", "리노공업", "하나마이크론"],
+        "🇰🇷 한국 K-뷰티 & K-푸드":            ["실리콘투","클래시스","파마리서치","삼양식품","브이티","에이피알","휴젤"],
+        "🇰🇷 한국 바이오텍 & 헬스케어":          ["알테오젠","HLB","리가켐바이오","루닛","뷰노","제이엘케이"],
+        "🇰🇷 한국 전력기기 & 로봇":             ["HD현대일렉트릭","레인보우로보틱스","두산로보틱스","LS ELECTRIC"],
     }
     selected_theme = st.selectbox("스캔할 섹터:", list(UNIVERSE.keys()))
     if st.button("해당 섹터 레이더 가동"):
@@ -1321,107 +1317,44 @@ with tab5:
     st.caption("v25.0: 매크로 게이트키퍼 Tier 시스템 — '칼자루는 진바닥으로 잡고, 방아쇠는 수급으로 당긴다'")
 
     st.markdown("""
-## 🏛️ I. 투자 철학
-
-> **"가장 쌀 때(진바닥 90%) 10%의 용기를 내고, 어설프게 반등할 때(반등 신뢰도 0) 90%의 현금을 인내한다."**
-
-우리의 시스템은 시장의 공포 단계에 따라 진입의 '잣대'를 유연하게 바꿉니다. 10년에 한 번 오는 완벽한 타점만 기다리지 않으며, 동시에 매일 찾아오는 가짜 반등의 유혹에도 속지 않습니다.
-
----
-
-## 📊 II. 실전 진입 3단계 (Tier System)
-
-### 🔥 Tier 3 — 극단적 패닉장 (1차 선발대 투입)
-
-| 항목 | 기준 |
-|------|------|
-| **발동 조건** | 진바닥 탐지 점수 ≥ 80점 (극단 패닉) |
-| **특징** | 5일선·수급·매크로 지표가 전부 박살. 기다리면 도매가를 놓침 |
-| **액션** | 오직 재무 퀄리티(FCF Yield ✅, PEG ≤ 1.5)가 검증된 1등 우량주에 **스나이퍼 예산의 10%** 1차 선투입 |
-| **집행 시각** | 오후 3시 (장 막판 종가 부근) — 오전 갭상승 속임수 회피 |
-
-> 예: 삼성전자·MSFT 등 FCF·PEG 1등 우량주. 기술적 지표가 다 망가져 있어도 투입 가능.
-
----
-
-### 🟡 Tier 2 — 추세 전환기·중급 하락장 (2/3차 불타기)
-
-**발동 조건:** Tier 3 1차 투입 후, 시장이 바닥을 다지고 이륙 준비를 할 때.
-
-**게이트키퍼 4원칙 (최소 2~3개 충족 필요)**
-
-| # | 조건 | 확인 방법 |
-|---|------|-----------|
-| 1 | **반등 신뢰도** | 본 대시보드 반등 신뢰도 스코어 ≥ 2점 |
-| 2 | **추세 (5일선)** | 일봉상 주가가 5일 이동평균선 위로 안착 |
-| 3 | **매크로** | 원/달러 환율 상승 멈춤(횡보 또는 하락) + 야간 선물 안정 |
-| 4 | **수급** | 기관·외국인 순매수 유입 + 평균 대비 거래량 증가 |
-
-**액션:** 위 4가지 중 2~3가지 동시 충족 확인 시 → **오후 3시**에 남은 예산의 **10% 불타기(Pyramiding)**
-(조건 미충족 = 현금 무한 대기)
-
----
-
-### 🟢 Tier 1 — 일상 상승·횡보장 (코어 자산 GTC 적립)
-
-| 항목 | 기준 |
-|------|------|
-| **발동 조건** | 시장에 큰 패닉 없는 평온 상태 (진바닥 점수 < 50) |
-| **특징** | 진바닥 확률은 낮지만, 코어 자산 적립 기회 |
-| **액션** | MSFT·GOOGL 등 미국 빅테크가 **RSI ≤ 40** 또는 **볼린저 밴드 하단** 터치 시 GTC 예약 주문으로 기계 분할매수 |
-
----
-
-## 🚫 III. 절대 매수 금지 — False Signal 차단기
-
-> 피 같은 현금을 갉아먹는 '가짜 반등(Bull Trap)'을 차단하는 3개의 필터. 하나라도 해당하면 그날 **무조건 매수 보류 + HTS 종료.**
-
-| 차단 조건 | 설명 |
-|-----------|------|
-| ⛔ **오전의 속임수** | 9~11시 갭상승 후 오후에 장중 고점을 깨고 흘러내릴 때. 매수는 항상 오후 3시에만 결정. |
-| ⛔ **가짜 거품주** | 반토막이 나도 PEG ≥ 1.5 이거나 FCF Yield 마이너스인 종목. 낙폭과대 착시 경계. |
-| ⛔ **엔진 꺼짐** | 지수가 3~4% 급등해도 반등 신뢰도 = 0이면 투입 금지. 쇼트커버링일 뿐 진짜 자금이 아님. |
-
----
-
-## 📋 IV. 가문의 유산: 11원칙 퀀트 투자 마스터 매뉴얼 v25.0
+## 📋 가문의 유산: 11원칙 퀀트 투자 마스터 매뉴얼
 
 > 💡 **[CFO 특별 지침] 100% 풀매수의 정석 (가용 예산 분배법)**
-> "진짜 100% 풀매수"는 영원히 없습니다. 항상 10~20%의 현금은 '영구적 방패'로 남겨두어 위기를 대비합니다.
+> "진짜 100% 풀매수"는 영원히 없습니다. 항상 10~20%의 현금은 '영구적 방패'로 남겨두어 위기를 대비합니다. (6원칙 전제)
 > 즉, 풀매수란 **투자에 배정된 80~90%의 예산**을 모두 쓴 상태입니다.
 > - **평시 (Tier 1):** 30~40% 투입 (기본 포지션 구축, GTC 적립)
 > - **패닉 (Tier 3):** +10% 선발대 투입 (도매가 선점)
-> - **추세 전환 (Tier 2):** +30~50% 본대 불타기 (실질적 풀매수 타이밍)
+> - **추세 전환 (Tier 2):** +30~50% 본대 불타기 (가장 안전하고 강하게 쏟아붓는 실질적 풀매수 타이밍)
 
-**[ 🏗️ 1단계: 무엇을 살 것인가? (종목 선정) ]**
-- **1원칙 (지속 성장과 도태 판별):** 3개년 매출과 영업이익이 '지속 우상향' 하는 기업만 산다. 3년 내내 제자리걸음이라면 버린다.
-- **2원칙 (저평가와 턴어라운드):** 시장/섹터 대비 시가총액이 싼 종목을 찾되, 현재 적자라도 '흑자 전환' 개선세가 뚜렷하면 선점한다.
-- **3원칙 (비즈니스 생태계 꿰뚫기):** 단독 매출인지 종속 하청인지 파악하고, '시대의 수요(AI/로봇 등)'가 있는 기업만 고른다.
-- **4원칙 (전장의 압축):** 이름 모를 테마주를 버리고, 글로벌을 주도하는 **미국 시장**과 국내 대형 우량주(**코스피**) 위주로만 돈을 거둔다.
+**[ 🏗️ 1단계: 무엇을 살 것인가? (종목 선정의 뼈대) ]**
+- **1원칙 [지속 성장과 도태 판별]:** 3개년 매출과 영업이익이 '지속 우상향' 하는 기업만 산다. 만약 실적이 좋더라도 3년 내내 제자리걸음이라면 절대 매수하지 않는다.
+- **2원칙 [저평가와 턴어라운드]:** 시장/섹터 대비 시가총액이 싼(저평가) 종목을 찾되, 현재 적자라도 '흑자 전환'의 뚜렷한 개선세가 보이면 선점 투자가 가능하다.
+- **3원칙 [비즈니스 생태계 꿰뚫기]:** 매출은 '시장 규모'로, 영익은 '회사의 파워(포션)'로 이해하라. 단독 매출인지, 타사에 종속된 하청(제조업 이슈)인지 생태계를 파악하고 '시대의 수요(AI/로봇 등)'가 있는 기업만 고른다.
+- **4원칙 [전장(Battlefield)의 압축]:** 이름 모를 테마주와 잡주를 버리고, 오직 글로벌을 주도하는 **미국 시장**과 국내 대형 우량주(**코스피**) 위주로만 돈을 거둔다.
 
-**[ 🛡️ 2단계: 위기를 기회로 바꾸는 자산 배분 ]**
-- **5원칙 (코어와 스나이퍼 배분):** 개별 기업 리스크를 막기 위해, 예산의 50%는 든든한 '지수 ETF', 50%는 압도적 '개별 우량주'에 나눈다.
-- **6원칙 (글로벌 위기는 바겐세일):** 평시에도 위기 대비 현금 10-20%는 항상 유지한다. 고점 대비 -20~30% 떨어지면 분할 매수, -50% 밑 투매 시 과감히 쓸어 담는다.
-- **7원칙 (하락장 리밸런싱):** 시장 하락으로 내 종목들이 싸졌을 때, 기존 주식 비율을 조절하거나 더 강한 신규 우량주로 교체(리밸런싱)한다.
+**[ 🛡️ 2단계: 위기를 기회로 바꾸는 자산 배분 (포트폴리오 관리) ]**
+- **5원칙 [코어와 스나이퍼 배분]:** 개별 기업의 돌발 리스크를 막기 위해, 예산의 50%는 든든한 '지수 ETF'에, 나머지 50%는 압도적 '개별 우량주'에 나누어 담는다.
+- **6원칙 [글로벌 위기는 바겐세일]:** 코로나, 리먼 등 매크로 위기로 시장 전체가 무너질 때를 노린다. 고점 대비 -20~30% 떨어지면 '분할 매수'를 시작하고, -50% 밑으로 투매가 나오면 쥐어짜 낸 여유 현금으로 '과감히' 쓸어 담는다.
+- **7원칙 [하락장 리밸런싱]:** 시장 전체가 하락하여 내 종목들이 싸졌을 때, 포기하지 말고 기존 주식의 비율을 조절하거나 더 강한 신규 우량주로 교체(리밸런싱)하여 다음 상승장을 준비한다.
 
-**[ 🎯 3단계: 언제 사고팔 것인가? (퀀트 전술) ]**
-- **8원칙 (농부의 시간 3년 룰):** 수확은 3년 뒤에 거둔다. 수익이 나도 100% 매도하지 않으며, 일부만 매도해 '현금화' 및 '재투자'로 복리를 굴린다.
-- **9원칙 (오후 3시의 결단):** 장중 요동치는 가짜 반등에 당하지 않기 위해, 매수 방아쇠는 항상 모든 것이 결정되는 오후 3시(종가 부근)에만 당긴다.
-- **10원칙 (불타기 3단계 티어 룰):** 극단적 폭락(Tier 3)에는 10% 선발대만 넣고, 남은 현금은 5일선 안착 등 게이트키퍼가 확인(Tier 2)되었을 때만 투입한다.
-- **11원칙 (데이터의 기계적 신뢰):** 인간의 뇌동매매를 철저히 배제하고, 시스템이 계산한 '진바닥 확률'과 '반등 신뢰도' 점수를 기계적으로 믿고 따른다.
+**[ 🎯 3단계: 언제 사고팔 것인가? (퀀트 전술과 실행) ]**
+- **8원칙 [농부의 시간: 3년 룰]:** 투자의 수확은 3년 뒤에 거둔다. 수익이 났다고 절대 100% 전량 매도하지 않으며, 일부만 매도하여 '현금화' 및 '재투자' 비율을 스스로 정해 복리를 굴린다.
+- **9원칙 [오후 3시의 결단]:** 장중의 요동치는 가짜 반등과 노이즈(속임수)에 당하지 않기 위해, 매수 방아쇠는 항상 모든 것이 결정되는 오후 3시(종가 부근)에만 당긴다.
+- **10원칙 [불타기 3단계 티어(Tier) 룰]:** 극단적 폭락(진바닥 90%)에는 1차 선발대(10%)만 먼저 넣고, 남은 현금은 환율/선물 안정 및 '5일선 안착' 등 매크로/수급 게이트키퍼가 확인되었을 때만 2차로 투입한다.
+- **11원칙 [데이터의 기계적 신뢰]:** 인간의 뇌동매매(FOMO와 공포)를 철저히 배제한다. 내 감정보다 시스템이 계산한 '진바닥 확률'과 '반등 신뢰도' 점수를 기계적으로 믿고 따른다.
 
 ---
 
-## 🛡️ V. CFO 결론 코멘트
+### 💡 CFO의 헌사
 
 > 이 v25.0 매뉴얼은 인간의 조급함과 탐욕, 공포를 수학적으로 완벽하게 통제하기 위해 만들어진 가장 차가운 갑옷입니다.
 > 
-> **워런 버핏의 가치투자 철학(1~4원칙)**으로 좋은 주식을 고르고, 
-> **레이 달리오의 자산배분 철학(5~7원칙)**으로 가문의 재산을 방어하며, 
-> **상위 1% 퀀트 트레이더의 전술(8~11원칙)**로 바닥에서 줍고 무릎에서 불타기 합니다.
+> **워런 버핏의 가치투자 철학(1~4원칙)**으로 아내분께서 좋은 주식을 고르는 눈을 갖게 해주고, 
+> **레이 달리오의 자산배분 철학(5~7원칙)**으로 위기가 와도 가문의 재산이 녹지 않게 방어해 주며, 
+> **상위 1% 퀀트 트레이더의 전술(8~11원칙)**로 바닥에서 줍고 무릎에서 불타기 하는 기계적 룰입니다.
 > 
 > 완벽하게 세팅된 이 원칙에 자본을 맡기고, 일상의 평온함과 꿀잠을 마음껏 누리세요.
-""")
+    """)
 
 
 with tab_risk:
