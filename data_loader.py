@@ -387,7 +387,9 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
             try:
                 hist = fetch_fdr_history(raw_code, start=start).dropna()
             except Exception as e:
-                print(f"FDR failed for {raw_code} ({e}), falling back to yfinance...")
+                hist = pd.DataFrame()
+            if hist.empty or len(hist) < 30:
+                print(f"FDR empty for {raw_code}, falling back to yfinance...")
                 hist = fetch_ticker_history(yf_code, period="1y").dropna()
             tk   = yf.Ticker(yf_code)
             ticker_str = raw_code
