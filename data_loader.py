@@ -384,7 +384,11 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
             kr_info = KRX_DICT.get(query_spaceless)
             if kr_info: raw_code, yf_code = kr_info["raw_code"], kr_info["yf_code"]
             else:        raw_code, yf_code = query, f"{query}.KS"
-            hist = fetch_fdr_history(raw_code, start=start).dropna()
+            try:
+                hist = fetch_fdr_history(raw_code, start=start).dropna()
+            except Exception as e:
+                print(f"FDR failed for {raw_code} ({e}), falling back to yfinance...")
+                hist = fetch_ticker_history(yf_code, period="1y").dropna()
             tk   = yf.Ticker(yf_code)
             ticker_str = raw_code
         else:
