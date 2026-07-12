@@ -122,7 +122,7 @@ usd_krw      = macro_charts.get("usdkrw_10y", pd.DataFrame())
 
 # 탭 구성
 tab_sniper, tab_radar, tab_report, tab_port = st.tabs([
-    "🎯 14:50 실전 타격",
+    "🎯 14:50 국장 실전 타격",
     "🔍 종목 발굴 & 레이더",
     "🌐 매크로 & 딥 리포트",
     "💼 포트폴리오 & 가이드",
@@ -191,15 +191,15 @@ with tab_sniper:
     is_true_bottom = (cnn_score <= 25) or (kospi_drawdown <= -15.0)
     
     with st.expander("📊 Step 1: 현재 시장이 진바닥인가? (상세 리포트)", expanded=is_true_bottom):
-        vix_10y = macro_charts.get("vix_10y", pd.DataFrame())
-        vix3m_10y = macro_charts.get("vix3m_10y", pd.DataFrame())
-        spy_10y = macro_charts.get("spy_10y", pd.DataFrame())
-        bt_us = run_historical_backtest(spy_10y, vix_10y, vix3m_10y)
+        vkospi_10y = macro_charts.get("vkospi_10y", pd.DataFrame())
+        usd_krw = macro_charts.get("usdkrw_10y", pd.DataFrame())
+        kospi_10y = macro_charts.get("kospi_10y", pd.DataFrame())
+        bt_kr = run_kr_historical_backtest(kospi_10y, vkospi_10y, usd_krw)
         
-        if bt_us:
-            score = bt_us.get("바닥점수", 0)
-            rec_score = bt_us.get("반등신뢰도", 0)
-            danger = bt_us.get("위험경보", 0)
+        if bt_kr:
+            score = bt_kr.get("바닥점수", 0)
+            rec_score = bt_kr.get("반등신뢰도", 0)
+            danger = bt_kr.get("위험경보", 0)
             
             # Use the actual Tier logic from get_strategic_advice
             if score >= 80:
@@ -223,7 +223,7 @@ with tab_sniper:
             c_a, c_b, c_c = st.columns(3)
             c_a.metric("알고리즘 바닥 점수", f"{score}/100")
             c_b.metric("매크로 반등 신뢰도", f"{rec_score}/100")
-            c_c.metric("VIX 위험 경보치", f"{danger}/100", "위험" if danger > 50 else "안전", delta_color="inverse")
+            c_c.metric("VKOSPI 위험 경보치", f"{danger}/100", "위험" if danger > 50 else "안전", delta_color="inverse")
         else:
             st.error("매크로 백테스트 데이터를 불러오지 못했습니다.")
 
