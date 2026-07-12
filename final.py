@@ -159,12 +159,12 @@ with tab_sniper:
         kospi_max_52w = float(kospi_df['Close'].tail(252).max())
         kospi_drawdown = (kospi_latest / kospi_max_52w - 1) * 100
         
-    is_true_bottom = (cnn_fg <= 25) or (kospi_drawdown <= -15.0)
+    is_true_bottom = (cnn_score <= 25) or (kospi_drawdown <= -15.0)
     
     c1, c2 = st.columns(2)
     with c1:
-        fg_status = "극단 공포 (폭락 신호)" if cnn_fg <= 25 else "공포" if cnn_fg <= 45 else "평시"
-        st.metric("CNN F&G (현재)", f"{cnn_fg:.0f}", fg_status, delta_color="inverse" if cnn_fg > 25 else "normal")
+        fg_status = "극단 공포 (폭락 신호)" if cnn_score <= 25 else "공포" if cnn_score <= 45 else "평시"
+        st.metric("CNN F&G (현재)", f"{cnn_score:.0f}", fg_status, delta_color="inverse" if cnn_score > 25 else "normal")
     with c2:
         dd_status = "극단 폭락 (Tier 3)" if kospi_drawdown <= -15.0 else "조정장" if kospi_drawdown <= -10.0 else "평시"
         st.metric("KOSPI 고점 대비 낙폭", f"{kospi_drawdown:.1f}%", dd_status, delta_color="inverse" if kospi_drawdown > -15.0 else "normal")
