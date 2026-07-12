@@ -23,7 +23,7 @@ from signals import parse_insider, short_interest_label, get_comprehensive_risk_
 # KRX 맵핑
 # ─────────────────────────────────────────
 @st.cache_data(ttl=86400)
-def get_krx_mapping():
+def get_krx_mapping_v2():
     mapping = {
         "LS ELECTRIC": {"raw_code": "010120", "yf_code": "010120.KS"},
         "LS일렉트릭": {"raw_code": "010120", "yf_code": "010120.KS"},
