@@ -670,3 +670,4 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
     except Exception as e:
         base["error"] = f"{type(e).__name__}: {str(e)}"
         return base
+    return base
