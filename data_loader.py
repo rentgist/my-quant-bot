@@ -38,10 +38,15 @@ def get_krx_mapping():
         df = fdr.StockListing('KRX')
         for _, row in df.iterrows():
             market_suffix = ".KS" if row['Market'] == 'KOSPI' else ".KQ"
-            mapping[str(row['Name']).upper()] = {
+            # 원래 이름과 공백 제거 이름을 모두 등록하여 검색 성공률 향상
+            raw_name = str(row['Name']).upper()
+            spaceless_name = raw_name.replace(" ", "")
+            info_dict = {
                 "raw_code": row['Code'],
                 "yf_code": row['Code'] + market_suffix
             }
+            mapping[raw_name] = info_dict
+            mapping[spaceless_name] = info_dict
         return mapping
     except Exception:
         mapping["_ERROR_"] = True
@@ -375,7 +380,8 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
         start   = (kst_now - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
 
         if is_kr:
-            kr_info = KRX_DICT.get(str(query).strip().upper())
+            query_spaceless = str(query).replace(" ", "").upper()
+            kr_info = KRX_DICT.get(query_spaceless)
             if kr_info: raw_code, yf_code = kr_info["raw_code"], kr_info["yf_code"]
             else:        raw_code, yf_code = query, f"{query}.KS"
             hist = fetch_fdr_history(raw_code, start=start).dropna()
