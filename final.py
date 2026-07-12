@@ -119,6 +119,19 @@ spy_rsi_val = sector_base.get("S&P 500 (SPY)")
 
 macro_charts = get_macro_charts()
 usd_krw      = macro_charts.get("usdkrw_10y", pd.DataFrame())
+kospi_10y    = macro_charts.get("kospi_10y", pd.DataFrame())
+vkospi_10y   = macro_charts.get("vkospi_10y", pd.DataFrame())
+spy_10y      = macro_charts.get("spy_10y", pd.DataFrame())
+vix_10y      = macro_charts.get("vix_10y", pd.DataFrame())
+vix3m_10y    = macro_charts.get("vix3m_10y", pd.DataFrame())
+hyg_10y      = macro_charts.get("hyg_10y", pd.DataFrame())
+ief_10y      = macro_charts.get("ief_10y", pd.DataFrame())
+rsp_10y      = macro_charts.get("rsp_10y", pd.DataFrame())
+
+us_score, us_verdict, us_details, us_phase = calculate_us_bottom_finder(spy_10y, vix_10y, cnn_score)
+kr_score, kr_verdict, kr_details, kr_phase = calculate_kr_bottom_finder(kospi_10y, vkospi_10y, usd_krw)
+kr_rec_verdict, kr_rec_signals, kr_rec_score = calculate_kr_recovery_confirmation(kospi_10y, usd_krw)
+kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_radar(vkospi_10y, usd_krw, kospi_10y)
 
 # 탭 구성
 tab_sniper, tab_radar, tab_report, tab_port = st.tabs([
@@ -597,7 +610,7 @@ with tab_report:
     # ── 레이어 1: 위험 탐지기 (미국 마스터 / 한국 보조) ──
     st.markdown("##### 🚨 글로벌 매크로 & 로컬 수급 위험 탐지기")
     us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_radar(vix_10y, vix3m_10y, hyg_10y, ief_10y, spy_10y)
-    kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_radar(vkospi_10y, usd_krw, kospi_10y)
+#     kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_radar(vkospi_10y, usd_krw, kospi_10y)
 
     st.markdown(f"<div style='background:{us_risk_color}22; border-left: 6px solid {us_risk_color}; padding:15px; border-radius:8px; font-weight:bold; font-size:1.1em; margin-bottom:10px;'>🇺🇸 [글로벌 마스터] {us_risk_grade}</div>", unsafe_allow_html=True)
     for icon, msg in us_risk_alerts:
@@ -627,8 +640,8 @@ with tab_report:
     # ── 레이어 2: 바닥 탐지기 ──
     st.markdown("##### 📉 레이어 2: 바닥 탐지기 (이 하락이 바닥인가?)")
     
-    us_score, us_verdict, us_details, us_phase = calculate_us_bottom_finder(spy_10y, vix_10y, cnn_score)
-    kr_score, kr_verdict, kr_details, kr_phase = calculate_kr_bottom_finder(kospi_10y, vkospi_10y, usd_krw)
+#     us_score, us_verdict, us_details, us_phase = calculate_us_bottom_finder(spy_10y, vix_10y, cnn_score)
+#     kr_score, kr_verdict, kr_details, kr_phase = calculate_kr_bottom_finder(kospi_10y, vkospi_10y, usd_krw)
     
     us_color = "#21c354" if us_score >= 70 else "#fcca46" if us_score >= 50 else "#aaaaaa"
     kr_color = "#21c354" if kr_score >= 70 else "#fcca46" if kr_score >= 50 else "#aaaaaa"
@@ -676,9 +689,9 @@ with tab_report:
 
     with r_col2:
         st.markdown(f"**🇰🇷 한국 반등 신뢰도**")
-        kr_rec_verdict, kr_rec_signals, kr_rec_score = calculate_kr_recovery_confirmation(
-            kospi_10y, usd_krw
-        )
+#         kr_rec_verdict, kr_rec_signals, kr_rec_score = calculate_kr_recovery_confirmation(
+#             kospi_10y, usd_krw
+#         )
         st.markdown(f"**{kr_rec_verdict}**")
         for icon, msg in kr_rec_signals:
             st.markdown(f"- {icon} {msg}")
