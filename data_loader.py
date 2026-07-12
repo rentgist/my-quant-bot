@@ -26,7 +26,10 @@ from signals import parse_insider, short_interest_label, get_comprehensive_risk_
 def get_krx_mapping_v2():
     mapping = {
         "LS ELECTRIC": {"raw_code": "010120", "yf_code": "010120.KS"},
+        "LSELECTRIC": {"raw_code": "010120", "yf_code": "010120.KS"},
         "LS일렉트릭": {"raw_code": "010120", "yf_code": "010120.KS"},
+        "SK하이닉스": {"raw_code": "000660", "yf_code": "000660.KS"},
+        "SK Hynix": {"raw_code": "000660", "yf_code": "000660.KS"},
         "현대차": {"raw_code": "005380", "yf_code": "005380.KS"},
         "현대자동차": {"raw_code": "005380", "yf_code": "005380.KS"},
         "삼성전자": {"raw_code": "005930", "yf_code": "005930.KS"},
