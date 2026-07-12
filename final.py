@@ -233,6 +233,12 @@ with tab_sniper:
         c_b.metric("매크로 반등 신뢰도", f"{rec_score}/100")
         c_c.metric("위험 경보치 (환율/파생)", f"{danger} 개", "위험" if danger >= 3 else "안전", delta_color="inverse")
 
+        if kr_risk_alerts:
+            st.markdown("---")
+            st.markdown("**🚨 4대 매크로 센서 상세 경보 내역**")
+            for icon, msg in kr_risk_alerts:
+                st.markdown(f"- {icon} {msg}")
+
         st.divider()
         
         c1, c2 = st.columns(2)
