@@ -180,7 +180,7 @@ with tab_sniper:
                 
         with col2:
             st.markdown("##### 💰 삼성전자 1차 앵커 & 보험료")
-            anchor = 62100
+            anchor = st.number_input("삼성전자 1차 앵커(지지선) 가격", min_value=1000, value=62100, step=100, help="현재 시장 상황에 맞는 삼성전자 1차 앵커(강한 지지 매물대) 가격을 입력하세요.")
             insurance = (samsung_current / anchor - 1) * 100 if samsung_current > 0 else 0
             insurance_check = insurance <= 6.0
             
