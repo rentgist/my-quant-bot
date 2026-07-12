@@ -237,7 +237,12 @@ with tab_sniper:
             st.markdown("---")
             st.markdown("**🚨 4대 매크로 센서 상세 경보 내역**")
             for icon, msg in kr_risk_alerts:
-                st.markdown(f"- {icon} {msg}")
+                # 대장님 요청에 따라 '위험'은 빨강, '안전'은 파랑으로 엄격히 통일
+                if icon in ["🔴", "🟠", "🟡"]:
+                    icon = "🔴"
+                else:
+                    icon = "🔵"
+                st.markdown(f"{icon} {msg}")
 
         st.divider()
         
