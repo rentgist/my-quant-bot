@@ -668,5 +668,5 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
                 base["Edgar_URL"]      = edgar_url
 
     except Exception as e:
-        base["error"] = str(e)
-    return base
+        base["error"] = f"{type(e).__name__}: {str(e)}"
+        return base

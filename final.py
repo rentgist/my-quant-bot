@@ -274,7 +274,7 @@ with tab1:
                 d = future.result()
                 d["Region"] = region
                 if not d.get("error"): all_data.append(d)
-                else: failed_queries.append(q)
+                else: failed_queries.append(f"{q} ({d.get('error')})")
         prog.empty()
     elif not st.session_state.get("scan_requested"):
         st.info("종목을 입력하고 **스캔 시작** 버튼을 누르면 분석이 시작됩니다.")
