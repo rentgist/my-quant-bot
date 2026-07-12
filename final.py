@@ -121,15 +121,11 @@ macro_charts = get_macro_charts()
 usd_krw      = macro_charts.get("usdkrw_10y", pd.DataFrame())
 
 # 탭 구성
-tab_sniper, tab1, tab2, tab4, tab3, tab_port, tab5, tab_risk = st.tabs([
-    "🎯 14:50 스나이퍼 타점",
-    "📊 실시간 포트폴리오",
-    "🌐 매크로 & F&G Index",
-    "🚀 오늘의 텐배거 레이더",
-    "🤖 AI 참모 리포트",
-    "💼 내 포트폴리오 장투 전략",
-    "📖 11원칙 매매 가이드라인",
-    "🚨 리스크 등급 가이드",
+tab_sniper, tab_radar, tab_report, tab_port = st.tabs([
+    "🎯 14:50 실전 타격",
+    "🔍 종목 발굴 & 레이더",
+    "🌐 매크로 & 딥 리포트",
+    "💼 포트폴리오 & 가이드",
 ])
 
 with tab_sniper:
@@ -247,7 +243,7 @@ with tab_sniper:
             * HTS를 종료하고 다음 거래일 오후 2시 50분에 다시 뵙겠습니다.
             """)
 
-with tab1:
+with tab_radar:
     st.subheader("🔍 관심 종목 스캔")
     c1, c2 = st.columns(2)
     us_input = c1.text_input("🇺🇸 미국 주식", "TSMC, 브로드컴, 버티브")
@@ -415,7 +411,7 @@ with tab1:
             interpretation = get_cashflow_interpretation(d)
             st.info(f"**{d['Name']}** : {interpretation}")
 
-with tab2:
+with tab_report:
     st.subheader("🌐 글로벌 매크로 및 시장 심리")
 
     vix_10y = macro_charts.get("vix_10y", pd.DataFrame())
@@ -984,7 +980,7 @@ with tab2:
     else:
         st.info(f"**[CFO 통합 브리핑] {phase}**\n\n{ai_commentary}")
 
-with tab4:
+with tab_radar:  # 🚀 오늘의 텐배거 레이더
     st.subheader("🚀 섹터별 텐배거 마스터 레이더 (미래 지표 및 트렌드 필터)")
     UNIVERSE = {
         "🇺🇸 미국 AI & 클라우드":              ["PLTR","CRWD","SNOW","DDOG","NET","SOUN","MDB","ZS","MNDY"],
@@ -1062,7 +1058,7 @@ with tab4:
             else:
                 st.warning("⚠️ 현재 조건(지하실 역추세 및 실적/마진 기준)을 통과한 진성 우량주가 이 섹터에 존재하지 않습니다.")
 
-with tab3:
+with tab_report:  # 🤖 AI 참모 리포트
     st.subheader("🤖 AI 참모 전용 구조화 리포트 v23.0 (진바닥 판독기 연동)")
     st.caption("아래 텍스트를 복사하여 ChatGPT, Claude, Gemini 등에 붙여넣고 심층 분석을 받아보세요.")
 
@@ -1430,7 +1426,18 @@ with tab_port:
 
                 st.code("\n".join(port_lines), language="text")
 
-with tab5:
+with tab_port:  # 🚨 리스크 등급 가이드
+    st.header("🚨 공매도 & 변동성(Beta) 종합 리스크 가이드")
+    st.markdown("""
+    | 공매도 비율 | Beta (변동성) | 종합 리스크 등급 및 해석 |
+    | :--- | :--- | :--- |
+    | 낮음 (5% 미만) | 낮음 (1.2 미만) | **🟢 안정형 — 방어적 투자에 적합** |
+    | 낮음 (5% 미만) | 높음 (1.2 이상) | **🟡 모멘텀형 — 상승장에 강하지만 하락 시 크게 빠짐** |
+    | 높음 (5% 이상) | 낮음 (1.2 미만) | **🟠 논란형 — 시장은 의심하지만 변동성은 낮음, 이유 확인 필요** |
+    | 높음 (5% 이상) | 높음 (1.2 이상) | **🔴 고위험 — 하락 베팅 + 큰 변동성, 진입 신중** |
+    """)
+
+with tab_port:  # 📖 11원칙 매매 가이드라인
     st.header("📖 11원칙 퀀트 매매 마스터 매뉴얼 v25.0")
     st.caption("v25.0: 매크로 게이트키퍼 Tier 시스템 — '칼자루는 진바닥으로 잡고, 방아쇠는 수급으로 당긴다'")
 
@@ -1474,15 +1481,4 @@ with tab5:
 > 완벽하게 세팅된 이 원칙에 자본을 맡기고, 일상의 평온함과 꿀잠을 마음껏 누리세요.
     """)
 
-
-with tab_risk:
-    st.header("🚨 공매도 & 변동성(Beta) 종합 리스크 가이드")
-    st.markdown("""
-    | 공매도 비율 | Beta (변동성) | 종합 리스크 등급 및 해석 |
-    | :--- | :--- | :--- |
-    | 낮음 (5% 미만) | 낮음 (1.2 미만) | **🟢 안정형 — 방어적 투자에 적합** |
-    | 낮음 (5% 미만) | 높음 (1.2 이상) | **🟡 모멘텀형 — 상승장에 강하지만 하락 시 크게 빠짐** |
-    | 높음 (5% 이상) | 낮음 (1.2 미만) | **🟠 논란형 — 시장은 의심하지만 변동성은 낮음, 이유 확인 필요** |
-    | 높음 (5% 이상) | 높음 (1.2 이상) | **🔴 고위험 — 하락 베팅 + 큰 변동성, 진입 신중** |
-    """)
 
