@@ -138,87 +138,106 @@ with tab_sniper:
             import yfinance as yf
             import warnings
             warnings.filterwarnings("ignore")
-            
-            # KOSPI 데이터
             kospi = yf.Ticker('^KS11').history(period='10d')
             kospi_current = float(kospi['Close'].iloc[-1])
             kospi_5day = float(kospi['Close'].iloc[-5:].mean())
-            
-            # 삼성전자 데이터
             samsung = yf.Ticker('005930.KS').history(period='1d')
             samsung_current = float(samsung['Close'].iloc[-1])
-            
             return kospi_current, kospi_5day, samsung_current
         except Exception as e:
             return 0, 0, 0
 
     kospi_current, kospi_5day, samsung_current = get_sniper_market_data()
 
-    if kospi_current == 0:
-        st.error("⚠️ 데이터를 불러오는 중 오류가 발생했습니다. HTS 가격을 수동으로 확인해주세요.")
+    # --- Step 1: 진바닥 탐지기 ---
+    st.subheader("📊 Step 1: 현재 시장이 진바닥인가?")
+    
+    kospi_df = macro_charts.get("kospi_10y", pd.DataFrame())
+    kospi_drawdown = 0.0
+    if not kospi_df.empty and len(kospi_df) >= 252:
+        kospi_latest = float(kospi_df['Close'].iloc[-1])
+        kospi_max_52w = float(kospi_df['Close'].tail(252).max())
+        kospi_drawdown = (kospi_latest / kospi_max_52w - 1) * 100
+        
+    is_true_bottom = (cnn_fg <= 25) or (kospi_drawdown <= -15.0)
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        fg_status = "극단 공포 (폭락 신호)" if cnn_fg <= 25 else "공포" if cnn_fg <= 45 else "평시"
+        st.metric("CNN F&G (현재)", f"{cnn_fg:.0f}", fg_status, delta_color="inverse" if cnn_fg > 25 else "normal")
+    with c2:
+        dd_status = "극단 폭락 (Tier 3)" if kospi_drawdown <= -15.0 else "조정장" if kospi_drawdown <= -10.0 else "평시"
+        st.metric("KOSPI 고점 대비 낙폭", f"{kospi_drawdown:.1f}%", dd_status, delta_color="inverse" if kospi_drawdown > -15.0 else "normal")
+        
+    if is_true_bottom:
+        st.warning("✅ 진바닥 확인됨 (극단 패닉 구간 진입)")
     else:
-        # === 구역 A: 자동 연산 ===
-        st.subheader("⚙️ 구역 A: 자동 연산 (실시간 API)")
+        st.info("⚠️ 현재 진바닥(Tier 3) 구간이 아닙니다. (일반 상승/조정장)")
+        
+    st.divider()
+
+    if kospi_current == 0:
+        st.error("🚨 실시간 데이터를 불러오는 데 실패했습니다. HTS 가격을 수동으로 확인해주세요.")
+    else:
+        # --- Step 2: 반등 신뢰도 확인 ---
+        st.subheader("🎯 Step 2: 반등 신뢰도 확인")
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("##### 📈 KOSPI 추세 판독")
             kospi_check = kospi_current > (kospi_5day * 1.002)
-            
-            c1, c2 = st.columns(2)
-            c1.metric("KOSPI 현재가", f"{kospi_current:,.2f} p")
-            c2.metric("KOSPI 5일선", f"{kospi_5day:,.2f} p")
-            
+            c3, c4 = st.columns(2)
+            c3.metric("KOSPI 현재가", f"{kospi_current:,.2f} p")
+            c4.metric("KOSPI 5일선", f"{kospi_5day:,.2f} p")
             if kospi_check:
-                st.success("✅ 5일선 돌파 (+0.2% 버퍼 위 안착)")
+                st.success("✅ 5일선 돌파 (+0.2% 버퍼 안착)")
             else:
                 st.error("❌ 5일선 미돌파")
                 
         with col2:
-            st.markdown("##### 💰 삼성전자 1차 앵커 & 보험료")
-            anchor = st.number_input("삼성전자 1차 앵커(지지선) 가격", min_value=1000, value=62100, step=100, help="현재 시장 상황에 맞는 삼성전자 1차 앵커(강한 지지 매물대) 가격을 입력하세요.")
+            st.markdown("##### 💰 타겟 종목 & 수익금(보험료) 버퍼")
+            anchor = st.number_input("목표 종목 평단가 (또는 1차 앵커)", min_value=1000, value=62100, step=100, help="보유 종목의 평단가 또는 삼성전자 지지선 가격을 입력하세요.")
             insurance = (samsung_current / anchor - 1) * 100 if samsung_current > 0 else 0
             insurance_check = insurance <= 6.0
-            
-            c3, c4 = st.columns(2)
-            c3.metric("삼성전자 현재가", f"{samsung_current:,.0f}원")
-            c4.metric("보험료", f"{insurance:.2f}%")
-            
+            c5, c6 = st.columns(2)
+            c5.metric("현재가 (예: 삼성)", f"{samsung_current:,.0f}원")
+            c6.metric("보험료", f"{insurance:.2f}%")
             if insurance_check:
                 st.success(f"✅ 6% 이내 ({insurance:.2f}%) 방어 완료")
             else:
                 st.error(f"❌ 6% 초과 ({insurance:.2f}%) - 오버슈팅")
         
-        # === 구역 B: 수동 입력 ===
         st.divider()
-        st.subheader("⌨️ 구역 B: HTS 사령관 수동 입력 (오후 2:50)")
         
+        # --- Step 3: HTS 수동 확인 ---
+        st.subheader("⌨️ Step 3: HTS 수동 확인 (오후 2:50)")
         col3, col4, col5 = st.columns(3)
         with col3:
-            foreign_futures = st.number_input("① 외국인 선물 순매수 (계약)", min_value=-100000, value=0, step=100)
+            foreign_futures = st.number_input("📈 외국인 선물 순매수(계약)", min_value=-100000, value=0, step=100)
         with col4:
-            st.write("② 미결제약정 증가 여부")
+            st.write("📊 미결제약정 증가 여부")
             oi_increase = st.checkbox("미결제약정이 증가 중입니까?", value=False)
         with col5:
-            st.write("③ RSP 상승 여부")
+            st.write("📈 RSP 상승 여부")
             rsp_rise = st.checkbox("RSP +2.5% 이상입니까?", value=False)
             
-        # === 구역 C: 자동 판정 ===
         st.divider()
-        st.subheader("🚨 구역 C: 알고리즘 최종 판정")
+        
+        # --- Step 4: 최종 판정 ---
+        st.subheader("🚨 Step 4: 최종 판정 (진바닥 + 반등신뢰도)")
         
         conditions = {
-            "① 외국인 선물 +5,000계약 이상": foreign_futures >= 5000,
-            "② 미결제약정 당일 증가 (숏커버링 방지)": oi_increase,
-            "③ RSP +2.5% 이상 (시장 폭 회복)": rsp_rise,
-            "④ KOSPI 5일선 완벽 지지 (+0.2% 버퍼)": kospi_check,
-            "⑤ 진입 보험료 6% 이내 (안전마진)": insurance_check
+            "📈 외국인 선물 +5,000계약 이상": foreign_futures >= 5000,
+            "📊 미결제약정 당일 증가 (숏커버링 방지)": oi_increase,
+            "📈 RSP +2.5% 이상 (시장 폭넓은 회복)": rsp_rise,
+            "📉 KOSPI 5일선 완벽 지지 (+0.2% 버퍼)": kospi_check,
+            "💰 진입 보험료 6% 이내 (안전마진)": insurance_check
         }
         
         passed = sum(conditions.values())
         total = len(conditions)
         
-        st.write(f"### 📊 현재 조건 충족률: {passed} / {total}")
+        st.write(f"### 🛡️ 반등 신뢰도 조건 충족: {passed} / {total}")
         
         for cond, result in conditions.items():
             if result:
@@ -226,25 +245,28 @@ with tab_sniper:
             else:
                 st.error(f"❌ {cond}")
                 
-        if passed == total:
+        # 최종 GO 조건: 진바닥(Step1) 만족 AND 모든 반등조건(Step2,3) 만족
+        final_go = is_true_bottom and (passed == total)
+        
+        if final_go:
             st.success("""
-            # 🟢 매수 승인 (GO!)
-            ### ➔ 스나이퍼 예산의 30% 본대 투입을 허가합니다.
-            * **타겟:** 삼성전자
-            * **방식:** 시장가 또는 최우선 지정가 매수
-            * **집행 시간:** 지금 즉시 (장 마감 직전)
+            # 🟢 강력 매수 승인 (GO!)
+            ### 🎯 진바닥 및 반등 신뢰도 모두 충족. 스나이퍼 예산의 30%를 즉시 투입하십시오.
+            * **타겟:** 선택한 우량주 또는 삼성전자
+            * **방식:** 시장가 또는 최우선지정가 매수
+            * **시간:** 지금 즉시 (장 마감 직전)
             """)
             st.balloons()
         else:
             st.error("""
             # 🔴 매수 보류 (PASS)
-            ### ➔ 조건 미달. 남은 현금 90%를 굳건히 사수하십시오.
-            * 가짜 반등(Bull Trap)의 위험이 도사리고 있습니다.
+            ### 🛑 진바닥이 아니거나 반등 신뢰도 조건이 미달되었습니다. 현금을 굳건히 사수하십시오.
             * HTS를 종료하고 다음 거래일 오후 2시 50분에 다시 뵙겠습니다.
             """)
 
 with tab_radar:
-    st.subheader("🔍 관심 종목 스캔")
+    st.subheader("🔍 타점 선택 (Entry Point Selection) - 포트폴리오 종목 타점")
+    st.caption("스나이퍼 탭에서 'GO' 신호가 떨어졌을 때, 어떤 종목을 살지 재무 및 수급을 점검하는 레이더입니다.")
     c1, c2 = st.columns(2)
     us_input = c1.text_input("🇺🇸 미국 주식", "TSMC, 브로드컴, 버티브")
     kr_input = c2.text_input("🇰🇷 한국 주식", "LS ELECTRIC")
@@ -412,7 +434,7 @@ with tab_radar:
             st.info(f"**{d['Name']}** : {interpretation}")
 
 with tab_report:
-    st.subheader("🌐 글로벌 매크로 및 시장 심리")
+    st.subheader("🌐 글로벌 매크로 및 시장 심리 (진바닥 & 반등 신뢰도 점수)")
 
     vix_10y = macro_charts.get("vix_10y", pd.DataFrame())
     vix3m_10y = macro_charts.get("vix3m_10y", pd.DataFrame())
