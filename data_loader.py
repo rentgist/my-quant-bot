@@ -52,9 +52,9 @@ def get_krx_mapping_v2():
         mapping["_ERROR_"] = True
         return mapping
 
-KRX_DICT = get_krx_mapping()
+KRX_DICT = get_krx_mapping_v2()
 if KRX_DICT.get("_ERROR_"):
-    get_krx_mapping.clear()
+    get_krx_mapping_v2.clear()
 
 # ─────────────────────────────────────────
 # 일정 관리
