@@ -311,6 +311,8 @@ def calculate_kr_risk_radar(vkospi_hist, usdkrw_hist, kospi_hist):
         elif struct["is_whipsaw"]:
             alerts.append(("🟡", f"KOSPI 고변동 횡보 — 변동성 {struct['realized_vol']:.0f}% 대비 방향성 부재. 관망 유리."))
             danger_count += 1
+        else:
+            alerts.append(("🟢", f"KOSPI 시장 구조 건전 — 스텔스 약세 및 고변동 징후 없음."))
 
     if danger_count >= 5:
         grade = "🔴 한국 위기 경보 — 외인 이탈 및 폭락 초입 우려."
