@@ -201,6 +201,14 @@ with tab_sniper:
     else:
         st.info("👈 상단의 버튼을 눌러 최신 시황 리포트를 생성하세요.")
 
+    # API Key 캐싱 디버깅을 위한 마스킹 정보 출력
+    api_key_check = os.environ.get("GEMINI_API_KEY", "")
+    if api_key_check:
+        masked_key = api_key_check[:6] + "..." + api_key_check[-4:] if len(api_key_check) > 10 else "길이 부족"
+        st.caption(f"⚙️ 현재 대시보드 서버가 인식한 API Key: `{masked_key}`")
+    else:
+        st.caption("⚙️ 현재 대시보드 서버가 인식한 API Key: `[없음]`")
+
     st.divider()
 
     st.markdown("### 📰 최근 글로벌 주요 뉴스 (AI 수집)")
