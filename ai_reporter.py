@@ -87,8 +87,8 @@ def generate_smart_control_room_report(market_context: str) -> str:
 """
 
         models_to_try = [
-            "gemini-flash-latest",
-            "gemini-pro-latest",
+            "gemini-pro-latest",       # 1순위: Gemini 1.5 Pro (최상급 의사결정 모델)
+            "gemini-flash-latest",     # 2순위: Gemini 1.5 Flash (속도 및 한도 보조 모델)
             "gemini-2.5-flash-lite",
             "gemini-3.1-flash-lite",
             "gemini-3.5-flash",
@@ -126,7 +126,7 @@ def generate_smart_control_room_report(market_context: str) -> str:
                 genai_old.configure(api_key=api_key)
                 
                 # 구형 SDK에서 검증된 안정 모델 4개 순차 시도
-                for old_model in ["gemini-flash-latest", "gemini-pro-latest", "gemini-1.5-flash", "gemini-1.5-pro"]:
+                for old_model in ["gemini-pro-latest", "gemini-flash-latest", "gemini-1.5-pro", "gemini-1.5-flash"]:
                     try:
                         model = genai_old.GenerativeModel(old_model)
                         # 안전 설정 무력화 (에러 방지)
