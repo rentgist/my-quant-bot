@@ -204,6 +204,7 @@ with tab_sniper:
     if True:
         try:
             if news_data:
+                news_data = sorted(news_data, key=lambda x: (x.get("importance", 0), x.get("fetched_at", "")), reverse=True)
                 for n in news_data[:20]:
                     title = n.get("title_ko", n.get("title", ""))
                     link = n.get("link", "#")
