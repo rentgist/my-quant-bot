@@ -1215,29 +1215,29 @@ def generate_economic_commentary(summary_dict, phase):
         client = genai.Client(api_key=api_key)
         
         models_to_try = [
-            "gemini-flash-latest",
+            "gemini-2.5-pro",          # 1순위: 2.5 Pro (최상급 브레인)
+            "gemini-3.5-flash",        # 2순위: 3.5 Flash (강력한 신형 Flash)
+            "gemini-3.1-flash-lite",   # 3순위: 3.1 Flash Lite (확인된 안정 모델)
+            "gemini-2.5-flash-lite",   # 4순위: 2.5 Flash Lite
             "gemini-pro-latest",
-            "gemini-2.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-3.5-flash",
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-2.5-flash"
+            "gemini-flash-latest"
         ]
         
         response = None
+        successful_model = None
         for model_name in models_to_try:
             try:
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt,
                 )
+                successful_model = model_name
                 break
             except:
                 continue
                 
         if response:
-            return response.text.strip()
+            return f"*(사용된 CFO AI 모델: {successful_model})*\n\n" + response.text.strip()
         else:
             raise Exception("모든 신규 SDK 모델 호출 실패")
     except Exception as e1:
@@ -1249,7 +1249,8 @@ def generate_economic_commentary(summary_dict, phase):
         genai_old.configure(api_key=api_key)
         
         response = None
-        for old_model in ["gemini-flash-latest", "gemini-pro-latest", "gemini-1.5-flash"]:
+        successful_model = None
+        for old_model in ["gemini-2.5-pro", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-pro-latest"]:
             try:
                 model = genai_old.GenerativeModel(old_model)
                 safety_settings = [
@@ -1260,11 +1261,12 @@ def generate_economic_commentary(summary_dict, phase):
                 ]
                 response = model.generate_content(prompt, safety_settings=safety_settings)
                 if response and response.text:
+                    successful_model = old_model
                     break
             except:
                 continue
         if response and response.text:
-            return response.text.strip()
+            return f"*(사용된 CFO AI 모델: {successful_model} - 구형)*\n\n" + response.text.strip()
         else:
             raise Exception("모든 구형 SDK 모델 호출 실패")
         return response.text.strip()
