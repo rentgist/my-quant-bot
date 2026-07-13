@@ -51,7 +51,7 @@ except Exception as e:
     st.error(f"🚨 알 수 없는 오류 발생: {e}")
     st.stop()
 
-st.set_page_config(page_title="11원칙 퀀트 대시보드 v24.0", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="11원칙 퀀트 대시보드 v27.0", page_icon="🧭", layout="wide")
 
 # ─────────────────────────────────────────
 # 포맷 및 색상 맵핑
@@ -110,8 +110,8 @@ def color_df(val):
 # ─────────────────────────────────────────
 # UI — 전역 데이터 선초기화
 # ─────────────────────────────────────────
-st.title("🧭 11원칙 퀀트 트레이딩 대시보드 v24.0")
-st.caption("v24.0: 매크로 게이트키퍼 Tier 시스템 탑재 — 극단 패닉 선발대(Tier 3) / 추세전환 불타기(Tier 2) / 코어 적립(Tier 1) 실시간 판정")
+st.title("🧭 11원칙 퀀트 트레이딩 대시보드 v27.0")
+st.caption("v27.0: AI 스마트 관제실 탑재 — 실시간 매크로/수급 알고리즘 판정 및 AI 글로벌 속보 브리핑 통합 모델")
 
 cnn_score, cnn_rating, cnn_history = get_real_cnn_fg()
 sector_base = get_sector_baseline()

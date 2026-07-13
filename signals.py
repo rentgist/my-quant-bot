@@ -1213,11 +1213,30 @@ def generate_economic_commentary(summary_dict, phase):
     try:
         from google import genai
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt,
-        )
-        return response.text.strip()
+        
+        models_to_try = [
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-2.0-flash-exp",
+            "gemini-2.5-flash"
+        ]
+        
+        response = None
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                break
+            except:
+                continue
+                
+        if response:
+            return response.text.strip()
+        else:
+            raise Exception("모든 신규 SDK 모델 호출 실패")
     except Exception as e1:
         print(f"[google-genai 시도 실패]: {e1}")
     

@@ -71,11 +71,34 @@ def generate_smart_control_room_report(market_context: str) -> str:
 4. 마크다운의 굵은 글씨(** **)와 인용구(>)를 적절히 활용하여 가독성을 극대화하라.
 """
 
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt
-        )
-        return response.text.strip()
+        models_to_try = [
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-2.0-flash-exp",
+            "gemini-2.5-flash"
+        ]
+        
+        response = None
+        last_err = None
+        successful_model = None
+        
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                successful_model = model_name
+                break
+            except Exception as e:
+                last_err = e
+                continue
+                
+        if response:
+            return f"*(사용된 AI 모델: {successful_model})*\n\n" + response.text.strip()
+        else:
+            raise last_err
         
     except Exception as e:
         return f"🚨 AI 리포트 생성 중 API 연동 오류 발생: {e}"
