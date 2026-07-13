@@ -53,23 +53,21 @@ except Exception as e:
 
 st.set_page_config(page_title="11원칙 퀀트 대시보드 v27.0", page_icon="🧭", layout="wide")
 
-# 가독성 개선을 위한 고대비 스타일 주입
+# AI 리포트 전용 고대비 스타일 주입
 st.markdown("""
 <style>
-    /* 본문 글씨를 선명한 검은색(#1a1a1a)으로 변경 */
-    .stMarkdown, p, li, span, label, div {
-        color: #1a1a1a !important;
-        font-size: 1.03rem !important;
-        line-height: 1.65 !important;
+    /* AI 리포트 영역 내의 본문 글씨를 선명한 검은색(#000000)으로 변경 */
+    .ai-report-container, .ai-report-container p, .ai-report-container li {
+        color: #000000 !important;
+        font-size: 1.05rem !important;
+        line-height: 1.7 !important;
     }
-    /* 제목(Header) 글씨 색상 강조 */
-    h1, h2, h3, h4, h5, h6 {
+    /* AI 리포트 영역 내의 소제목 색상 및 강조 */
+    .ai-report-container h1, .ai-report-container h2, .ai-report-container h3 {
         color: #0f172a !important;
         font-weight: 800 !important;
-    }
-    /* 안내 문구 상자(info, warning 등) 텍스트 가독성 */
-    .stAlert p {
-        color: #0f172a !important;
+        margin-top: 15px !important;
+        margin-bottom: 10px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -197,7 +195,9 @@ with tab_sniper:
                 st.error(f"리포트 생성 모듈 로드 실패: {e}")
 
     if "ai_report_cache" in st.session_state:
+        st.markdown("<div class='ai-report-container'>", unsafe_allow_html=True)
         st.markdown(st.session_state["ai_report_cache"])
+        st.markdown("</div>", unsafe_allow_html=True)
     else:
         st.info("👈 상단의 버튼을 눌러 최신 시황 리포트를 생성하세요.")
 
