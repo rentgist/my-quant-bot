@@ -153,7 +153,7 @@ kr_rec_verdict, kr_rec_signals, kr_rec_score = calculate_kr_recovery_confirmatio
 kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_radar(vkospi_10y, usd_krw, kospi_10y)
 
 # 미국 리스크 레이더 및 반등 신뢰도 글로벌 사전 계산 (1번 탭의 복사용 프롬프트 등에서 호출하기 위함)
-us_rec_verdict, us_rec_signals, us_rec_score = calculate_recovery_confirmation(spy_10y)
+us_rec_verdict, us_rec_signals, us_rec_score = calculate_recovery_confirmation(rsp_10y, spy_10y, hyg_10y, ief_10y)
 us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_radar(vix_10y, vix3m_10y, hyg_10y, ief_10y, spy_10y)
 
 # 탭 구성
