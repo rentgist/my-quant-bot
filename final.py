@@ -204,7 +204,7 @@ with tab_sniper:
     if True:
         try:
             if news_data:
-                for n in news_data[:8]:
+                for n in news_data[:40]:
                     title = n.get("title_ko", n.get("title", ""))
                     link = n.get("link", "#")
                     source = n.get("source", "N/A")
@@ -892,13 +892,21 @@ with tab_report:
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    with st.spinner("거시경제 CFO AI가 시장 흐름을 분석하고 있습니다..."):
-        ai_commentary = generate_economic_commentary(summary_dict, phase)
-        
-    if "⚠️" in ai_commentary:
-        st.error(ai_commentary)
+    if "cfo_report_cache" not in st.session_state:
+        st.session_state["cfo_report_cache"] = ""
+
+    if st.button("🔄 CFO AI 시장 브리핑 생성", key="cfo_report_btn"):
+        with st.spinner("거시경제 CFO AI가 시장 흐름을 분석하고 있습니다..."):
+            st.session_state["cfo_report_cache"] = generate_economic_commentary(summary_dict, phase)
+            
+    if st.session_state["cfo_report_cache"]:
+        ai_commentary = st.session_state["cfo_report_cache"]
+        if "⚠️" in ai_commentary:
+            st.error(ai_commentary)
+        else:
+            st.info(f"**[CFO 통합 브리핑] {phase}**\n\n{ai_commentary}")
     else:
-        st.info(f"**[CFO 통합 브리핑] {phase}**\n\n{ai_commentary}")
+        st.info("👈 버튼을 눌러 CFO AI 시장 분석 브리핑을 생성하세요.")
 
 with tab_radar:  # 🚀 오늘의 텐배거 레이더
     st.subheader("🚀 섹터별 텐배거 마스터 레이더 (미래 지표 및 트렌드 필터)")
