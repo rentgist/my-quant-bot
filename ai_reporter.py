@@ -98,6 +98,7 @@ def generate_smart_control_room_report(market_context: str) -> str:
         last_err = None
         successful_model = None
         
+        errors = []
         for model_name in models_to_try:
             try:
                 response = client.models.generate_content(
@@ -107,13 +108,18 @@ def generate_smart_control_room_report(market_context: str) -> str:
                 successful_model = model_name
                 break
             except Exception as e:
+                errors.append(f"- `{model_name}` 실패: {str(e)}")
                 last_err = e
                 continue
                 
         if response:
             return f"*(사용된 AI 모델: {successful_model})*\n\n" + response.text.strip()
         else:
-            raise last_err
+            error_details = "\n".join(errors)
+            return (
+                f"🚨 **AI 모델 호출에 전부 실패했습니다.**\n\n"
+                f"**[상세 에러 로그]**\n{error_details}"
+            )
         
     except Exception as e:
-        return f"🚨 AI 리포트 생성 중 API 연동 오류 발생: {e}"
+        return f"🚨 AI 리포트 생성 중 예외 발생: {e}"
