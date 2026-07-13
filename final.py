@@ -179,14 +179,30 @@ with tab_sniper:
     st.divider()
 
     st.markdown("### 📰 최근 글로벌 주요 뉴스 (AI 수집)")
-    import os, json
-    news_file = os.path.join("..", "quant-alpha-engine", "data", "news_archive.json")
-    if not os.path.exists(news_file):
-        news_file = "data/news_archive.json"
-    if os.path.exists(news_file):
+    import os, json, requests
+    
+    news_data = []
+    remote_url = "https://raw.githubusercontent.com/rentgist/quant-alpha-engine/main/data/news_archive.json"
+    try:
+        resp = requests.get(remote_url, timeout=5)
+        if resp.status_code == 200:
+            news_data = resp.json()
+    except:
+        pass
+        
+    if not news_data:
+        news_file = os.path.join("..", "quant-alpha-engine", "data", "news_archive.json")
+        if not os.path.exists(news_file):
+            news_file = "data/news_archive.json"
+        if os.path.exists(news_file):
+            try:
+                with open(news_file, "r", encoding="utf-8") as f:
+                    news_data = json.load(f)
+            except:
+                pass
+                
+    if True:
         try:
-            with open(news_file, "r", encoding="utf-8") as f:
-                news_data = json.load(f)
             if news_data:
                 for n in news_data[:8]:
                     title = n.get("title_ko", n.get("title", ""))
