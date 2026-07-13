@@ -89,6 +89,8 @@ def generate_smart_control_room_report(market_context: str) -> str:
         models_to_try = [
             "gemini-2.0-flash",
             "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro",
             "gemini-1.5-flash-latest",
             "gemini-2.0-flash-exp",
             "gemini-2.5-flash"
