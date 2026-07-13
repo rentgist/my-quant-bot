@@ -1214,7 +1214,7 @@ def generate_economic_commentary(summary_dict, phase):
         from google import genai
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             contents=prompt,
         )
         return response.text.strip()
@@ -1226,7 +1226,7 @@ def generate_economic_commentary(summary_dict, phase):
         import google.generativeai as genai_old
         genai_old.configure(api_key=api_key)
         
-        model = genai_old.GenerativeModel("gemini-2.5-flash")
+        model = genai_old.GenerativeModel("gemini-1.5-flash")
         safety_settings = [
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
