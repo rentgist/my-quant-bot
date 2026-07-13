@@ -135,241 +135,91 @@ kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_rada
 
 # 탭 구성
 tab_sniper, tab_radar, tab_report, tab_port = st.tabs([
-    "🎯 14:50 국장 실전 타격",
+    "🎯 AI 스마트 관제실",
     "🔍 종목 발굴 & 레이더",
     "🌐 매크로 & 딥 리포트",
     "💼 포트폴리오 & 가이드",
 ])
 
 with tab_sniper:
-    st.subheader("🎯 11원칙 퀀트 머신 통제실 (v26.5.2)")
-    st.caption("최종 업데이트: 실시간 (데이터 60초 주기 자동 갱신)")
+    st.subheader("🎯 AI 스마트 관제실 (v27.0)")
+    st.caption("최종 업데이트: 실시간 (매크로/위험도/바닥 지표 + AI 브리핑 통합)")
 
-    @st.cache_data(ttl=60)
-    def get_sniper_market_data():
-        try:
-            import yfinance as yf
-            import warnings
-            warnings.filterwarnings("ignore")
-            kospi = yf.Ticker('^KS11').history(period='10d')
-            kospi_current = float(kospi['Close'].iloc[-1])
-            kospi_5day = float(kospi['Close'].iloc[-5:].mean())
-            return kospi_current, kospi_5day
-        except Exception as e:
-            return 0, 0
+    adv_head, adv_color, adv_actions = get_strategic_advice(
+        kr_danger, kr_score, kr_verdict, kr_phase, recovery_score=kr_rec_score
+    )
 
-    @st.cache_data(ttl=60)
-    def get_target_stock_data(ticker):
-        try:
-            import yfinance as yf
-            import pandas as pd
-            import warnings
-            warnings.filterwarnings("ignore")
+    st.markdown(
+        f"<div style='background:{adv_color}22; border-left: 8px solid {adv_color}; "
+        f"padding:20px; border-radius:10px; margin-bottom:20px;'>"
+        f"<h2 style='margin-top:0; color:{adv_color};'>{adv_head}</h2>"
+        f"<p style='font-size:1.1em; font-weight:bold; margin-bottom:10px;'>📌 알고리즘 시스템 판독 근거: 위험도 {kr_danger}점 / 바닥확률 {kr_score}% / 반등신뢰도 {kr_rec_score}점 / {kr_phase}</p>"
+        f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in adv_actions]) + "</ul>"
+        f"</div>", unsafe_allow_html=True
+    )
+
+    st.markdown("### 🤖 실시간 AI 종합 브리핑")
+    
+    if st.button("🔄 AI 종합 관제 리포트 생성 (뉴스 + 매크로 종합)", type="primary"):
+        with st.spinner("Gemini 2.5 Flash가 글로벌 속보와 매크로 수치를 종합하여 리포트를 작성 중입니다..."):
+            market_ctx = f"판정결과: {adv_head}\n위험도: {kr_danger}점\n바닥점수: {kr_score}점\n현재국면: {kr_phase}"
             
             try:
-                from data_loader import get_krx_mapping_v2
-                mapping = get_krx_mapping_v2()
-            except ImportError:
-                mapping = {}
-            actual_ticker = mapping.get(ticker, {}).get('yf_code', ticker)
-            
-            stock = yf.Ticker(actual_ticker).history(period='30d')
-            if stock.empty:
-                return 0, 0, 0
-                
-            current = float(stock['Close'].iloc[-1])
-            ma5 = float(stock['Close'].iloc[-5:].mean())
-            
-            delta = stock['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs.iloc[-1]))
-            if pd.isna(rsi):
-                rsi = 50.0
-            
-            return current, ma5, rsi
-        except Exception as e:
-            return 0, 0, 0
+                from ai_reporter import generate_smart_control_room_report
+                report = generate_smart_control_room_report(market_ctx)
+                st.session_state["ai_report_cache"] = report
+            except Exception as e:
+                st.error(f"리포트 생성 모듈 로드 실패: {e}")
 
-    kospi_current, kospi_5day = get_sniper_market_data()
+    if "ai_report_cache" in st.session_state:
+        st.markdown(st.session_state["ai_report_cache"])
+    else:
+        st.info("👈 상단의 버튼을 눌러 최신 시황 리포트를 생성하세요.")
 
-    kospi_df = macro_charts.get("kospi_10y", pd.DataFrame())
-    kospi_drawdown = 0.0
-    if not kospi_df.empty and len(kospi_df) >= 252:
-        kospi_latest = float(kospi_df['Close'].iloc[-1])
-        kospi_max_52w = float(kospi_df['Close'].tail(252).max())
-        kospi_drawdown = (kospi_latest / kospi_max_52w - 1) * 100
-        
-    is_true_bottom = (cnn_score <= 25) or (kospi_drawdown <= -15.0)
-    
-    with st.expander("📊 Step 1: 현재 시장이 진바닥인가? (상세 리포트)", expanded=is_true_bottom):
-        # Use globally calculated real-time variables from final.py
-        score = kr_score
-        rec_score = kr_rec_score
-        danger = kr_danger
-        
-        # Use the actual Tier logic from get_strategic_advice
-        if score >= 80:
-            tier_label = "Tier 3 (극단적 패닉)"
-            action = "🚨 낙폭 과대 진바닥 (점수 80점 이상). 스나이퍼 예산의 10%를 '선발대'로 1차 분할 투입. (반등 확인 전)"
-            prob = score
-        elif score >= 50:
-            tier_label = "Tier 2 (추세 전환 / 반등 구간)"
-            action = f"🎯 바닥 확인 중 (점수 {score}점). 반등 신뢰도(Step 2~3) 조건 충족 시, 예산의 30~50%를 '본대 불타기'로 강하게 투입."
-            prob = score
-        else:
-            tier_label = "Tier 1 (정상 적립 구간)"
-            action = "✅ 평온한 추세장. 무리한 매수 금지. 예산의 30~40% 내에서 우량주 GTC(지정가) 적립만 유지."
-            prob = score
-            
-        st.markdown(f"#### 🎯 매크로 알고리즘 진바닥 확률: **{prob}%**")
-        st.markdown(f"#### 🚩 시스템 판독 국면: **{tier_label}**")
-        st.markdown(f"#### 🛡️ 액션 지침: **{action}**")
-        
-        st.markdown("**🔍 매크로 상세 데이터**")
-        c_a, c_b, c_c = st.columns(3)
-        c_a.metric("알고리즘 바닥 점수", f"{score}/100")
-        c_b.metric("매크로 반등 신뢰도", f"{rec_score}/100")
-        c_c.metric("위험 경보치 (환율/파생)", f"{danger} 개", "위험" if danger >= 3 else "안전", delta_color="inverse")
-
-        if kr_risk_alerts:
-            st.markdown("---")
-            st.markdown("**🚨 4대 매크로 센서 상세 경보 내역**")
-            for icon, msg in kr_risk_alerts:
-                # 대장님 요청에 따라 '위험'은 빨강, '안전'은 파랑으로 엄격히 통일
-                if icon in ["🔴", "🟠", "🟡"]:
-                    icon = "🔴"
-                else:
-                    icon = "🔵"
-                st.markdown(f"{icon} {msg}")
-
-        st.divider()
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            fg_status = "극단 공포 (폭락 신호)" if cnn_score <= 25 else "공포" if cnn_score <= 45 else "평시"
-            st.metric("CNN F&G (현재)", f"{cnn_score:.0f}", fg_status, delta_color="inverse" if cnn_score > 25 else "normal")
-        with c2:
-            dd_status = "극단 폭락 (Tier 3)" if kospi_drawdown <= -15.0 else "조정장" if kospi_drawdown <= -10.0 else "평시"
-            st.metric("KOSPI 고점 대비 낙폭", f"{kospi_drawdown:.1f}%", dd_status, delta_color="inverse" if kospi_drawdown > -15.0 else "normal")
-            
-        if is_true_bottom:
-            st.warning("✅ 진바닥 확인됨 (극단 패닉 구간 진입)")
-        else:
-            st.info("⚠️ 현재 진바닥(Tier 3) 구간이 아닙니다. (일반 상승/조정장)")
-            
     st.divider()
 
-    if kospi_current == 0:
-        st.error("🚨 실시간 데이터를 불러오는 데 실패했습니다. HTS 가격을 수동으로 확인해주세요.")
+    st.markdown("### 📰 최근 글로벌 주요 뉴스 (AI 수집)")
+    news_file = "data/news_archive.json"
+    import os, json
+    if os.path.exists(news_file):
+        try:
+            with open(news_file, "r", encoding="utf-8") as f:
+                news_data = json.load(f)
+            if news_data:
+                for n in news_data[:8]:
+                    title = n.get("title_ko", n.get("title", ""))
+                    link = n.get("link", "#")
+                    source = n.get("source", "N/A")
+                    importance = n.get("importance", 0)
+                    sentiment = n.get("sentiment", "중립")
+                    
+                    stars = "⭐" * importance
+                    color = "red" if sentiment == "악재" else "green" if sentiment == "호재" else "gray"
+                    
+                    with st.expander(f"[{source}] {title} (중요도: {stars})"):
+                        st.markdown(f"**판단 근거**: {n.get('reason', '')}")
+                        st.markdown(f"**대응 액션**: <span style='color:{color}; font-weight:bold;'>{n.get('action_point', '')}</span>", unsafe_allow_html=True)
+                        st.markdown(f"[원문 기사 보러가기]({link})")
+            else:
+                st.write("수집된 뉴스가 없습니다.")
+        except Exception as e:
+            st.error(f"뉴스 로드 중 오류: {e}")
     else:
-        st.subheader("🎯 Step 2: 반등 신뢰도 확인")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("##### 📈 KOSPI 추세 판독")
-            kospi_check = kospi_current > (kospi_5day * 1.002)
-            c3, c4 = st.columns(2)
-            c3.metric("KOSPI 현재가", f"{kospi_current:,.2f} p")
-            c4.metric("KOSPI 5일선", f"{kospi_5day:,.2f} p")
-            if kospi_check:
-                st.success("✅ 5일선 돌파 (+0.2% 버퍼 안착)")
-            else:
-                st.error("❌ 5일선 미돌파")
-                
-        with col2:
-            st.markdown("##### 💰 타겟 종목 진입 모드")
-            entry_mode = st.radio("진입 전략 선택", ["🆕 신규 진입 (안전마진 확인)", "🔥 기존 종목 불타기 (수익금 버퍼)"], horizontal=True)
-            target_ticker = st.text_input("타겟 종목명 또는 티커 (예: SK하이닉스 또는 000660.KS)", value="SK하이닉스")
-            
-            target_check = False
-            target_current, target_ma5, target_rsi = get_target_stock_data(target_ticker)
-            
-            if target_current == 0:
-                st.warning("종목 데이터를 불러오는 중이거나 티커가 잘못되었습니다.")
-            else:
-                if "신규 진입" in entry_mode:
-                    is_safe_rsi = target_rsi < 70
-                    is_above_ma = target_current > target_ma5
-                    target_check = is_safe_rsi and is_above_ma
-                    
-                    c5, c6 = st.columns(2)
-                    c5.metric("현재가", f"{target_current:,.0f}원", f"5일선: {target_ma5:,.0f}원")
-                    c6.metric("RSI (14일)", f"{target_rsi:.1f}", "과매수(70) 미만 안전" if is_safe_rsi else "과매수 위험", delta_color="inverse" if not is_safe_rsi else "normal")
-                    
-                    if target_check:
-                        st.success("✅ 신규 진입 안전마진 확인 (5일선 위 & 과매수 아님)")
-                    else:
-                        st.error("❌ 신규 진입 보류 (5일선 아래 또는 과매수 상태)")
-                        
-                else:
-                    anchor = st.number_input("내 평단가 (또는 1차 앵커)", min_value=1000, value=62100, step=100)
-                    insurance = (target_current / anchor - 1) * 100 if anchor > 0 else 0
-                    target_check = insurance >= 6.0
-                    
-                    c5, c6 = st.columns(2)
-                    c5.metric("현재가", f"{target_current:,.0f}원")
-                    c6.metric("내 수익률 (보험료)", f"{insurance:.2f}%")
-                    
-                    if target_check:
-                        st.success(f"✅ +6% 이상 ({insurance:.2f}%) 수익 버퍼 확인. 불타기 승인.")
-                    else:
-                        st.error(f"❌ +6% 미만 ({insurance:.2f}%) - 버퍼 부족, 불타기 금지.")
-        
-        st.divider()
-        
-        st.subheader("⌨️ Step 3: HTS 수동 확인 (오후 2:50)")
-        col3, col4, col5 = st.columns(3)
-        with col3:
-            foreign_futures = st.number_input("📈 외국인 선물 순매수(계약)", min_value=-100000, value=0, step=100)
-        with col4:
-            st.write("📊 미결제약정 증가 여부")
-            oi_increase = st.checkbox("미결제약정이 증가 중입니까?", value=False)
-        with col5:
-            st.write("📈 RSP 상승 여부")
-            rsp_rise = st.checkbox("RSP +2.5% 이상입니까?", value=False)
-            
-        st.divider()
-        
-        st.subheader("🚨 Step 4: 최종 판정 (진바닥 + 반등신뢰도)")
-        
-        conditions = {
-            "📈 외국인 선물 +5,000계약 이상": foreign_futures >= 5000,
-            "📊 미결제약정 당일 증가 (숏커버링 방지)": oi_increase,
-            "📈 RSP +2.5% 이상 (시장 폭넓은 회복)": rsp_rise,
-            "📉 KOSPI 5일선 완벽 지지 (+0.2% 버퍼)": kospi_check,
-            "🎯 타겟 종목 진입 조건 (안전마진 또는 버퍼)": target_check
-        }
-        
-        passed = sum(conditions.values())
-        total = len(conditions)
-        
-        st.write(f"### 🛡️ 반등 신뢰도 조건 충족: {passed} / {total}")
-        
-        for cond, result in conditions.items():
-            if result:
-                st.success(f"✅ {cond}")
-            else:
-                st.error(f"❌ {cond}")
-                
-        final_go = is_true_bottom and (passed == total)
-        
-        if final_go:
-            st.success(f"""
-            # 🟢 강력 매수 승인 (GO!)
-            ### 🎯 진바닥 및 반등 신뢰도 모두 충족. 스나이퍼 예산의 30%를 즉시 투입하십시오.
-            * **타겟:** {target_ticker}
-            * **방식:** 시장가 또는 최우선지정가 매수
-            * **시간:** 지금 즉시 (장 마감 직전)
-            """)
-            st.balloons()
-        else:
-            st.error("""
-            # 🔴 매수 보류 (PASS)
-            ### 🛑 진바닥이 아니거나 반등 신뢰도 조건이 미달되었습니다. 현금을 굳건히 사수하십시오.
-            * HTS를 종료하고 다음 거래일 오후 2시 50분에 다시 뵙겠습니다.
-            """)
+        st.write("현재 수집된 뉴스 아카이브가 존재하지 않습니다.")
+
+    st.divider()
+
+    with st.expander("✅ 14:50 실전 타격 간편 체크리스트", expanded=False):
+        st.markdown("매수 승인(비중 확대) 지시가 떨어졌을 때만 확인하세요.")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.checkbox("외국인 선물 순매수 (+5000계약 이상 확인)")
+        with c2:
+            st.checkbox("KOSPI 5일선 버퍼 지지 (종가 기준)")
+        with c3:
+            st.checkbox("타겟 종목 RSI 과매수(70) 미만 확인")
+        st.info("위 3가지가 모두 만족될 때, 오후 2시 50분에 시장가로 매수 집행합니다.")
+
 
 with tab_radar:
     st.subheader("🔍 타점 선택 (Entry Point Selection) - 포트폴리오 종목 타점")
@@ -745,83 +595,6 @@ with tab_report:
             st.markdown(f"- {act}")
 
     st.divider()
-
-    # ── 🚦 v24.0 핵심: 실시간 Tier 판정 배너 ──────────────────────
-    st.markdown("##### 🚦 v24.0 실시간 Tier 판정 — \"지금 어떤 무기를 꺼내야 하는가?\"")
-    st.caption(
-        "바닥 점수 × 반등 신뢰도 × 위험도를 교차해 현재 시장이 Tier 1·2·3 중 어디에 해당하는지 실시간 판정합니다. "
-        "자세한 기준은 📖 [11원칙 매매 가이드라인] 탭을 참고하세요."
-    )
-
-    def _compute_tier(score, rec_score, danger, phase):
-        """v24.0 Tier 판정 로직 — 바닥 점수·반등 신뢰도·위험 경보 교차 판단"""
-        # Tier 3: 극단적 패닉 (진바닥 90% 수준, 기술적 지표 의미 없는 구간)
-        if score >= 80:
-            return "🔥 Tier 3", "극단적 패닉장", (
-                "#e94560",
-                "조건 충족: 바닥 탐지 점수가 80점 이상입니다. "
-                "이 순간은 기술적 지표가 무너져 있어도 우량주에 스나이퍼 예산의 10%를 1차 선발대로 투입할 수 있는 구간입니다. "
-                "단, 오전 갭상승 속임수를 피해 반드시 오후 3시에 집행하세요."
-            )
-        # Tier 2: 추세전환기 (불타기 구간 — 게이트키퍼 확인)
-        elif score >= 50:
-            gates_ok = (rec_score >= 2)  # 반등 신뢰도 2점 이상 = 신호 충분
-            if gates_ok:
-                return "🟡 Tier 2", "추세 전환 / 불타기 구간", (
-                    "#fcca46",
-                    f"조건 충족: 바닥 점수 {score}점 + 반등 신뢰도 {rec_score}점. "
-                    "게이트키퍼(5일선 돌파·환율 안정·기관 수급)를 2~3개 이상 확인한 뒤, "
-                    "오후 3시에 남은 예산의 10%를 불타기(Pyramiding)하는 구간입니다."
-                )
-            else:
-                return "🟡 Tier 2 대기", "바닥 확인 중 — 게이트키퍼 미충족", (
-                    "#fcca46",
-                    f"바닥 점수 {score}점이나 반등 신뢰도 {rec_score}점 (기준: 2점 이상 필요). "
-                    "수급(기관/외국인 매수)·5일선 돌파·환율 안정 중 2가지 이상이 충족되면 불타기 개시. 현금 대기."
-                )
-        # Tier 1: 일상 상승/횡보장 (코어 자산 GTC 적립)
-        else:
-            if danger <= 1:
-                return "🟢 Tier 1", "일상 적립 구간", (
-                    "#21c354",
-                    "시장에 큰 패닉 없는 안정 구간입니다. "
-                    "미국 빅테크 우량주(MSFT, GOOGL 등)가 RSI 40 이하 또는 볼린저 밴드 하단 터치 시 "
-                    "GTC 예약 주문으로 코어 자산을 기계적으로 적립하세요."
-            )
-            else:
-                return "🟠 주의 대기", "위험 경보 발동 — 현금 보유", (
-                    "#ff7c21",
-                    f"위험 경보 {danger}점 발동. 바닥이 아직 형성되지 않았습니다. "
-                    "현금 비중을 높게 유지하고 바닥 점수가 50점 이상으로 치솟는 시점을 기다리세요."
-                )
-
-    tier_col1, tier_col2 = st.columns(2)
-    with tier_col1:
-        us_tier_label, us_tier_sub, (us_tier_color, us_tier_msg) = _compute_tier(
-            us_score, us_rec_score, us_danger, us_phase
-        )
-        st.markdown(
-            f"<div style='background:{us_tier_color}22; border-left:6px solid {us_tier_color}; "
-            f"padding:15px; border-radius:8px; margin-bottom:10px;'>"
-            f"<div style='font-size:1.4em; font-weight:900;'>🇺🇸 {us_tier_label}</div>"
-            f"<div style='font-size:0.95em; font-weight:600; color:{us_tier_color}; margin:4px 0;'>{us_tier_sub}</div>"
-            f"<div style='font-size:0.85em; color:#333;'>{us_tier_msg}</div>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
-    with tier_col2:
-        kr_tier_label, kr_tier_sub, (kr_tier_color, kr_tier_msg) = _compute_tier(
-            kr_score, kr_rec_score, kr_danger, kr_phase
-        )
-        st.markdown(
-            f"<div style='background:{kr_tier_color}22; border-left:6px solid {kr_tier_color}; "
-            f"padding:15px; border-radius:8px; margin-bottom:10px;'>"
-            f"<div style='font-size:1.4em; font-weight:900;'>🇰🇷 {kr_tier_label}</div>"
-            f"<div style='font-size:0.95em; font-weight:600; color:{kr_tier_color}; margin:4px 0;'>{kr_tier_sub}</div>"
-            f"<div style='font-size:0.85em; color:#333;'>{kr_tier_msg}</div>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
 
     # False Signal 경보 — 매수 금지 조건 실시간 체크
     false_signals = []
