@@ -87,12 +87,13 @@ def generate_smart_control_room_report(market_context: str) -> str:
 """
 
         models_to_try = [
+            "gemini-flash-latest",
+            "gemini-pro-latest",
+            "gemini-2.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash",
             "gemini-2.0-flash",
             "gemini-1.5-flash",
-            "gemini-1.5-flash-8b",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash-latest",
-            "gemini-2.0-flash-exp",
             "gemini-2.5-flash"
         ]
         
@@ -124,8 +125,8 @@ def generate_smart_control_room_report(market_context: str) -> str:
                 import google.generativeai as genai_old
                 genai_old.configure(api_key=api_key)
                 
-                # 구형 SDK에서 검증된 안정 모델 2개 순차 시도
-                for old_model in ["gemini-1.5-flash", "gemini-1.5-pro"]:
+                # 구형 SDK에서 검증된 안정 모델 4개 순차 시도
+                for old_model in ["gemini-flash-latest", "gemini-pro-latest", "gemini-1.5-flash", "gemini-1.5-pro"]:
                     try:
                         model = genai_old.GenerativeModel(old_model)
                         # 안전 설정 무력화 (에러 방지)

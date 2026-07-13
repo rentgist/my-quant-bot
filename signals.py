@@ -1215,10 +1215,13 @@ def generate_economic_commentary(summary_dict, phase):
         client = genai.Client(api_key=api_key)
         
         models_to_try = [
+            "gemini-flash-latest",
+            "gemini-pro-latest",
+            "gemini-2.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash",
             "gemini-2.0-flash",
             "gemini-1.5-flash",
-            "gemini-1.5-flash-latest",
-            "gemini-2.0-flash-exp",
             "gemini-2.5-flash"
         ]
         
@@ -1245,14 +1248,25 @@ def generate_economic_commentary(summary_dict, phase):
         import google.generativeai as genai_old
         genai_old.configure(api_key=api_key)
         
-        model = genai_old.GenerativeModel("gemini-1.5-flash")
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-        response = model.generate_content(prompt, safety_settings=safety_settings)
+        response = None
+        for old_model in ["gemini-flash-latest", "gemini-pro-latest", "gemini-1.5-flash"]:
+            try:
+                model = genai_old.GenerativeModel(old_model)
+                safety_settings = [
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                ]
+                response = model.generate_content(prompt, safety_settings=safety_settings)
+                if response and response.text:
+                    break
+            except:
+                continue
+        if response and response.text:
+            return response.text.strip()
+        else:
+            raise Exception("모든 구형 SDK 모델 호출 실패")
         return response.text.strip()
     except Exception as e2:
         import traceback
