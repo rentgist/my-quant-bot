@@ -108,13 +108,39 @@ def generate_smart_control_room_report(market_context: str) -> str:
                 successful_model = model_name
                 break
             except Exception as e:
-                errors.append(f"- `{model_name}` 실패: {str(e)}")
+                errors.append(f"- 신규 SDK `{model_name}` 실패: {str(e)}")
                 last_err = e
                 continue
                 
         if response:
             return f"*(사용된 AI 모델: {successful_model})*\n\n" + response.text.strip()
         else:
+            # ──────────────────────────────────────────────────────────
+            # [구형 SDK 폴백] 신규 SDK가 전부 실패 시, 구형 google-generativeai로 우회 시도
+            # ──────────────────────────────────────────────────────────
+            try:
+                import google.generativeai as genai_old
+                genai_old.configure(api_key=api_key)
+                
+                # 구형 SDK에서 검증된 안정 모델 2개 순차 시도
+                for old_model in ["gemini-1.5-flash", "gemini-1.5-pro"]:
+                    try:
+                        model = genai_old.GenerativeModel(old_model)
+                        # 안전 설정 무력화 (에러 방지)
+                        safety_settings = [
+                            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                        ]
+                        old_response = model.generate_content(prompt, safety_settings=safety_settings)
+                        if old_response and old_response.text:
+                            return f"*(구형 SDK 모델: {old_model} 우회 성공)*\n\n" + old_response.text.strip()
+                    except Exception as e_old:
+                        errors.append(f"- 구형 SDK `{old_model}` 실패: {str(e_old)}")
+            except Exception as e_import:
+                errors.append(f"- 구형 SDK 로드 실패: {str(e_import)}")
+
             error_details = "\n".join(errors)
             return (
                 f"🚨 **AI 모델 호출에 전부 실패했습니다.**\n\n"
