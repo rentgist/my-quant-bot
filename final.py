@@ -204,7 +204,7 @@ with tab_sniper:
     if True:
         try:
             if news_data:
-                for n in news_data[:40]:
+                for n in news_data[:20]:
                     title = n.get("title_ko", n.get("title", ""))
                     link = n.get("link", "#")
                     source = n.get("source", "N/A")

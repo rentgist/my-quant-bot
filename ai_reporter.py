@@ -39,14 +39,15 @@ def generate_smart_control_room_report(market_context: str) -> str:
         news_text = "최근 수집된 뉴스가 없습니다. (백그라운드 뉴스 수집 파이프라인 대기 중)"
         
         if news_data:
-            top_news = news_data[:12]
+            top_news = news_data[:60]
             if top_news:
                 news_lines = []
                 for n in top_news:
                     title = n.get("title_ko", n.get("title", "제목 없음"))
                     sentiment = n.get("sentiment", "중립")
+                    importance = n.get("importance", 0)
                     action = n.get("action_point", "")
-                    news_lines.append(f"- [{sentiment}] {title} (대응: {action})")
+                    news_lines.append(f"- [{sentiment}/중요도:{importance}] {title} (대응: {action})")
                 news_text = "\n".join(news_lines)
                 
         prompt = f"""너는 대한민국 상위 1% 자산가를 위한 월스트리트 최고 수준의 매크로 애널리스트이자 퀀트 트레이더다.
