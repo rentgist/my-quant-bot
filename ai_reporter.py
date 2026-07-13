@@ -141,10 +141,32 @@ def generate_smart_control_room_report(market_context: str) -> str:
             except Exception as e_import:
                 errors.append(f"- 구형 SDK 로드 실패: {str(e_import)}")
 
+            # ──────────────────────────────────────────────────────────
+            # [최종 디버그: 지원 모델 리스트 조회]
+            # ──────────────────────────────────────────────────────────
+            available_models = []
+            try:
+                # 신규 SDK로 모델 목록 조회 시도
+                for m in client.models.list():
+                    available_models.append(f"  - `{m.name}` (신규 SDK)")
+            except Exception as e_list1:
+                errors.append(f"- 신규 SDK 모델 목록 조회 실패: {e_list1}")
+                
+            try:
+                # 구형 SDK로 모델 목록 조회 시도
+                import google.generativeai as genai_old
+                genai_old.configure(api_key=api_key)
+                for m in genai_old.list_models():
+                    available_models.append(f"  - `{m.name}` (구형 SDK)")
+            except Exception as e_list2:
+                errors.append(f"- 구형 SDK 모델 목록 조회 실패: {e_list2}")
+
+            models_str = "\n".join(available_models) if available_models else "조회된 모델 없음"
             error_details = "\n".join(errors)
             return (
                 f"🚨 **AI 모델 호출에 전부 실패했습니다.**\n\n"
-                f"**[상세 에러 로그]**\n{error_details}"
+                f"**[상세 에러 로그]**\n{error_details}\n\n"
+                f"**[현재 API Key가 사용 가능한 모델 목록]**\n{models_str}"
             )
         
     except Exception as e:
