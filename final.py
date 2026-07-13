@@ -165,6 +165,10 @@ with tab_sniper:
             market_ctx = f"판정결과: {adv_head}\n위험도: {kr_danger}점\n바닥점수: {kr_score}점\n현재국면: {kr_phase}"
             
             try:
+                import sys
+                import importlib
+                import ai_reporter
+                importlib.reload(ai_reporter)
                 from ai_reporter import generate_smart_control_room_report
                 report = generate_smart_control_room_report(market_ctx)
                 st.session_state["ai_report_cache"] = report
