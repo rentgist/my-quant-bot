@@ -415,7 +415,7 @@ with tab_sniper:
 2. **글로벌 거시 리스크 및 섹터 전망 (Macro & Sector Outlook)**: 금리/유가/지정학 리스크가 주요 자산에 미칠 영향을 상세히 서술하십시오.
 3. **최종 행동 지침 (CFO Action Plan)**:보유 중인 우량주 홀딩 여부, 레버리지 관리, 현금 50% 분할 매수 집행 타이밍을 매우 구체적으로 지시하십시오.
 """
-    st.text_area("📋 웹 Gemini 복사용 프롬프트", web_prompt, height=300)
+    st.code(web_prompt, language="markdown")
 
 
 with tab_radar:
