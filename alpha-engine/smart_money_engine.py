@@ -128,26 +128,36 @@ def calculate_speculative_score(price_data: dict, flow_data: dict | None) -> flo
     has_spike = price_data.get("매집봉발생", False)
     has_wick  = price_data.get("윗꼬리발생", False)
 
-    # 횡보장 또는 약한 하락장(-8% ~ +5%)에서만 매집 유효
-    if not (-8.0 <= change_5d <= 5.0):
+    # 1. 횡보 및 하락 범위 완화 (-12% ~ +15%)
+    # 매집봉 당일 급등을 고려하여 상한선을 +15%로 상향 조정합니다.
+    if not (-12.0 <= change_5d <= 15.0):
         return 0.0
 
+    # 2. 기술적 매집 패턴 점수 (가장 직관적인 세력의 거래량/캔들 흔적)
+    tech_score = 0.0
+    if has_spike:
+        tech_score += 15.0
+    if has_wick:
+        tech_score += 10.0
+
+    # 3. 메이저 수급 확인 (외인+기관)
+    flow_score = 0.0
     if flow_data:
         net_buy = flow_data.get("외인순매수_억", 0) + flow_data.get("기관순매수_억", 0)
-        if net_buy <= 0:
-            return 0.0
+        if net_buy > 0:
+            # 수급 유입 시 가산점
+            flow_score = net_buy * 1.5
+        else:
+            # 수급이 음수(매도)이더라도 기술적 매집 패턴(매집봉+윗꼬리)이 동시에 떴다면
+            # 차명계좌(개인 창구)를 통한 세력 개입 가능성을 열어두고 통과시킵니다. (약간의 감점 적용)
+            if has_spike and has_wick:
+                flow_score = -2.0
+            else:
+                # 매집 패턴도 없는데 메이저 수급도 매도세라면 탈락
+                return 0.0
 
-        # 기본 점수: 순매수 규모
-        base_score = net_buy
-
-        # 보너스 팩터: 세력의 기술적 풋프린트
-        if has_spike:
-            base_score *= 2.0
-        if has_wick:
-            base_score *= 1.5
-
-        return round(base_score, 2)
-    return 0.0
+    total_score = tech_score + flow_score
+    return round(max(total_score, 0.0), 2)
 
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
