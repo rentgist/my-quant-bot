@@ -53,6 +53,27 @@ except Exception as e:
 
 st.set_page_config(page_title="11원칙 퀀트 대시보드 v27.0", page_icon="🧭", layout="wide")
 
+# 가독성 개선을 위한 고대비 스타일 주입
+st.markdown("""
+<style>
+    /* 본문 글씨를 선명한 검은색(#1a1a1a)으로 변경 */
+    .stMarkdown, p, li, span, label, div {
+        color: #1a1a1a !important;
+        font-size: 1.03rem !important;
+        line-height: 1.65 !important;
+    }
+    /* 제목(Header) 글씨 색상 강조 */
+    h1, h2, h3, h4, h5, h6 {
+        color: #0f172a !important;
+        font-weight: 800 !important;
+    }
+    /* 안내 문구 상자(info, warning 등) 텍스트 가독성 */
+    .stAlert p {
+        color: #0f172a !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # ─────────────────────────────────────────
 # 포맷 및 색상 맵핑
 # ─────────────────────────────────────────
