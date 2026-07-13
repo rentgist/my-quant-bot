@@ -15,8 +15,11 @@ def generate_smart_control_room_report(market_context: str) -> str:
         from google import genai
         client = genai.Client(api_key=api_key)
         
-        # Load up to 10 recent news articles
-        news_file = os.path.join("data", "news_archive.json")
+        # Load up to 12 recent news articles
+        news_file = os.path.join("..", "quant-alpha-engine", "data", "news_archive.json")
+        if not os.path.exists(news_file):
+            news_file = os.path.join("data", "news_archive.json")
+            
         news_text = "최근 수집된 뉴스가 없습니다. (백그라운드 뉴스 수집 파이프라인 대기 중)"
         
         if os.path.exists(news_file):

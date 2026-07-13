@@ -179,8 +179,10 @@ with tab_sniper:
     st.divider()
 
     st.markdown("### 📰 최근 글로벌 주요 뉴스 (AI 수집)")
-    news_file = "data/news_archive.json"
     import os, json
+    news_file = os.path.join("..", "quant-alpha-engine", "data", "news_archive.json")
+    if not os.path.exists(news_file):
+        news_file = "data/news_archive.json"
     if os.path.exists(news_file):
         try:
             with open(news_file, "r", encoding="utf-8") as f:
@@ -213,11 +215,11 @@ with tab_sniper:
         st.markdown("매수 승인(비중 확대) 지시가 떨어졌을 때만 확인하세요.")
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.checkbox("외국인 선물 순매수 (+5000계약 이상 확인)")
+            st.checkbox("외국인 선물 +5,000계약 이상 매수 중인가요?")
         with c2:
-            st.checkbox("KOSPI 5일선 버퍼 지지 (종가 기준)")
+            st.checkbox("미결제약정이 당일 증가하고 있습니까? (숏커버링 방지)")
         with c3:
-            st.checkbox("타겟 종목 RSI 과매수(70) 미만 확인")
+            st.checkbox("RSP(동일가중) 지수가 +2.5% 이상 상승 중입니까?")
         st.info("위 3가지가 모두 만족될 때, 오후 2시 50분에 시장가로 매수 집행합니다.")
 
 
@@ -1034,7 +1036,6 @@ with tab_report:  # 🤖 AI 참모 리포트
         "4. [기술적 타점 분석 및 최종 매매 시나리오]",
         "   - RSI 멀티타임프레임과 52주 위치, 시장대비 강도를 종합해 현재 가장 매수 신뢰도가 높은 종목을 선정해 줘.",
         "   - '위험 점수'와 '진바닥 확률', '반등 신뢰도' 등 매크로 지표를 고려해 포트폴리오 비중(예: ETF 절반 + 개별 우량주 절반) 배분 전략을 제시해 줘.",
-        "   - 내가 이 질문 뒤에 이어서 '오늘의 주요 뉴스나 호재/악재'를 알려주면, 그 뉴스를 반영하여 각 종목의 [가장 안전한 1·2·3차 진입 타점과 비중]을 정확한 수치로 찍어 줘.",
         "   - 현재 시장 심리(F&G, SPY RSI)를 바탕으로 지금 당장 '적극 매수', '관망', '비중 축소' 해야 할 종목들을 분류하고 구체적인 액션 플랜을 제시해 줘."
     ]
     st.code("\n".join(lines), language="text")
