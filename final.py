@@ -365,6 +365,54 @@ with tab_sniper:
         )
         st.info("위 수치는 오후 2시 50분 전후를 기준으로 기입하며, 매수세 강도가 '보통' 이상일 때 분할 매수를 집행합니다.")
 
+    # ──────────────────────────────────────────────────────────
+    # [웹 Gemini 복사용 프롬프트 생성기]
+    # ──────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📋 웹 버전 Gemini Pro 복사용 프롬프트")
+    st.caption("아래 텍스트 상자의 복사 버튼(우측 상단 아이콘)을 눌러 구글 웹 Gemini(Advanced 등)에 붙여넣으면, 최고 스펙 Pro 모델의 깊이 있는 마켓 브리핑을 무료로 받으실 수 있습니다!")
+    
+    # 최근 뉴스 포맷팅 (최대 60개)
+    web_news_lines = []
+    if news_data:
+        for n in news_data[:60]:
+            t = n.get("title_ko", n.get("title", ""))
+            s = n.get("sentiment", "중립")
+            i = n.get("importance", 0)
+            a = n.get("action_point", "")
+            web_news_lines.append(f"- [{s}/중요도:{i}] {t} (대응: {a})")
+    web_news_text = "\n".join(web_news_lines) if web_news_lines else "최근 수집된 뉴스가 없습니다."
+
+    # 프롬프트 조립
+    web_prompt = f"""너는 대한민국 상위 1% 자산가를 위한 월스트리트 최고 수준의 매크로 애널리스트이자 11원칙 장기 투자(Value Accumulation)의 대가다.
+다음 주어진 '알고리즘 시스템의 현재 판독 결과', '시장 거시 지표', '최근 글로벌 뉴스'를 바탕으로, 매우 전문적이고 깊이 있는 투자 분석 리포트를 작성하라.
+
+[알고리즘 판정 결과]
+- 국면 판정: {adv_head}
+- 위험도 점수: 한국 {kr_danger}점 / 미국 {us_danger}점
+- 바닥 점수: 한국 {kr_score}% / 미국 {us_score}%
+- 현재 국면: 한국 {kr_phase} / 미국 {us_phase}
+- 반등 신뢰도: 한국 {kr_rec_score}점 / 미국 {us_rec_score}점
+
+[시장 거시 지표 및 수급]
+- TNX 10Y 금리: {summary_dict.get('TNX_10Y', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- WTI 크루드 유가: {summary_dict.get('WTI_Crude', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- USD/KRW 환율: {summary_dict.get('USD_KRW', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 외국인 순매수: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 기관 순매수: {summary_dict.get('Institutional', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 개인 순매수: {summary_dict.get('Retail', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+
+[최근 글로벌 속보 요약 (중요도 2 이상)]
+{web_news_text}
+
+---
+위 데이터를 기반으로 다음 3가지 핵심 뼈대로 리포트를 매우 분석적이고 냉철하게 작성하십시오.
+1. **현재 시장 국면 요약 (Market Summary)**: 현재 하락세의 원인, 매크로 수급과 외인 이탈 여부를 종합 진단하십시오.
+2. **글로벌 거시 리스크 및 섹터 전망 (Macro & Sector Outlook)**: 금리/유가/지정학 리스크가 주요 자산에 미칠 영향을 상세히 서술하십시오.
+3. **최종 행동 지침 (CFO Action Plan)**:보유 중인 우량주 홀딩 여부, 레버리지 관리, 현금 50% 분할 매수 집행 타이밍을 매우 구체적으로 지시하십시오.
+"""
+    st.text_area("📋 웹 Gemini 복사용 프롬프트", web_prompt, height=300)
+
 
 with tab_radar:
     st.subheader("🔍 타점 선택 (Entry Point Selection) - 포트폴리오 종목 타점")
