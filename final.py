@@ -177,6 +177,73 @@ with tab_sniper:
         f"</div>", unsafe_allow_html=True
     )
 
+    st.divider()
+    st.markdown("### 💡 글로벌 매크로 & 수급 통합 지표")
+    
+    # 데이터 수집
+    flow_data = get_investor_flow()  # (외국인, 기관, 개인)
+    flow_1m = get_1m_investor_flow()
+    
+    # AI 브리핑을 위한 추가 데이터 구성
+    extra_data = {
+        'cnn_score': cnn_score,
+        'cnn_rating': cnn_rating,
+        'flow_1m': flow_1m,
+    }
+    
+    phase, summary_dict = analyze_macro_flow(macro_charts, flow_data, extra_data=extra_data)
+    
+    # 3x2 Grid 레이아웃 (매크로 3개, 수급 3개)
+    m_col1, m_col2, m_col3 = st.columns(3)
+    m_col1.metric("🇺🇸 국채 10년물 금리", summary_dict['TNX_10Y'].split(' (')[0], summary_dict['TNX_10Y'].split(' (')[1].replace(')','').replace('p',''), delta_color="inverse")
+    m_col2.metric("🛢️ WTI 원유", summary_dict['WTI_Crude'].split(' (')[0], summary_dict['WTI_Crude'].split(' (')[1].replace(')',''), delta_color="inverse")
+    m_col3.metric("💵 원/달러 환율", summary_dict['USD_KRW'].split(' (')[0], summary_dict['USD_KRW'].split(' (')[1].replace(')',''), delta_color="inverse")
+    
+    f_col1, f_col2, f_col3 = st.columns(3)
+    
+    if summary_dict.get('flow_valid', True):
+        def _get_metric_args(val):
+            return {
+                "label": "순매수" if val >= 0 else "순매도",
+                "delta": "순매수" if val >= 0 else "-순매도"
+            }
+            
+        f_col1.metric(f"👤 외국인 {_get_metric_args(summary_dict['Foreigner_raw'])['label']}", 
+                      summary_dict['Foreigner'], 
+                      _get_metric_args(summary_dict['Foreigner_raw'])['delta'])
+        
+        f_col2.metric(f"🏢 기관 {_get_metric_args(summary_dict['Institutional_raw'])['label']}", 
+                      summary_dict['Institutional'], 
+                      _get_metric_args(summary_dict['Institutional_raw'])['delta'])
+        
+        f_col3.metric(f"🧑 개인 {_get_metric_args(summary_dict['Retail_raw'])['label']}", 
+                      summary_dict['Retail'], 
+                      _get_metric_args(summary_dict['Retail_raw'])['delta'])
+    else:
+        # 데이터가 모두 0일 때 (KRX 시스템 점검 등)
+        f_col1.metric("👤 외국인 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
+        f_col2.metric("🏢 기관 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
+        f_col3.metric("🧑 개인 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    if "cfo_report_cache" not in st.session_state:
+        st.session_state["cfo_report_cache"] = ""
+ 
+    if st.button("🔄 CFO AI 시장 브리핑 생성", key="cfo_report_btn"):
+        with st.spinner("거시경제 CFO AI가 시장 흐름을 분석하고 있습니다..."):
+            st.session_state["cfo_report_cache"] = generate_economic_commentary(summary_dict, phase)
+            
+    if st.session_state["cfo_report_cache"]:
+        ai_commentary = st.session_state["cfo_report_cache"]
+        if "⚠️" in ai_commentary:
+            st.error(ai_commentary)
+        else:
+            st.info(f"**[CFO 통합 브리핑] {phase}**\n\n{ai_commentary}")
+    else:
+        st.info("👈 버튼을 눌러 CFO AI 시장 분석 브리핑을 생성하세요.")
+
+    st.divider()
     st.markdown("### 🤖 실시간 AI 종합 브리핑")
     
     if st.button("🔄 AI 종합 관제 리포트 생성 (뉴스 + 매크로 종합)", type="primary"):
@@ -266,12 +333,37 @@ with tab_sniper:
         st.markdown("매수 승인(비중 확대) 지시가 떨어졌을 때만 확인하세요.")
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.checkbox("외국인 선물 +5,000계약 이상 매수 중인가요?")
+            futures_contracts = st.number_input("외국인 선물 계약 수 (당일 누적)", min_value=-50000, max_value=50000, value=0, step=1000, key="chk_futures")
         with c2:
-            st.checkbox("미결제약정이 당일 증가하고 있습니까? (숏커버링 방지)")
+            open_interest_checked = st.checkbox("미결제약정이 당일 증가하고 있습니까? (숏커버링 방지)", key="chk_oi")
         with c3:
-            st.checkbox("RSP(동일가중) 지수가 +2.5% 이상 상승 중입니까?")
-        st.info("위 3가지가 모두 만족될 때, 오후 2시 50분에 시장가로 매수 집행합니다.")
+            rsp_pct = st.number_input("RSP(동일가중) 지수 등락률 (%)", min_value=-10.0, max_value=10.0, value=0.0, step=0.1, key="chk_rsp")
+            
+        # 수치의 고저에 따른 매수세 강도 연산
+        futures_score = min(max(futures_contracts / 5000 * 50, 0), 50) if futures_contracts > 0 else 0
+        rsp_score = min(max(rsp_pct / 2.5 * 30, 0), 30) if rsp_pct > 0 else 0
+        oi_score = 20.0 if open_interest_checked else 0.0
+        total_score = futures_score + rsp_score + oi_score
+        
+        if total_score >= 85:
+            strength_label = "🔥 매우 강력 (적극 매수 집행 가능)"
+            strength_color = "#21c354"
+        elif total_score >= 60:
+            strength_label = "🟢 보통 (분할 매수 적합)"
+            strength_color = "#fcca46"
+        elif total_score >= 40:
+            strength_label = "🟡 약함 (매수 신중 / 관망 경계)"
+            strength_color = "#ff8c00"
+        else:
+            strength_label = "🔴 매수 불가 (관망 유지)"
+            strength_color = "#ff4b4b"
+            
+        st.markdown(
+            f"<div style='background:{strength_color}22; border-left: 5px solid {strength_color}; padding:12px; border-radius:6px; margin-top:10px; font-weight:bold;'>"
+            f"💪 현재 실시간 수급 매수세 강도: {strength_label} (계산 점수: {total_score:.1f}/100)"
+            f"</div>", unsafe_allow_html=True
+        )
+        st.info("위 수치는 오후 2시 50분 전후를 기준으로 기입하며, 매수세 강도가 '보통' 이상일 때 분할 매수를 집행합니다.")
 
 
 with tab_radar:
@@ -878,70 +970,7 @@ with tab_report:
         st.warning("⚠️ CNN 서버 차단 중. 잠시 후 새로고침 해주세요.")
         
     st.divider()
-    st.subheader("💡 글로벌 매크로 & 수급 통합 AI 브리핑")
-    
-    # 데이터 수집
-    flow_data = get_investor_flow()  # (외국인, 기관, 개인)
-    flow_1m = get_1m_investor_flow()
-    
-    # AI 브리핑을 위한 추가 데이터 구성
-    extra_data = {
-        'cnn_score': cnn_score,
-        'cnn_rating': cnn_rating,
-        'flow_1m': flow_1m,
-    }
-    
-    phase, summary_dict = analyze_macro_flow(macro_charts, flow_data, extra_data=extra_data)
-    
-    # 3x2 Grid 레이아웃 (매크로 3개, 수급 3개)
-    m_col1, m_col2, m_col3 = st.columns(3)
-    m_col1.metric("🇺🇸 국채 10년물 금리", summary_dict['TNX_10Y'].split(' (')[0], summary_dict['TNX_10Y'].split(' (')[1].replace(')','').replace('p',''), delta_color="inverse")
-    m_col2.metric("🛢️ WTI 원유", summary_dict['WTI_Crude'].split(' (')[0], summary_dict['WTI_Crude'].split(' (')[1].replace(')',''), delta_color="inverse")
-    m_col3.metric("💵 원/달러 환율", summary_dict['USD_KRW'].split(' (')[0], summary_dict['USD_KRW'].split(' (')[1].replace(')',''), delta_color="inverse")
-    
-    f_col1, f_col2, f_col3 = st.columns(3)
-    
-    if summary_dict.get('flow_valid', True):
-        def _get_metric_args(val):
-            return {
-                "label": "순매수" if val >= 0 else "순매도",
-                "delta": "순매수" if val >= 0 else "-순매도"
-            }
-            
-        f_col1.metric(f"👤 외국인 {_get_metric_args(summary_dict['Foreigner_raw'])['label']}", 
-                      summary_dict['Foreigner'], 
-                      _get_metric_args(summary_dict['Foreigner_raw'])['delta'])
-        
-        f_col2.metric(f"🏢 기관 {_get_metric_args(summary_dict['Institutional_raw'])['label']}", 
-                      summary_dict['Institutional'], 
-                      _get_metric_args(summary_dict['Institutional_raw'])['delta'])
-        
-        f_col3.metric(f"🧑 개인 {_get_metric_args(summary_dict['Retail_raw'])['label']}", 
-                      summary_dict['Retail'], 
-                      _get_metric_args(summary_dict['Retail_raw'])['delta'])
-    else:
-        # 데이터가 모두 0일 때 (KRX 시스템 점검 등)
-        f_col1.metric("👤 외국인 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
-        f_col2.metric("🏢 기관 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
-        f_col3.metric("🧑 개인 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    if "cfo_report_cache" not in st.session_state:
-        st.session_state["cfo_report_cache"] = ""
-
-    if st.button("🔄 CFO AI 시장 브리핑 생성", key="cfo_report_btn"):
-        with st.spinner("거시경제 CFO AI가 시장 흐름을 분석하고 있습니다..."):
-            st.session_state["cfo_report_cache"] = generate_economic_commentary(summary_dict, phase)
-            
-    if st.session_state["cfo_report_cache"]:
-        ai_commentary = st.session_state["cfo_report_cache"]
-        if "⚠️" in ai_commentary:
-            st.error(ai_commentary)
-        else:
-            st.info(f"**[CFO 통합 브리핑] {phase}**\n\n{ai_commentary}")
-    else:
-        st.info("👈 버튼을 눌러 CFO AI 시장 분석 브리핑을 생성하세요.")
+    st.info("💡 본 탭 하단에 위치했던 [글로벌 매크로 & 수급 통합 AI 브리핑] 지표들과 CFO 브리핑 생성 버튼은 사용자님의 편의를 위해 **1번 탭 (🎯 AI 스마트 관제실)**으로 통합 이전되었습니다. 이제 1번 탭에서 모든 브리핑과 지표를 일괄적으로 확인 및 컨트롤하실 수 있습니다!")
 
 with tab_radar:  # 🚀 오늘의 텐배거 레이더
     st.subheader("🚀 섹터별 텐배거 마스터 레이더 (미래 지표 및 트렌드 필터)")
