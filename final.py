@@ -203,6 +203,27 @@ with tab_sniper:
     m_col2.metric("🛢️ WTI 원유", summary_dict['WTI_Crude'].split(' (')[0], summary_dict['WTI_Crude'].split(' (')[1].replace(')',''), delta_color="inverse")
     m_col3.metric("💵 원/달러 환율", summary_dict['USD_KRW'].split(' (')[0], summary_dict['USD_KRW'].split(' (')[1].replace(')',''), delta_color="inverse")
     
+    # 🇰🇷 코스피 실시간 가격 및 5일선 현황 표시
+    k_col1, k_col2, k_col3 = st.columns(3)
+    if not kospi_10y.empty:
+        current_kospi_val = round(float(kospi_10y['Close'].iloc[-1]), 2)
+        kospi_5d_sma = round(float(kospi_10y['Close'].rolling(5).mean().iloc[-1]), 2)
+        gap = current_kospi_val - kospi_5d_sma
+        is_above = current_kospi_val >= kospi_5d_sma
+        
+        k_col1.metric("🇰🇷 KOSPI 현재가", f"{current_kospi_val:,.2f}")
+        k_col2.metric("📈 KOSPI 5일 이평선", f"{kospi_5d_sma:,.2f}")
+        k_col3.metric(
+            "🎯 5일선 안착 여부", 
+            "🟢 안착 완료" if is_above else "🔴 지하실 (미달)", 
+            f"이격: {gap:+,.2f}p", 
+            delta_color="normal" if is_above else "inverse"
+        )
+    else:
+        k_col1.metric("🇰🇷 KOSPI 현재가", "데이터 없음")
+        k_col2.metric("📈 KOSPI 5일 이평선", "데이터 없음")
+        k_col3.metric("🎯 5일선 안착 여부", "확인 불가")
+        
     f_col1, f_col2, f_col3 = st.columns(3)
     
     if summary_dict.get('flow_valid', True):
@@ -333,7 +354,18 @@ with tab_sniper:
 
     st.divider()
 
-    with st.expander("🎯 14:50 실전 타격 통제실 (v27.4 개편 완료)", expanded=True):
+    # 어제 미국 RSP 등락률 자동 연산 및 연동
+    rsp_change_pct = None
+    if not rsp_10y.empty:
+        rsp_close = rsp_10y['Close']
+        if len(rsp_close) >= 2:
+            rsp_change_pct = ((rsp_close.iloc[-1] - rsp_close.iloc[-2]) / rsp_close.iloc[-2]) * 100.0
+
+    cond3_default = True
+    if rsp_change_pct is not None:
+        cond3_default = rsp_change_pct >= -1.0
+
+    with st.expander("🎯 14:50 실전 타격 통제실 (v27.5 개편 완료)", expanded=True):
         st.markdown("장 마감 10분 전, 아래 4가지 조건을 HTS와 교차 검증하십시오.")
         
         c1, c2 = st.columns(2)
@@ -341,11 +373,18 @@ with tab_sniper:
             st.markdown("#### ⚡ 실전 수급 & 가격 필터")
             cond1 = st.checkbox("① [엔진] 외국인 선물 순매수가 +5,000계약 이상입니까?")
             cond2 = st.checkbox("② [자금] 선물 미결제약정이 당일 증가(+빨간불)했습니까?")
-            cond4 = st.checkbox("④ [추세/가격] KOSPI가 5일선을 돌파(안착)했고, 프리미엄(보험료)이 6% 이내입니까?")
+            cond4 = st.checkbox("④ [추세/가격] KOSPI가 5일선을 돌파(안착)했습니까?")
         with c2:
             st.markdown("#### 🛡️ 거시 방어 필터 (Veto)")
             st.markdown("> *※ 거시 필터: 미장이 폭락만 안 했다면 국장 수급을 믿는다*")
-            cond3 = st.checkbox("③ [매크로 방어] 미국 RSP(동일가중)가 전일 -1.0% 이하로 폭락하지 않았습니까? (정상 범위인가?)", value=True)
+            if rsp_change_pct is not None:
+                st.info(f"📊 전일 미국 RSP 종가 등락률: **{rsp_change_pct:+.2f}%**")
+                if rsp_change_pct < -1.0:
+                    st.error("🚨 경고: 전일 미국 RSP가 -1.0% 이하로 폭락했습니다!")
+            else:
+                st.warning("⚠️ 미국 RSP 데이터를 불러올 수 없습니다. 수동 확인이 필요합니다.")
+                
+            cond3 = st.checkbox("③ [매크로 방어] 미국 RSP가 정상 범위입니까? (-1.0% 이하로 폭락하지 않음)", value=cond3_default)
 
         st.divider()
 
@@ -370,8 +409,13 @@ with tab_sniper:
                 st.markdown("**[불합격 사유 분석]**")
                 if not cond1: st.write("- ❌ 외국인 선물 엔진이 켜지지 않았습니다. (+5,000계약 미달)")
                 if not cond2: st.write("- ❌ 신규 자금(미결제약정) 유입이 확인되지 않았습니다.")
-                if not cond3: st.write("- ❌ 글로벌 매크로(미국 RSP)가 -1.0% 이하로 폭락하여 붕괴 위험이 있습니다.")
-                if not cond4: st.write("- ❌ KOSPI가 아직 5일선 아래에 있거나(폭포수), 진입 가격이 너무 비쌉니다. (보험료 > 6%)")
+                if not cond3:
+                    if rsp_change_pct is not None:
+                        st.write(f"- ❌ 글로벌 매크로(미국 RSP)가 -1.0% 이하로 폭락하여 붕괴 위험이 있습니다. (현재 수치: {rsp_change_pct:+.2f}%)")
+                    else:
+                        st.write("- ❌ 글로벌 매크로(미국 RSP)가 -1.0% 이하로 폭락하여 붕괴 위험이 있습니다. (수치 확인 불가)")
+                if not cond4:
+                    st.write("- ❌ KOSPI가 아직 5일선 아래에 있어 매입 최적화 추세(안착)가 확인되지 않았습니다.")
                 
                 st.warning("⚠️ 방아쇠에서 손을 떼고 HTS를 종료하십시오. 우리는 확률 70% 미만의 도박은 하지 않습니다.")
 
