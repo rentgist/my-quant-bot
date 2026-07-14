@@ -406,27 +406,31 @@ with tab_sniper:
                 target_amount = total_cash * 0.30
                 reserve_amount = total_cash * 0.70
                 st.success(
-                    f"🟢 **ORION Signal : GO**  \n"
-                    f"모든 조건이 충족되었습니다. 지금 움직일 때입니다.  \n"
-                    f"진입 **{target_amount:,.0f}원** (30%) · 보존 **{reserve_amount:,.0f}원** (70%)  \n"
+                    f"### 🟢 ORION Signal : GO\n\n"
+                    f"**모든 조건이 충족되었습니다. 지금 움직일 때입니다.**"
+                )
+                st.info(
+                    f"진입 **{target_amount:,.0f}원** (30%) · 보존 **{reserve_amount:,.0f}원** (70%)\n\n"
                     f"검증된 우량주 또는 KOSPI 추종 ETF · 오후 종가 부근 집행"
                 )
             else:
-                # 판단 근거 한 줄 조립
-                fail_lines = []
-                if not cond1: fail_lines.append("❌ 외국인 선물 엔진 미점화")
-                if not cond2: fail_lines.append("❌ 미결제약정 유입 미확인")
-                if not cond3:
-                    fail_lines.append(f"❌ 미국 RSP 폭락 감지 ({rsp_change_pct:+.2f}%)" if rsp_change_pct is not None else "❌ 미국 RSP 확인 불가")
-                if not cond4: fail_lines.append("❌ KOSPI 5일선 아래")
-                fail_text = " · ".join(fail_lines)
-
                 st.error(
-                    f"🔴 **ORION Signal : STOP**  \n"
-                    f"오늘은 기다리는 것이 기대값이 높습니다.  \n"
-                    f"{fail_text}  \n"
-                    f"*ORION은 확률이 충분하지 않은 거래는 하지 않습니다.*"
+                    "### 🔴 ORION Signal : STOP\n\n"
+                    "**오늘은 기다리는 것이 기대값이 높습니다.**"
                 )
+
+                st.markdown("**판단 근거**")
+                if not cond1: st.write("❌ 외국인 선물 엔진 미점화 (+5,000계약 미달)")
+                if not cond2: st.write("❌ 신규 자금(미결제약정) 유입 미확인")
+                if not cond3:
+                    if rsp_change_pct is not None:
+                        st.write(f"❌ 미국 RSP 폭락 감지 ({rsp_change_pct:+.2f}%)")
+                    else:
+                        st.write("❌ 미국 RSP 데이터 확인 불가")
+                if not cond4:
+                    st.write("❌ KOSPI 5일선 아래 (추세 안착 미확인)")
+
+                st.caption("ORION은 확률이 충분하지 않은 거래는 하지 않습니다.")
 
     # ──────────────────────────────────────────────────────────
     # [웹 Gemini 복사용 프롬프트 생성기]
