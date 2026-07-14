@@ -51,7 +51,7 @@ except Exception as e:
     st.error(f"🚨 알 수 없는 오류 발생: {e}")
     st.stop()
 
-st.set_page_config(page_title="11원칙 퀀트 대시보드 v27.0", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="ORION", page_icon="🛰", layout="wide")
 
 # AI 리포트 전용 고대비 스타일 주입
 st.markdown("""
@@ -129,8 +129,8 @@ def color_df(val):
 # ─────────────────────────────────────────
 # UI — 전역 데이터 선초기화
 # ─────────────────────────────────────────
-st.title("🧭 11원칙 퀀트 트레이딩 대시보드 v27.0")
-st.caption("v27.0: AI 스마트 관제실 탑재 — 실시간 매크로/수급 알고리즘 판정 및 AI 글로벌 속보 브리핑 통합 모델")
+st.title("🛰 ORION")
+st.caption("확률이 충분하지 않은 거래는 하지 않습니다.")
 
 cnn_score, cnn_rating, cnn_history = get_real_cnn_fg()
 sector_base = get_sector_baseline()
@@ -158,15 +158,15 @@ us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_rada
 
 # 탭 구성
 tab_sniper, tab_radar, tab_report, tab_port = st.tabs([
-    "🎯 AI 스마트 관제실",
+    "🛰 ORION Signal",
     "🔍 종목 발굴 & 레이더",
     "🌐 매크로 & 딥 리포트",
     "💼 포트폴리오 & 가이드",
 ])
 
 with tab_sniper:
-    st.subheader("🎯 AI 스마트 관제실 (v27.0)")
-    st.caption("최종 업데이트: 실시간 (매크로/위험도/바닥 지표 + AI 브리핑 통합)")
+    st.subheader("🛰 ORION Signal")
+    st.caption("ORION은 기다릴 때와 움직일 때를 구별합니다.")
 
     adv_head, adv_color, adv_actions = get_strategic_advice(
         kr_danger, kr_score, kr_verdict, kr_phase, recovery_score=kr_rec_score
@@ -176,7 +176,7 @@ with tab_sniper:
         f"<div style='background:{adv_color}22; border-left: 8px solid {adv_color}; "
         f"padding:20px; border-radius:10px; margin-bottom:20px;'>"
         f"<h2 style='margin-top:0; color:{adv_color};'>{adv_head}</h2>"
-        f"<p style='font-size:1.1em; font-weight:bold; margin-bottom:10px;'>📌 알고리즘 시스템 판독 근거: 위험도 {kr_danger}점 / 바닥확률 {kr_score}% / 반등신뢰도 {kr_rec_score}점 / {kr_phase}</p>"
+        f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>위험도 {kr_danger}점 · 바닥확률 {kr_score}% · 반등신뢰도 {kr_rec_score}점 · {kr_phase}</p>"
         f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in adv_actions]) + "</ul>"
         f"</div>", unsafe_allow_html=True
     )
@@ -374,59 +374,58 @@ with tab_sniper:
     if rsp_change_pct is not None:
         cond3_default = rsp_change_pct >= -1.0
 
-    with st.expander("🎯 14:50 실전 타격 통제실 (v27.5 개편 완료)", expanded=True):
-        st.markdown("장 마감 10분 전, 아래 4가지 조건을 HTS와 교차 검증하십시오.")
+    with st.expander("🛰 ORION 체크리스트", expanded=True):
+        st.markdown("장 마감 10분 전, 아래 4가지 조건을 확인하세요.")
         
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("#### ⚡ 실전 수급 & 가격 필터")
-            cond1 = st.checkbox("① [엔진] 외국인 선물 순매수가 +5,000계약 이상입니까?")
-            cond2 = st.checkbox("② [자금] 선물 미결제약정이 당일 증가(+빨간불)했습니까?")
-            cond4 = st.checkbox("④ [추세/가격] KOSPI가 5일선을 돌파(안착)했습니까?")
+            st.markdown("#### ⚡ 수급 & 가격")
+            cond1 = st.checkbox("① 외국인 선물 순매수 +5,000계약 이상")
+            cond2 = st.checkbox("② 선물 미결제약정 당일 증가")
+            cond4 = st.checkbox("④ KOSPI 5일선 안착")
         with c2:
-            st.markdown("#### 🛡️ 거시 방어 필터 (Veto)")
-            st.markdown("> *※ 거시 필터: 미장이 폭락만 안 했다면 국장 수급을 믿는다*")
+            st.markdown("#### 🛡️ 거시 방어 (Veto)")
+            st.markdown("> *미장이 폭락만 안 했다면 국장 수급을 믿습니다.*")
             if rsp_change_pct is not None:
-                st.info(f"📊 전일 미국 RSP 종가 등락률: **{rsp_change_pct:+.2f}%**")
+                st.info(f"📊 전일 미국 RSP 등락률: **{rsp_change_pct:+.2f}%**")
                 if rsp_change_pct < -1.0:
-                    st.error("🚨 경고: 전일 미국 RSP가 -1.0% 이하로 폭락했습니다!")
+                    st.error("🚨 전일 미국 RSP가 -1.0% 이하로 폭락했습니다.")
             else:
-                st.warning("⚠️ 미국 RSP 데이터를 불러올 수 없습니다. 수동 확인이 필요합니다.")
+                st.warning("⚠️ 미국 RSP 데이터를 불러올 수 없습니다.")
                 
-            cond3 = st.checkbox("③ [매크로 방어] 미국 RSP가 정상 범위입니까? (-1.0% 이하로 폭락하지 않음)", value=cond3_default)
+            cond3 = st.checkbox("③ 미국 RSP 정상 범위 (-1.0% 이하 폭락 없음)", value=cond3_default)
 
         st.divider()
 
         # Position Sizing
-        st.subheader("💰 비중 통제 (Position Sizing)")
-        total_cash = st.number_input("현재 동원 가능한 대기 현금(원)을 입력하세요:", min_value=0, value=10000000, step=1000000, key="sniper_total_cash")
+        st.subheader("💰 비중 통제")
+        total_cash = st.number_input("동원 가능한 대기 현금(원):", min_value=0, value=10000000, step=1000000, key="sniper_total_cash")
         
-        if st.button("🚀 최종 타격 판정 (EXECUTE)", key="btn_execute_sniper"):
+        if st.button("🛰 ORION 최종 판정", key="btn_execute_sniper"):
             if cond1 and cond2 and cond3 and cond4:
                 target_amount = total_cash * 0.30
                 reserve_amount = total_cash * 0.70
                 
-                st.success("### 🟢 [강력 매수 GO] 모든 조건이 완벽히 충족되었습니다!")
-                st.info(f"**[행동 지침]**\n\n"
-                        f"1. **진입 금액:** {target_amount:,.0f}원 (총 예산의 30% 스나이퍼 타격)\n\n"
-                        f"2. **보존 금액:** {reserve_amount:,.0f}원 (70%는 오버나이트 블랙스완 및 지하실 방어용으로 절대 사수)\n\n"
-                        f"3. **타겟 종목:** 삼성전자 또는 KOSPI 추종 ETF 시장가 매수")
+                st.success("### 🟢 ORION Signal : GO\n\n**모든 조건이 충족되었습니다. 지금 움직일 때입니다.**")
+                st.info(f"**진입 금액:** {target_amount:,.0f}원 (30%)\n\n"
+                        f"**보존 금액:** {reserve_amount:,.0f}원 (70%)\n\n"
+                        f"**타겟:** 검증된 우량주 또는 KOSPI 추종 ETF")
             else:
-                st.error("### 🔴 [매수 보류 PASS] 조건이 100% 충족되지 않았습니다.")
+                st.error("### 🔴 ORION Signal : STOP\n\n**오늘은 기다리는 것이 기대값이 높습니다.**")
                 
-                # 실패 원인 분석
-                st.markdown("**[불합격 사유 분석]**")
-                if not cond1: st.write("- ❌ 외국인 선물 엔진이 켜지지 않았습니다. (+5,000계약 미달)")
-                if not cond2: st.write("- ❌ 신규 자금(미결제약정) 유입이 확인되지 않았습니다.")
+                # 판단 근거
+                st.markdown("**[판단 근거]**")
+                if not cond1: st.write("- ❌ 외국인 선물 엔진 미점화 (+5,000계약 미달)")
+                if not cond2: st.write("- ❌ 신규 자금(미결제약정) 유입 미확인")
                 if not cond3:
                     if rsp_change_pct is not None:
-                        st.write(f"- ❌ 글로벌 매크로(미국 RSP)가 -1.0% 이하로 폭락하여 붕괴 위험이 있습니다. (현재 수치: {rsp_change_pct:+.2f}%)")
+                        st.write(f"- ❌ 미국 RSP 폭락 감지 ({rsp_change_pct:+.2f}%)")
                     else:
-                        st.write("- ❌ 글로벌 매크로(미국 RSP)가 -1.0% 이하로 폭락하여 붕괴 위험이 있습니다. (수치 확인 불가)")
+                        st.write("- ❌ 미국 RSP 데이터 확인 불가")
                 if not cond4:
-                    st.write("- ❌ KOSPI가 아직 5일선 아래에 있어 매입 최적화 추세(안착)가 확인되지 않았습니다.")
+                    st.write("- ❌ KOSPI가 아직 5일선 아래 (추세 안착 미확인)")
                 
-                st.warning("⚠️ 방아쇠에서 손을 떼고 HTS를 종료하십시오. 우리는 확률 70% 미만의 도박은 하지 않습니다.")
+                st.caption("ORION은 확률이 충분하지 않은 거래는 하지 않습니다.")
 
     # ──────────────────────────────────────────────────────────
     # [웹 Gemini 복사용 프롬프트 생성기]
