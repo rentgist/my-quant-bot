@@ -215,9 +215,9 @@ with tab_sniper:
         k_col2.metric("📈 KOSPI 5일 이평선", f"{kospi_5d_sma:,.2f}")
         k_col3.metric(
             "🎯 5일선 안착 여부", 
-            "🟢 안착 완료" if is_above else "🔴 지하실 (미달)", 
+            "안착 완료" if is_above else "미안착", 
             f"이격: {gap:+,.2f}p", 
-            delta_color="normal" if is_above else "inverse"
+            delta_color="normal" if is_above else "off"
         )
     else:
         k_col1.metric("🇰🇷 KOSPI 현재가", "데이터 없음")
