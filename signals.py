@@ -639,7 +639,7 @@ def calculate_kr_recovery_confirmation(kospi_hist, usdkrw_hist):
 def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", recovery_score=None):
     """
     반환: (headline, color, actions[])
-    ORION 브랜드 v28 — Threads 연재에 적합한 톤으로 리브랜딩
+    ORION v28.1 — 상황 → 체크리스트 → 타점 안내를 한 흐름으로 전달
     """
     actions = []
     is_knife = "칼날" in bottom_verdict
@@ -650,9 +650,9 @@ def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", 
         headline = "🔴 ORION Signal : STOP — 지금은 기다릴 때입니다."
         color = "#ff9900"
         actions = [
-            "낙폭이 아니라 속도가 문제인 구간입니다. 급락 진행 중 진입은 평균단가만 훼손합니다.",
-            "매수 재개 조건: 5일선 회복 여부를 확인하거나, 하락이 멈춘 다음 거래일에 판단하세요.",
-            "기존 코어 포지션은 홀딩하되, 추가 자금 투입은 보류합니다.",
+            "급락 진행 중입니다. 속도가 문제인 구간에서는 진입하지 않습니다.",
+            "5일선 회복이 확인되면 아래 체크리스트를 다시 점검하세요.",
+            "기존 포지션은 홀딩합니다. 추가 자금 투입은 보류합니다.",
         ]
 
     # 2순위: 고점권 (바닥 점수 무의미)
@@ -661,23 +661,23 @@ def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", 
             headline = "🔴 ORION Signal : STOP — 지금은 매수보다 현금을 지킬 때입니다."
             color = "#ff4b4b"
             actions = [
-                "가장 위험한 조합입니다. 경보가 다수 감지되었으나 낙폭이 아직 적어, 빠질 공간이 많이 남아 있습니다.",
-                "신규 매수 전면 중단. 반등이 나오면 탈출 기회로 활용하세요.",
+                "위험 경보가 다수 감지되었으나 낙폭은 아직 적습니다. 빠질 공간이 남아 있습니다.",
+                "신규 매수를 중단하고, 반등이 나오면 비중 축소 기회로 활용하세요.",
             ]
         elif danger_count >= 3:
             headline = "🟡 ORION Signal : WAIT — 이상 징후가 감지되었습니다."
             color = "#ff9900"
             actions = [
-                "지수는 고점권인데 위험 탐지기에 경고가 들어왔습니다. 추격 매수의 기댓값이 가장 낮은 구간입니다.",
+                "고점권에서 위험 신호가 포착되었습니다. 추격 매수의 기댓값이 가장 낮은 구간입니다.",
                 "수익 중인 종목 일부 익절로 현금을 확보하세요.",
             ]
         else:
             headline = "🟢 ORION Signal : CLEAR — 안정적인 흐름입니다."
             color = "#21c354"
             actions = [
-                "시장에 큰 패닉 없는 안정 구간입니다.",
+                "시장에 이상 신호 없는 안정 구간입니다.",
                 "정해진 원칙에 따라 기계적 분할 매수를 유지하세요.",
-                "우량주가 눌림목에 진입하면 기회가 될 수 있습니다.",
+                "종목 레이더에서 눌림목 타점을 확인하고, 조건이 맞으면 진입하세요.",
             ]
 
     # 3순위: 극단 패닉 (바닥 점수 80+) -> 기회 탐지
@@ -686,9 +686,9 @@ def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", 
         color = "#e94560"
         actions = [
             "바닥 탐지 점수가 80점을 넘었습니다. 역사적으로 드문 기회 영역입니다.",
-            "단, 아직 추세 반전이 확인되지 않았습니다. 선발대 규모(10%)로 신중하게 접근하세요.",
-            "재무 퀄리티가 검증된 우량주만 대상으로 하며, 반드시 오후 종가 부근에 집행하세요.",
-            "ORION은 바닥을 감지하지만, 진입 타이밍은 체크리스트가 결정합니다.",
+            "아직 추세 반전이 확인되지 않았습니다. 아래 체크리스트에서 조건을 점검한 뒤, GO 사인이 뜨면 진입하세요.",
+            "종목 레이더의 매수 타점을 확인하고, 검증된 우량주만 대상으로 하세요.",
+            "ORION은 바닥을 감지합니다. 진입 여부는 체크리스트가, 타점은 레이더가 결정합니다.",
         ]
         
     # 4순위: 추세 전환 및 불타기 (바닥 점수 50~79) -> Tier 2
@@ -698,9 +698,9 @@ def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", 
             headline = "🟡 ORION Signal : GO — 추세 전환이 확인되었습니다."
             color = "#fcca46"
             actions = [
-                "바닥 점수 50점대 진입 및 반등 신뢰도가 충족되었습니다.",
-                "추가 자금(20~30%)을 10% 단위로 나눠 투입하는 분할 매수 구간입니다.",
-                "오후 3시 종가 부근에 집행하여 리스크를 최소화하세요.",
+                "바닥 점수와 반등 신뢰도가 모두 충족되었습니다.",
+                "아래 체크리스트에서 최종 GO 사인을 확인한 뒤, 종목 레이더에서 타점을 잡고 분할 진입하세요.",
+                "오후 종가 부근에 집행하여 리스크를 최소화하세요.",
             ]
         else:
             headline = "🟡 ORION Signal : WAIT — 바닥 확인 중이나, 아직 때가 아닙니다."
@@ -717,7 +717,7 @@ def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", 
         color = "#aaaaaa"
         actions = [
             "단기 조정이 나왔지만, 바닥이라 부르기엔 아직 이릅니다.",
-            "가장 돈을 잃기 쉬운 '어설픈 물타기' 구간입니다. 기존 포지션만 유지하세요.",
+            "어설픈 물타기 구간입니다. 기존 포지션만 유지하세요.",
         ]
 
     # 6순위: 평범 (그 외) -> Tier 1
@@ -726,7 +726,7 @@ def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", 
         color = "#21c354"
         actions = [
             "큰 패닉이나 과열이 없는 일상적인 시장입니다.",
-            "정해진 원칙에 따라 우량주 눌림목에서 기계적으로 매수하세요.",
+            "종목 레이더에서 눌림목 타점을 확인하고, 원칙에 따라 기계적으로 매수하세요.",
         ]
 
     return headline, color, actions
