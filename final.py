@@ -211,7 +211,16 @@ with tab_sniper:
         gap = current_kospi_val - kospi_5d_sma
         is_above = current_kospi_val >= kospi_5d_sma
         
-        k_col1.metric("🇰🇷 KOSPI 현재가", f"{current_kospi_val:,.2f}")
+        # 코스피 등락률 연산
+        if len(kospi_10y['Close']) >= 2:
+            prev_kospi = float(kospi_10y['Close'].iloc[-2])
+            kospi_change_pts = current_kospi_val - prev_kospi
+            kospi_change_pct = (kospi_change_pts / prev_kospi) * 100.0
+            kospi_delta_str = f"{kospi_change_pct:+.2f}% ({kospi_change_pts:+.2f}p)"
+        else:
+            kospi_delta_str = "0.00% (0.00p)"
+        
+        k_col1.metric("🇰🇷 KOSPI 현재가", f"{current_kospi_val:,.2f}", delta=kospi_delta_str)
         k_col2.metric("📈 KOSPI 5일 이평선", f"{kospi_5d_sma:,.2f}")
         k_col3.metric(
             "🎯 5일선 안착 여부", 
