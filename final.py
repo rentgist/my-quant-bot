@@ -446,6 +446,12 @@ with tab_sniper:
             web_news_lines.append(f"- [{s}/중요도:{i}] {t} (대응: {a})")
     web_news_text = "\n".join(web_news_lines) if web_news_lines else "최근 수집된 뉴스가 없습니다."
 
+    # 프롬프트 조립용 지표 포맷팅
+    kospi_str = f"{current_kospi_val:,.2f}" if 'current_kospi_val' in locals() and current_kospi_val else "N/A"
+    kospi_5d_str = f"{kospi_5d_sma:,.2f}" if 'kospi_5d_sma' in locals() and kospi_5d_sma else "N/A"
+    kospi_status_str = ("안착 완료" if is_above else f"미안착 (이격: {gap:+,.2f}p)") if 'is_above' in locals() and 'gap' in locals() else "N/A"
+    rsp_val_str = f"{rsp_change_pct:+.2f}%" if rsp_change_pct is not None else "N/A"
+
     # 프롬프트 조립
     web_prompt = f"""너는 대한민국 상위 1% 자산가를 위한 월스트리트 최고 수준의 매크로 애널리스트이자 11원칙 장기 투자(Value Accumulation)의 대가다.
 다음 주어진 '알고리즘 시스템의 현재 판독 결과', '시장 거시 지표', '최근 글로벌 뉴스'를 바탕으로, 매우 전문적이고 깊이 있는 투자 분석 리포트를 작성하라.
@@ -464,6 +470,10 @@ with tab_sniper:
 - 외국인 순매수: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'}
 - 기관 순매수: {summary_dict.get('Institutional', 'N/A') if 'summary_dict' in locals() else 'N/A'}
 - 개인 순매수: {summary_dict.get('Retail', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- KOSPI 현재가: {kospi_str}
+- KOSPI 5일 이평선: {kospi_5d_str}
+- KOSPI 5일선 안착 상태: {kospi_status_str}
+- 미국 RSP 전일 등락률: {rsp_val_str}
 
 [최근 글로벌 속보 요약 (중요도 2 이상)]
 {web_news_text}
