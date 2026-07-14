@@ -405,27 +405,47 @@ with tab_sniper:
             if cond1 and cond2 and cond3 and cond4:
                 target_amount = total_cash * 0.30
                 reserve_amount = total_cash * 0.70
-                
-                st.success("### 🟢 ORION Signal : GO\n\n**모든 조건이 충족되었습니다. 지금 움직일 때입니다.**")
-                st.info(f"**진입 금액:** {target_amount:,.0f}원 (30%)\n\n"
-                        f"**보존 금액:** {reserve_amount:,.0f}원 (70%)\n\n"
-                        f"**타겟:** 검증된 우량주 또는 KOSPI 추종 ETF")
+                reasons_html = f"""
+                    <div style='margin-top:8px; font-size:0.9em; color:#1a5c2a;'>
+                        💰 진입 {target_amount:,.0f}원 (30%) &nbsp;|&nbsp; 보존 {reserve_amount:,.0f}원 (70%)
+                    </div>
+                    <div style='margin-top:4px; font-size:0.85em; color:#555;'>검증된 우량주 또는 KOSPI 추종 ETF · 오후 종가 부근 집행</div>
+                """
+                st.markdown(f"""
+                <div style='border-left:5px solid #21c354; background:#f0fff4; border-radius:8px; padding:16px 20px; margin:8px 0;'>
+                    <div style='font-size:1.25em; font-weight:800; color:#21c354; letter-spacing:-0.3px;'>🟢 ORION Signal : GO</div>
+                    <div style='font-size:1em; font-weight:600; color:#1a5c2a; margin-top:4px;'>모든 조건이 충족되었습니다. 지금 움직일 때입니다.</div>
+                    {reasons_html}
+                </div>
+                """, unsafe_allow_html=True)
             else:
-                st.error("### 🔴 ORION Signal : STOP\n\n**오늘은 기다리는 것이 기대값이 높습니다.**")
-                
-                # 판단 근거
-                st.markdown("**[판단 근거]**")
-                if not cond1: st.write("- ❌ 외국인 선물 엔진 미점화 (+5,000계약 미달)")
-                if not cond2: st.write("- ❌ 신규 자금(미결제약정) 유입 미확인")
+                # 판단 근거 조립
+                fail_items = []
+                if not cond1: fail_items.append("❌ 외국인 선물 엔진 미점화 (+5,000계약 미달)")
+                if not cond2: fail_items.append("❌ 신규 자금(미결제약정) 유입 미확인")
                 if not cond3:
                     if rsp_change_pct is not None:
-                        st.write(f"- ❌ 미국 RSP 폭락 감지 ({rsp_change_pct:+.2f}%)")
+                        fail_items.append(f"❌ 미국 RSP 폭락 감지 ({rsp_change_pct:+.2f}%)")
                     else:
-                        st.write("- ❌ 미국 RSP 데이터 확인 불가")
+                        fail_items.append("❌ 미국 RSP 데이터 확인 불가")
                 if not cond4:
-                    st.write("- ❌ KOSPI가 아직 5일선 아래 (추세 안착 미확인)")
-                
-                st.caption("ORION은 확률이 충분하지 않은 거래는 하지 않습니다.")
+                    fail_items.append("❌ KOSPI 5일선 아래 (추세 안착 미확인)")
+
+                reasons_html = "".join([
+                    f"<div style='font-size:0.88em; color:#7a1a1a; margin-top:5px;'>{item}</div>"
+                    for item in fail_items
+                ])
+                st.markdown(f"""
+                <div style='border-left:5px solid #e53935; background:#fff5f5; border-radius:8px; padding:16px 20px; margin:8px 0;'>
+                    <div style='font-size:1.25em; font-weight:800; color:#e53935; letter-spacing:-0.3px;'>🔴 ORION Signal : STOP</div>
+                    <div style='font-size:1em; font-weight:600; color:#7a1a1a; margin-top:4px;'>오늘은 기다리는 것이 기대값이 높습니다.</div>
+                    <div style='margin-top:10px; padding-top:10px; border-top:1px solid #f5c6c6;'>
+                        <div style='font-size:0.8em; font-weight:700; color:#aaa; text-transform:uppercase; letter-spacing:1px; margin-bottom:2px;'>판단 근거</div>
+                        {reasons_html}
+                    </div>
+                    <div style='margin-top:10px; font-size:0.8em; color:#bbb; font-style:italic;'>ORION은 확률이 충분하지 않은 거래는 하지 않습니다.</div>
+                </div>
+                """, unsafe_allow_html=True)
 
     # ──────────────────────────────────────────────────────────
     # [웹 Gemini 복사용 프롬프트 생성기]
