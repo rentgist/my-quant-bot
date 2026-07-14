@@ -333,41 +333,47 @@ with tab_sniper:
 
     st.divider()
 
-    with st.expander("✅ 14:50 실전 타격 간편 체크리스트", expanded=False):
-        st.markdown("매수 승인(비중 확대) 지시가 떨어졌을 때만 확인하세요.")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            futures_contracts = st.number_input("외국인 선물 계약 수 (당일 누적)", min_value=-50000, max_value=50000, value=0, step=1000, key="chk_futures")
-        with c2:
-            open_interest_checked = st.checkbox("미결제약정이 당일 증가하고 있습니까? (숏커버링 방지)", key="chk_oi")
-        with c3:
-            rsp_pct = st.number_input("RSP(동일가중) 지수 등락률 (%)", min_value=-10.0, max_value=10.0, value=0.0, step=0.1, key="chk_rsp")
-            
-        # 수치의 고저에 따른 매수세 강도 연산
-        futures_score = min(max(futures_contracts / 5000 * 50, 0), 50) if futures_contracts > 0 else 0
-        rsp_score = min(max(rsp_pct / 2.5 * 30, 0), 30) if rsp_pct > 0 else 0
-        oi_score = 20.0 if open_interest_checked else 0.0
-        total_score = futures_score + rsp_score + oi_score
+    with st.expander("🎯 14:50 실전 타격 통제실 (v27.4 개편 완료)", expanded=True):
+        st.markdown("장 마감 10분 전, 아래 4가지 조건을 HTS와 교차 검증하십시오.")
         
-        if total_score >= 85:
-            strength_label = "🔥 매우 강력 (적극 매수 집행 가능)"
-            strength_color = "#21c354"
-        elif total_score >= 60:
-            strength_label = "🟢 보통 (분할 매수 적합)"
-            strength_color = "#fcca46"
-        elif total_score >= 40:
-            strength_label = "🟡 약함 (매수 신중 / 관망 경계)"
-            strength_color = "#ff8c00"
-        else:
-            strength_label = "🔴 매수 불가 (관망 유지)"
-            strength_color = "#ff4b4b"
-            
-        st.markdown(
-            f"<div style='background:{strength_color}22; border-left: 5px solid {strength_color}; padding:12px; border-radius:6px; margin-top:10px; font-weight:bold;'>"
-            f"💪 현재 실시간 수급 매수세 강도: {strength_label} (계산 점수: {total_score:.1f}/100)"
-            f"</div>", unsafe_allow_html=True
-        )
-        st.info("위 수치는 오후 2시 50분 전후를 기준으로 기입하며, 매수세 강도가 '보통' 이상일 때 분할 매수를 집행합니다.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### ⚡ 실전 수급 & 가격 필터")
+            cond1 = st.checkbox("① [엔진] 외국인 선물 순매수가 +5,000계약 이상입니까?")
+            cond2 = st.checkbox("② [자금] 선물 미결제약정이 당일 증가(+빨간불)했습니까?")
+            cond4 = st.checkbox("④ [추세/가격] KOSPI가 5일선을 돌파(안착)했고, 프리미엄(보험료)이 6% 이내입니까?")
+        with c2:
+            st.markdown("#### 🛡️ 거시 방어 필터 (Veto)")
+            st.markdown("> *※ 거시 필터: 미장이 폭락만 안 했다면 국장 수급을 믿는다*")
+            cond3 = st.checkbox("③ [매크로 방어] 미국 RSP(동일가중)가 전일 -1.0% 이하로 폭락하지 않았습니까? (정상 범위인가?)", value=True)
+
+        st.divider()
+
+        # Position Sizing
+        st.subheader("💰 비중 통제 (Position Sizing)")
+        total_cash = st.number_input("현재 동원 가능한 대기 현금(원)을 입력하세요:", min_value=0, value=10000000, step=1000000, key="sniper_total_cash")
+        
+        if st.button("🚀 최종 타격 판정 (EXECUTE)", key="btn_execute_sniper"):
+            if cond1 and cond2 and cond3 and cond4:
+                target_amount = total_cash * 0.30
+                reserve_amount = total_cash * 0.70
+                
+                st.success("### 🟢 [강력 매수 GO] 모든 조건이 완벽히 충족되었습니다!")
+                st.info(f"**[행동 지침]**\n\n"
+                        f"1. **진입 금액:** {target_amount:,.0f}원 (총 예산의 30% 스나이퍼 타격)\n\n"
+                        f"2. **보존 금액:** {reserve_amount:,.0f}원 (70%는 오버나이트 블랙스완 및 지하실 방어용으로 절대 사수)\n\n"
+                        f"3. **타겟 종목:** 삼성전자 또는 KOSPI 추종 ETF 시장가 매수")
+            else:
+                st.error("### 🔴 [매수 보류 PASS] 조건이 100% 충족되지 않았습니다.")
+                
+                # 실패 원인 분석
+                st.markdown("**[불합격 사유 분석]**")
+                if not cond1: st.write("- ❌ 외국인 선물 엔진이 켜지지 않았습니다. (+5,000계약 미달)")
+                if not cond2: st.write("- ❌ 신규 자금(미결제약정) 유입이 확인되지 않았습니다.")
+                if not cond3: st.write("- ❌ 글로벌 매크로(미국 RSP)가 -1.0% 이하로 폭락하여 붕괴 위험이 있습니다.")
+                if not cond4: st.write("- ❌ KOSPI가 아직 5일선 아래에 있거나(폭포수), 진입 가격이 너무 비쌉니다. (보험료 > 6%)")
+                
+                st.warning("⚠️ 방아쇠에서 손을 떼고 HTS를 종료하십시오. 우리는 확률 70% 미만의 도박은 하지 않습니다.")
 
     # ──────────────────────────────────────────────────────────
     # [웹 Gemini 복사용 프롬프트 생성기]
