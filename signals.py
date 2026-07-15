@@ -584,9 +584,9 @@ def calculate_recovery_confirmation(rsp_hist, spy_hist, hyg_hist, ief_hist):
     return verdict, signals, recovery_score
 
 
-def calculate_kr_recovery_confirmation(kospi_hist, usdkrw_hist):
-    signals = []
-    recovery_score = 0
+def calculate_macro_risk_gauge(kospi_hist, usdkrw_hist):
+    details = []
+    macro_score = 0
 
     if not kospi_hist.empty and len(kospi_hist) >= 50:
         try:
@@ -596,15 +596,15 @@ def calculate_kr_recovery_confirmation(kospi_hist, usdkrw_hist):
             ma50 = float(close.rolling(50).mean().iloc[-1])
             
             if curr_k > ma20 and curr_k > ma50:
-                signals.append(("🟢", "한국장 추세 완전 회복 — KOSPI가 20일선 및 50일선을 동시 상회 중입니다."))
-                recovery_score += 50
+                details.append(("🟢", "KOSPI 추세 강함 — 20일선 및 50일선 상회 (+50점)"))
+                macro_score += 50
             elif curr_k > ma20:
-                signals.append(("🟡", "한국장 단기 회복 — KOSPI가 20일선을 회복했으나 아직 50일선 아래에 있습니다."))
-                recovery_score += 25
+                details.append(("🟡", "KOSPI 단기 회복 — 20일선 상회, 50일선 하회 (+25점)"))
+                macro_score += 25
             else:
-                signals.append(("🔴", "한국장 추세 미회복 — KOSPI가 주요 이동평균선(20일, 50일)을 하회하고 있습니다."))
+                details.append(("🔴", "KOSPI 추세 약함 — 20일선 하회 (+0점)"))
         except Exception:
-            signals.append(("⚪", "KOSPI 추세 데이터 산출 불가."))
+            details.append(("⚪", "KOSPI 데이터 산출 불가"))
 
     if not usdkrw_hist.empty and len(usdkrw_hist) >= 50:
         try:
@@ -613,21 +613,147 @@ def calculate_kr_recovery_confirmation(kospi_hist, usdkrw_hist):
             ma50_fx = float(usdkrw_hist['Close'].rolling(50).mean().iloc[-1])
             
             if curr_fx < ma20_fx and curr_fx < ma50_fx:
-                signals.append(("🟢", "환율(외인 수급) 안정 — 환율이 20일/50일선 아래에서 하향 안정화되어 외인 자금 유입 환경이 조성되었습니다."))
-                recovery_score += 50
+                details.append(("🟢", "환율 안정 — 20일선 및 50일선 하회 (+50점)"))
+                macro_score += 50
             elif curr_fx < ma20_fx:
-                signals.append(("🟡", "환율 단기 진정 — 환율이 20일선 아래로 내려와 급등세가 진정되었습니다."))
-                recovery_score += 25
+                details.append(("🟡", "환율 진정 중 — 20일선 하회, 50일선 상회 (+25점)"))
+                macro_score += 25
             else:
-                signals.append(("🔴", "환율 불안정 — 환율이 이동평균선 위에 있어 외인 이탈 압력이 여전합니다."))
+                details.append(("🔴", "환율 불안정 — 20일선 상회 (+0점)"))
         except Exception:
-            signals.append(("⚪", "환율 데이터 산출 불가."))
+            details.append(("⚪", "환율 데이터 산출 불가"))
 
-    if recovery_score >= 100: verdict = "🟢 반등 신뢰도 높음 — 추세 회복 + 환율 안정 동시 충족"
-    elif recovery_score >= 50: verdict = "🟡 반등 신뢰도 보통 — 조건 중 일부만 회복"
-    else: verdict = "🔴 반등 신뢰도 낮음 — 아직 회복 신호 부족"
+    if macro_score >= 80:
+        status = "🟢 매크로 안전 (안심 진입 구간)"
+    elif macro_score >= 50:
+        status = "🟡 매크로 조심 (확인 필요)"
+    else:
+        status = "🔴 매크로 위험 (보조 신호 필수)"
 
-    return verdict, signals, recovery_score
+    return macro_score, status, details
+
+
+def calculate_cashflow_signal(foreign_futures, oi_trend, rsp_change_pct, kospi_hist):
+    details = []
+    flow_score = 0
+
+    # 1. 외국인 선물 (30점 만점)
+    if foreign_futures >= 5000:
+        flow_score += 30
+        details.append(("🟢", f"외국인 선물 강력 매수 (+{foreign_futures:,.0f}계약) [+30점]"))
+    elif foreign_futures >= 3500:
+        flow_score += 20
+        details.append(("🟢", f"외국인 선물 뚜렷한 매수 (+{foreign_futures:,.0f}계약) [+20점]"))
+    elif foreign_futures >= 1500:
+        flow_score += 10
+        details.append(("🟡", f"외국인 선물 약한 매수 (+{foreign_futures:,.0f}계약) [+10점]"))
+    else:
+        details.append(("🔴", f"외국인 선물 수급 미달 ({foreign_futures:+,.0f}계약) [+0점]"))
+
+    # 2. KOSPI 5일선 안착 (25점 만점)
+    if not kospi_hist.empty and len(kospi_hist) >= 5:
+        try:
+            close = kospi_hist['Close']
+            curr_k = float(close.iloc[-1])
+            ma5 = float(close.rolling(5).mean().iloc[-1])
+            
+            if curr_k >= ma5:
+                flow_score += 25
+                details.append(("🟢", "KOSPI 5일선 안착 — 단기 모멘텀 회복 [+25점]"))
+            else:
+                details.append(("🔴", "KOSPI 5일선 하회 — 단기 모멘텀 부재 [+0점]"))
+        except Exception:
+            details.append(("⚪", "KOSPI 5일선 산출 불가"))
+    else:
+        details.append(("⚪", "KOSPI 데이터 부족"))
+
+    # 3. 글로벌 RSP 강도 (25점 만점)
+    if rsp_change_pct is not None:
+        if rsp_change_pct >= 0.0:
+            flow_score += 25
+            details.append(("🟢", f"글로벌(RSP) 상승 추세 ({rsp_change_pct:+.2f}%) — 글로벌 투자심리 호조 [+25점]"))
+        elif rsp_change_pct >= -0.5:
+            flow_score += 15
+            details.append(("🟡", f"글로벌(RSP) 약보합 방어 ({rsp_change_pct:+.2f}%) — 거시 방어 성공 [+15점]"))
+        else:
+            details.append(("🔴", f"글로벌(RSP) 하락 감지 ({rsp_change_pct:+.2f}%) — 글로벌 약세 동기화 우려 [+0점]"))
+    else:
+        details.append(("⚪", "RSP 데이터 산출 불가"))
+
+    # 4. 미결제약정 (20점 만점)
+    if oi_trend == "증가 추세":
+        flow_score += 20
+        details.append(("🟢", "미결제약정 증가 — 신규 자금 유입 확인 [+20점]"))
+    else:
+        details.append(("🔴", "미결제약정 감소/정체 — 신규 자금 유입 부족 [+0점]"))
+
+    if flow_score >= 80:
+        status = "🟢 자금흐름 강함 (선발대 투입 신호)"
+    elif flow_score >= 50:
+        status = "🟡 자금흐름 보통 (수급 턴어라운드 시도)"
+    else:
+        status = "🔴 자금흐름 약함 (관망)"
+
+    return flow_score, status, details
+
+
+def calculate_regime_classification(macro_score, flow_score, warning_days_override=None):
+    import os, json, datetime
+    tracker_file = "regime_state.json"
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    
+    state = {"last_date": "", "warning_days": 0}
+    if os.path.exists(tracker_file):
+        try:
+            with open(tracker_file, "r") as f:
+                state = json.load(f)
+        except Exception:
+            pass
+            
+    is_warning = (flow_score >= 50 and macro_score < 50)
+    warning_days = state.get("warning_days", 0)
+    last_date = state.get("last_date")
+    
+    if is_warning:
+        if last_date != today_str:
+            warning_days += 1
+            state["warning_days"] = warning_days
+            state["last_date"] = today_str
+            with open(tracker_file, "w") as f:
+                json.dump(state, f)
+    else:
+        if warning_days != 0 or last_date != today_str:
+            state["warning_days"] = 0
+            state["last_date"] = today_str
+            with open(tracker_file, "w") as f:
+                json.dump(state, f)
+        warning_days = 0
+        
+    warning_days = warning_days_override if warning_days_override is not None else max(1, min(5, warning_days)) if is_warning else 0
+    
+    if macro_score >= 80 and flow_score >= 80:
+        regime = "🟢 강력 GO (정배열)"
+        action = "완벽한 추세장. 스나이퍼 예산 즉시 본대 투입 (풀배팅 가능)."
+        color = "#21c354"
+    elif macro_score >= 50 and flow_score >= 50:
+        regime = "🟡 조건부 GO (추세 전환)"
+        action = "20일선 탈환 완료. 본대 자금 분할 진입 시작."
+        color = "#fcca46"
+    elif flow_score >= 50 and macro_score < 50:
+        if warning_days >= 5:
+            regime = "✅ 경고 국면 확정 (5거래일 지지 성공)"
+            action = "매크로 회복(20일선) 임박. 5일선 지지 확인 완료. '선발대(10~15%)' 진입 검토."
+            color = "#ff9900"
+        else:
+            regime = f"⚠️ 경고 국면 (바닥 탈출 시도 - {warning_days}/5일 관찰 중)"
+            action = f"수급이 포착되었습니다. 내일도 5일선 지지 시 관찰 지속 (남은 기간: {5-warning_days}거래일)."
+            color = "#ff9900"
+    else:
+        regime = "🔴 PASS (매수 보류)"
+        action = "매크로 위험 및 자금흐름 약세 지속. 칼날 잡기 금지. 현금 사수."
+        color = "#ff4b4b"
+        
+    return regime, action, color
 
 
 # ═════════════════════════════════════════
@@ -1372,8 +1498,8 @@ def get_ai_signal(d):
 
     if rsi_f >= 75 and ma20_gap > 15: return "🔵 과매수 (익절/관망)"
     if 60 <= rsi_f < 75 and cp_f > ma20_f and "상승" in macd and vol_f > 120: return "🚀 추세 탑승 (불타기)"
-    if 45 <= rsi_f < 60 and cp_f >= ma20_f: return "🟢 얕은 눌림목 (분할매수)"
-    if rsi_f < 45:
+    if 40 <= rsi_f < 60 and cp_f >= ma20_f * 0.95: return "🟢 상승장 눌림목 (GTC 대기)"
+    if rsi_f < 40:
         # 떨어지는 칼날 방어
         if change_f <= -3.0 or ma5_gap <= -4.0:
             return "⚠️ 떨어지는 칼날 (매수 대기)"
@@ -1387,11 +1513,22 @@ def calculate_smart_target(d, ai_sig):
     ma20     = d.get('MA20', cp)
     bb_upper = d.get('BB_upper', cp)
     bb_lower = d.get('BB_lower', cp)
-    if "추세 탑승"  in ai_sig: return max(ma5, cp * 0.98), "5일선 지지"
-    elif "눌림목"   in ai_sig: return ma20,     "20일선 스윙"
-    elif "바닥 줍줍" in ai_sig: return bb_lower, "볼린저 하단"
-    elif "과매수"   in ai_sig: return bb_upper,  "볼린저 상단"
-    else: return "-", "홀딩(Wait)"
+    
+    if cp is None or ma20 is None or bb_lower is None: return "-", "데이터 부족"
+    
+    if "추세 탑승"  in ai_sig: 
+        return max(ma5, cp * 0.98), "5일선 지지"
+    elif "눌림목"   in ai_sig: 
+        if cp > ma20:
+            return ma20, "20일선 부근 GTC"
+        else:
+            return bb_lower, "20선 하회 (볼린저하단 GTC)"
+    elif "바닥 줍줍" in ai_sig: 
+        return bb_lower, "볼린저 하단 GTC"
+    elif "과매수"   in ai_sig: 
+        return bb_upper,  "볼린저 상단"
+    else: 
+        return "-", "홀딩(Wait)"
 
 
 def get_tenbagger_signal(d):
