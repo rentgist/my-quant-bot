@@ -156,6 +156,12 @@ if not rsp_10y.empty:
     if len(rsp_close) >= 2:
         rsp_change_pct = ((rsp_close.iloc[-1] - rsp_close.iloc[-2]) / rsp_close.iloc[-2]) * 100.0
 
+# 🆕 장단기 금리차 & 반도체 업황 데이터 추출
+tnx_10y   = macro_charts.get("tnx_10y", pd.DataFrame())
+irx_10y   = macro_charts.get("irx_10y", pd.DataFrame())
+mu_2y     = macro_charts.get("mu_2y", pd.DataFrame())
+soxx_2y   = macro_charts.get("soxx_2y", pd.DataFrame())
+
 us_score, us_verdict, us_details, us_phase = calculate_us_bottom_finder(spy_10y, vix_10y, cnn_score)
 kr_score, kr_verdict, kr_details, kr_phase = calculate_kr_bottom_finder(kospi_10y, vkospi_10y, usd_krw)
 kr_macro_score, kr_macro_status, kr_macro_details = calculate_macro_risk_gauge(kospi_10y, usd_krw)
@@ -163,7 +169,10 @@ kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_rada
 
 # 미국 리스크 레이더 및 반등 신뢰도 글로벌 사전 계산 (1번 탭의 복사용 프롬프트 등에서 호출하기 위함)
 us_rec_verdict, us_rec_signals, us_rec_score = calculate_recovery_confirmation(rsp_10y, spy_10y, hyg_10y, ief_10y)
-us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_radar(vix_10y, vix3m_10y, hyg_10y, ief_10y, spy_10y)
+us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_radar(
+    vix_10y, vix3m_10y, hyg_10y, ief_10y, spy_10y,
+    tnx_hist=tnx_10y, irx_hist=irx_10y, mu_hist=mu_2y, soxx_hist=soxx_2y  # 🆕 장단기 금리차 & 반도체 업황
+)
 
 # 탭 구성
 tab_sniper, tab_radar, tab_report, tab_port, tab_calendar = st.tabs(["🚦 ORION Signal", "🔍 종목 발굴 & 타이밍", "📊 마스터 리포트", "💼 포트폴리오", "📅 마켓 캘린더"])
@@ -762,7 +771,10 @@ with tab_report:
 
     # ── 레이어 1: 위험 탐지기 (미국 마스터 / 한국 보조) ──
     st.markdown("##### 🚨 글로벌 매크로 & 로컬 수급 위험 탐지기")
-    us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_radar(vix_10y, vix3m_10y, hyg_10y, ief_10y, spy_10y)
+    us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_radar(
+        vix_10y, vix3m_10y, hyg_10y, ief_10y, spy_10y,
+        tnx_hist=tnx_10y, irx_hist=irx_10y, mu_hist=mu_2y, soxx_hist=soxx_2y
+    )
 #     kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_radar(vkospi_10y, usd_krw, kospi_10y)
 
     st.markdown(f"<div style='background:{us_risk_color}22; border-left: 6px solid {us_risk_color}; padding:15px; border-radius:8px; font-weight:bold; font-size:1.1em; margin-bottom:10px;'>🇺🇸 [글로벌 마스터] {us_risk_grade}</div>", unsafe_allow_html=True)

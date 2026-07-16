@@ -205,7 +205,10 @@ def get_macro_charts():
         "rsp_10y": "RSP",
         "vkospi_10y": "^VKOSPI",
         "tnx_10y": "^TNX",
-        "wti_10y": "CL=F"
+        "wti_10y": "CL=F",
+        "irx_10y": "^IRX",     # 🆕 미국 단기금리(3개월물) — 장단기 스프레드 계산용
+        "mu_2y": "MU",         # 🆕 마이크론(DRAM 업황 프록시) — 반도체 선행 지표
+        "soxx_2y": "SOXX",     # 🆕 반도체 ETF (SOX 지수) — MU 상대 강도 비교 기준
     }
     def fetch_macro(k, v):
         try:

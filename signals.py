@@ -127,7 +127,7 @@ def analyze_market_structure(close):
 # ═════════════════════════════════════════
 # 🇺🇸 레이어 1: 미국 전용 위험 탐지기 (v23.0: 스텔스 약세장 레이어 추가)
 # ═════════════════════════════════════════
-def calculate_us_risk_radar(vix_hist, vix3m_hist, hyg_hist, ief_hist, spy_hist):
+def calculate_us_risk_radar(vix_hist, vix3m_hist, hyg_hist, ief_hist, spy_hist, tnx_hist=None, irx_hist=None, mu_hist=None, soxx_hist=None):
     alerts = []
     danger_count = 0
 
@@ -226,6 +226,44 @@ def calculate_us_risk_radar(vix_hist, vix3m_hist, hyg_hist, ief_hist, spy_hist):
             alerts.append(("🟡", f"고변동 횡보(Whipsaw) 국면 — 실현변동성 {struct['realized_vol']:.0f}%인데 "
                                  f"20일 순변화는 미미. 추세 매매 실패 확률 높음 → 현금 비중 유지 유리."))
             danger_count += 1
+
+    # ── ⑥ 🆕 장단기 금리 역전 (수익률 곡선 역전 = 경기침체 선행 신호) ──
+    if tnx_hist is not None and irx_hist is not None and not tnx_hist.empty and not irx_hist.empty:
+        try:
+            tnx_val = float(tnx_hist['Close'].dropna().iloc[-1])  # 10년물 (%)
+            irx_val = float(irx_hist['Close'].dropna().iloc[-1]) / 10.0  # ^IRX는 할인율 단위 → % 환산
+            spread = tnx_val - irx_val  # 장단기 스프레드 (양수=정상, 음수=역전)
+
+            if spread <= -0.5:
+                alerts.append(("🚨", f"장단기 금리 완전 역전 (10Y-3M: {spread:+.2f}%p) — 경기침체 강력 선행 신호. 성장주 밸류에이션 직격."))
+                danger_count += 2
+            elif spread <= 0:
+                alerts.append(("🔴", f"장단기 금리 역전 발생 (10Y-3M: {spread:+.2f}%p) — 경기침체 경보 발령. 성장주 할인율 상승 위험."))
+                danger_count += 1
+            elif spread <= 0.5:
+                alerts.append(("🟡", f"장단기 금리차 축소 (10Y-3M: {spread:+.2f}%p) — 역전 경계선 접근 중. 주시 필요."))
+            else:
+                alerts.append(("🟢", f"장단기 금리차 정상 (10Y-3M: {spread:+.2f}%p) — 수익률 곡선 건강."))
+        except Exception:
+            alerts.append(("⚪", "장단기 금리차 산출 불가."))
+    
+    # ── ⑦ 🆕 반도체 업황 건강도 (MU vs SOXX 상대 강도 = DRAM 업황 프록시) ──
+    if mu_hist is not None and soxx_hist is not None and not mu_hist.empty and not soxx_hist.empty:
+        try:
+            # 최근 20거래일 수익률 비교
+            mu_20d   = (float(mu_hist['Close'].dropna().iloc[-1]) / float(mu_hist['Close'].dropna().iloc[-21]) - 1) * 100
+            soxx_20d = (float(soxx_hist['Close'].dropna().iloc[-1]) / float(soxx_hist['Close'].dropna().iloc[-21]) - 1) * 100
+            rel_strength = mu_20d - soxx_20d  # 양수 = MU 강세 = DRAM 업황 호조
+
+            if rel_strength >= 5:
+                alerts.append(("🟢", f"반도체 업황 강세 — MU(마이크론) 20일 수익률이 SOX 대비 {rel_strength:+.1f}%p 초과 (DRAM 수요 회복 시그널)."))
+            elif rel_strength <= -5:
+                alerts.append(("🔴", f"반도체 업황 약세 — MU 20일 수익률이 SOX 대비 {rel_strength:+.1f}%p 부진 (DRAM 공급 과잉 경고). 반도체 비중 축소 검토."))
+                danger_count += 1
+            else:
+                alerts.append(("🟡", f"반도체 업황 중립 — MU vs SOX 상대 강도 {rel_strength:+.1f}%p (방향성 탐색 중)."))
+        except Exception:
+            alerts.append(("⚪", "반도체 업황 지표 산출 불가."))
 
     # 감지 항목이 늘어난 만큼 등급 컷도 상향 (과잉 경보 방지)
     if danger_count >= 7:
