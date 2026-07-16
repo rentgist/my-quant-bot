@@ -164,8 +164,14 @@ soxx_2y   = macro_charts.get("soxx_2y", pd.DataFrame())
 
 us_score, us_verdict, us_details, us_phase = calculate_us_bottom_finder(spy_10y, vix_10y, cnn_score)
 kr_score, kr_verdict, kr_details, kr_phase = calculate_kr_bottom_finder(kospi_10y, vkospi_10y, usd_krw)
-kr_macro_score, kr_macro_status, kr_macro_details = calculate_macro_risk_gauge(kospi_10y, usd_krw)
+
+# 한국 매크로 리스크 레이더 (최신 V23 로직)
 kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_radar(vkospi_10y, usd_krw, kospi_10y)
+
+# 구 버전 통합 국면 판별기(Regime Classifier) 하위 호환을 위한 매핑
+kr_macro_score = max(0, 100 - (kr_danger * 20))
+kr_macro_status = kr_risk_grade
+kr_macro_details = kr_risk_alerts
 
 # 미국 리스크 레이더 및 반등 신뢰도 글로벌 사전 계산 (1번 탭의 복사용 프롬프트 등에서 호출하기 위함)
 us_rec_verdict, us_rec_signals, us_rec_score = calculate_recovery_confirmation(rsp_10y, spy_10y, hyg_10y, ief_10y)
@@ -173,6 +179,23 @@ us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_rada
     vix_10y, vix3m_10y, hyg_10y, ief_10y, spy_10y,
     tnx_hist=tnx_10y, irx_hist=irx_10y, mu_hist=mu_2y, soxx_hist=soxx_2y  # 🆕 장단기 금리차 & 반도체 업황
 )
+
+# AI 프롬프트용 글로벌 매크로 지표 사전 계산
+ai_yield_spread = "N/A"
+if not tnx_10y.empty and not irx_10y.empty:
+    try:
+        ai_yield_spread = f"{(float(tnx_10y['Close'].iloc[-1]) - float(irx_10y['Close'].iloc[-1])):+.2f}%p"
+    except: pass
+
+ai_mu_vs_soxx = "N/A"
+if not mu_2y.empty and not soxx_2y.empty:
+    try:
+        mu_20d = (float(mu_2y['Close'].iloc[-1]) / float(mu_2y['Close'].iloc[-21]) - 1) * 100
+        soxx_20d = (float(soxx_2y['Close'].iloc[-1]) / float(soxx_2y['Close'].iloc[-21]) - 1) * 100
+        ai_mu_vs_soxx = f"{mu_20d - soxx_20d:+.1f}%p"
+    except: pass
+
+ai_vkospi_val = f"{float(vkospi_10y['Close'].iloc[-1]):.2f}" if not vkospi_10y.empty else "N/A"
 
 # 탭 구성
 tab_sniper, tab_radar, tab_report, tab_port, tab_calendar = st.tabs(["🚦 ORION Signal", "🔍 종목 발굴 & 타이밍", "📊 마스터 리포트", "💼 포트폴리오", "📅 마켓 캘린더"])
@@ -466,7 +489,6 @@ with tab_sniper:
     kospi_5d_str = f"{kospi_5d_sma:,.2f}" if 'kospi_5d_sma' in locals() and kospi_5d_sma else "N/A"
     kospi_status_str = ("안착 완료" if is_above else f"미안착 (이격: {gap:+,.2f}p)") if 'is_above' in locals() and 'gap' in locals() else "N/A"
     
-    
     rsp_val_str = f"{rsp_change_pct:+.2f}%" if rsp_change_pct is not None else "N/A"
 
     # 프롬프트 조립
@@ -483,17 +505,19 @@ with tab_sniper:
 - 자금흐름 점수: 한국 {kr_flow_score}점
 - 통합 국면: {regime}
 
-[시장 거시 지표 및 수급]
-- TNX 10Y 금리: {summary_dict.get('TNX_10Y', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- WTI 크루드 유가: {summary_dict.get('WTI_Crude', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- USD/KRW 환율: {summary_dict.get('USD_KRW', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 외국인 순매수: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 기관 순매수: {summary_dict.get('Institutional', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 개인 순매수: {summary_dict.get('Retail', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- KOSPI 현재가: {kospi_str}
-- KOSPI 5일 이평선: {kospi_5d_str}
-- KOSPI 5일선 안착 상태: {kospi_status_str}
-- 미국 RSP 전일 등락률: {rsp_val_str}
+[시장 거시 지표 및 수급 (글로벌 펀더멘털 & 로컬 수급)]
+- 🇺🇸 미국 장단기 금리차 (10Y-3M): {ai_yield_spread} (경기침체/유동성 선행지표)
+- 🇺🇸 미국 반도체 업황 강도 (MU vs SOXX 20일 수익률 격차): {ai_mu_vs_soxx} (DRAM 사이클 프록시)
+- 🇺🇸 미국 TNX 10Y 금리: {summary_dict.get('TNX_10Y', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🇺🇸 WTI 크루드 유가: {summary_dict.get('WTI_Crude', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🇺🇸 미국 동일가중 S&P500 (RSP) 전일 등락률: {rsp_val_str} (미국 시장 온기 확인용)
+- 🇰🇷 USD/KRW 환율: {summary_dict.get('USD_KRW', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🇰🇷 한국 VKOSPI 현재: {ai_vkospi_val} (한국 기관/외인 파생 하락 헷지 팽창도)
+- 🇰🇷 외국인 KOSPI 현물 순매수: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🇰🇷 기관 KOSPI 현물 순매수: {summary_dict.get('Institutional', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🇰🇷 외국인 KOSPI 선물 순매수: {foreign_futures}계약 (방향성 선행지표)
+- 🇰🇷 KOSPI 현재가: {kospi_str}
+- 🇰🇷 KOSPI 5일 이평선 안착 상태: {kospi_status_str}
 
 [최근 글로벌 속보 요약 (중요도 2 이상)]
 {web_news_text}
@@ -1219,6 +1243,9 @@ with tab_report:  # 🤖 AI 참모 리포트
         f"[11원칙 퀀트 분석 리포트 v23.0] ({now})",
         f"- CNN F&G (시장 심리): {cnn_score} ({cnn_rating})",
         f"- SPY RSI(14) (시장 과열도): {fmt(spy_rsi_val, dig=1)}",
+        f"- 미국 장단기 금리차(10Y-3M): {ai_yield_spread}",
+        f"- 미국 반도체 업황 강도(MU vs SOX): {ai_mu_vs_soxx}",
+        f"- 한국 VKOSPI (파생 헷지): {ai_vkospi_val}",
         "",
         "【시장 국면 & 시스템 전략 제언】",
         f"- 🇺🇸 미국: {us_phase} | 위험 탐지 {us_danger}점 | 진바닥 확률 {us_score}% | 반등 신뢰도 {us_rec_score}/100",
