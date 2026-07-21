@@ -75,6 +75,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# session_state 초기화 및 동기화 콜백
+if 'foreign_futures' not in st.session_state:
+    st.session_state['foreign_futures'] = 0
+
+def sync_futures_sniper():
+    st.session_state['foreign_futures'] = st.session_state['sniper_futures']
+
+def sync_futures_hedging():
+    st.session_state['foreign_futures'] = st.session_state['hedging_futures']
+
+# 위젯 초기 세팅값 정렬
+if 'sniper_futures' not in st.session_state:
+    st.session_state['sniper_futures'] = st.session_state['foreign_futures']
+else:
+    st.session_state['sniper_futures'] = st.session_state['foreign_futures']
+
+if 'hedging_futures' not in st.session_state:
+    st.session_state['hedging_futures'] = st.session_state['foreign_futures']
+else:
+    st.session_state['hedging_futures'] = st.session_state['foreign_futures']
+
 # ─────────────────────────────────────────
 # 포맷 및 색상 맵핑
 # ─────────────────────────────────────────
@@ -431,7 +452,7 @@ with tab_sniper:
         # 수동 입력 폼
         f_col1, f_col2 = st.columns(2)
         with f_col1:
-            foreign_futures = st.number_input("① 외국인 선물 순매수 (계약)", value=0, step=100)
+            foreign_futures = st.number_input("① 외국인 선물 순매수 (계약)", step=100, key="sniper_futures", on_change=sync_futures_sniper)
         with f_col2:
             oi_trend = st.radio("② 선물 미결제약정", ["증가 추세", "감소/정체"], index=1)
             
@@ -1815,6 +1836,17 @@ with tab_calendar:
 with tab_hedging:
     st.subheader("🛡️ 한국 시장 단기/스윙 헷징 통제실 (Hedge Fund Style)")
     st.caption("한국 시장의 높은 변동성과 수급 쏠림 현상을 역이용하여 리스크를 상쇄(Hedging)하는 통제실입니다.")
+
+    # 외국인 선물 입력창 (헷징 탭 전용 동기화 위젯)
+    st.session_state['hedging_futures'] = st.session_state['foreign_futures']
+    foreign_futures_hedging = st.number_input(
+        "⚡ 실시간 외국인 선물 순매수 계약 (여기에 바로 입력하셔도 1번 탭과 자동 동기화됩니다)",
+        step=100,
+        key="hedging_futures",
+        on_change=sync_futures_hedging
+    )
+    # 로컬 변수로 바인딩하여 아래 연산에 반영
+    foreign_futures = st.session_state['foreign_futures']
 
     # ── 데이터 로드 및 사전 연산 ──
     kospi200_df = macro_charts.get("kospi200_10y", pd.DataFrame())
