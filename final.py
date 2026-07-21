@@ -365,7 +365,7 @@ if not mu_2y.empty and not soxx_2y.empty:
 ai_vkospi_val = f"{float(vkospi_10y['Close'].iloc[-1]):.2f}" if not vkospi_10y.empty else "N/A"
 
 # 탭 구성
-tab_sniper, tab_radar, tab_report, tab_port, tab_hedging, tab_calendar = st.tabs(["🚦 ORION Signal", "🔍 종목 발굴 & 타이밍", "📊 마스터 리포트", "💼 포트폴리오", "🛡️ 헷징 통제실", "📅 마켓 캘린더"])
+tab_sniper, tab_radar, tab_report, tab_hedging, tab_port, tab_calendar = st.tabs(["🚦 ORION Signal", "🔍 종목 발굴 & 타이밍", "📊 마스터 리포트", "🛡️ 헷징 통제실", "💼 포트폴리오", "📅 마켓 캘린더"])
 
 with tab_sniper:
     st.subheader("🛰 ORION Signal")
