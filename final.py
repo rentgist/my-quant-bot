@@ -534,6 +534,111 @@ with tab_sniper:
 """
     st.code(web_prompt, language="markdown")
 
+    # ──────────────────────────────────────────────────────────
+    # [🧵 쓰레드(Threads) 글감 생성기 — ORION 트레이더용]
+    # ──────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 🧵 쓰레드(Threads) 글감 생성기 — ORION 트레이더용")
+    st.caption("아래 3개의 프롬프트를 AI(Claude, Gemini 등)에 붙여넣으면 오늘 쓰레드에 올릴 글감이 완성됩니다. 각 박스 우측 상단 복사 버튼을 사용하세요.")
+
+    # ── 공통 데이터 준비 ──
+    # 중요도 4 이상 뉴스만 필터 (최대 10개)
+    top_news_lines = []
+    if news_data:
+        top_news = [n for n in news_data if n.get("importance", 0) >= 4][:10]
+        for n in top_news:
+            t  = n.get("title_ko", n.get("title", ""))
+            s  = n.get("sentiment", "중립")
+            a  = n.get("action_point", "")
+            top_news_lines.append(f"- [{s}] {t}\n  → 대응: {a}")
+    top_news_text = "\n".join(top_news_lines) if top_news_lines else "주요 뉴스 없음"
+
+    # 이번 주 이벤트 (캘린더)
+    upcoming_events_str = calendar_manager.get_upcoming_events_string()
+
+    # 지표 요약 (쓰레드용 간결 버전)
+    thread_indicators = f"""- ORION 신호: {adv_head}
+- 🇺🇸 미국: {us_phase} | 위험도 {us_danger}점 | 금리차(10Y-3M) {ai_yield_spread}
+- 🇰🇷 한국: {kr_phase} | 위험도 {kr_danger}점 | VKOSPI {ai_vkospi_val}
+- 🇰🇷 KOSPI: {kospi_str} | 5일선 안착: {kospi_status_str}
+- 🇰🇷 외국인 현물: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'} | 환율: {summary_dict.get('USD_KRW', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🇺🇸 반도체 업황(MU vs SOX): {ai_mu_vs_soxx} | RSP 등락: {rsp_val_str}"""
+
+    # ── 글감 ① 뉴스 기반 ──
+    with st.expander("📰 글감 ① — 오늘의 핵심 뉴스 1편 (복사해서 AI에 붙여넣기)", expanded=False):
+        thread_prompt_news = f"""너는 'ORION 트레이더'라는 쓰레드(Threads) SNS 계정을 운영하는 개인 투자자야.
+아래 오늘의 주요 뉴스들을 분석해서, 쓰레드에 올릴 글을 써줘.
+
+[작성 규칙 — 반드시 지켜줘]
+- 전체 구성: 메인 포스트 1개 + 댓글 4~5개로 나눠서 작성
+- 문장은 짧게 (한 문장 최대 2줄), 줄바꿈 자주 사용 (모바일 가독성)
+- 전문 용어는 괄호로 쉽게 풀어서 설명
+- 설교하지 말고, '같이 생각하는 투자자' 느낌으로
+- 숫자와 사실로 근거 제시, 결론은 명확하게
+- 마지막 댓글은 반드시 "내일/이번 주 주목할 것:" 으로 마무리
+
+[오늘의 주요 뉴스 (중요도 4 이상)]
+{top_news_text}
+
+[오늘 ORION 시스템 판정]
+{thread_indicators}
+
+위 뉴스 중 가장 임팩트가 큰 1~2개 뉴스를 골라서,
+그것이 주식 시장에 구체적으로 어떤 영향을 미치는지 투자자 관점으로 풀어써줘.
+"""
+        st.code(thread_prompt_news, language="markdown")
+
+    # ── 글감 ② 지표/장세 기반 ──
+    with st.expander("📊 글감 ② — 오늘 장세와 지표 분석 1편 (복사해서 AI에 붙여넣기)", expanded=False):
+        thread_prompt_market = f"""너는 'ORION 트레이더'라는 쓰레드(Threads) SNS 계정을 운영하는 개인 투자자야.
+오늘 시장 지표와 수급 데이터를 분석해서 쓰레드에 올릴 글을 써줘.
+
+[작성 규칙 — 반드시 지켜줘]
+- 전체 구성: 메인 포스트 1개 + 댓글 4~5개로 나눠서 작성
+- 문장은 짧게 (한 문장 최대 2줄), 줄바꿈 자주 사용 (모바일 가독성)
+- 데이터를 그냥 나열하지 말고, "이게 왜 중요한지" 의미 해석에 집중
+- 외국인/기관 수급, VKOSPI, 금리차 등의 숫자가 투자자에게 말하는 것을 쉽게 설명
+- 겁주거나 흥분하지 말고, 냉정하고 논리적인 톤 유지
+- 마지막 댓글은 "ORION 시스템 현재 신호:" 로 마무리
+
+[오늘 ORION 시스템 지표 데이터]
+{thread_indicators}
+
+[바닥/반등 분석]
+- 한국 바닥 확률: {kr_score}% | 미국 바닥 확률: {us_score}%
+- 통합 국면: {regime}
+- 반등 신뢰도 (미국): {us_rec_score}/100점
+
+위 데이터를 바탕으로, 오늘 시장에서 가장 주목해야 할 지표 1~2개를 골라
+그것이 의미하는 바를 투자자 입장에서 실용적으로 풀어써줘.
+"""
+        st.code(thread_prompt_market, language="markdown")
+
+    # ── 글감 ③ 실적/이벤트 기반 ──
+    with st.expander("📅 글감 ③ — 이번 주 실적/이벤트 주목 포인트 1편 (복사해서 AI에 붙여넣기)", expanded=False):
+        thread_prompt_events = f"""너는 'ORION 트레이더'라는 쓰레드(Threads) SNS 계정을 운영하는 개인 투자자야.
+이번 주/다음 주 예정된 주요 실적 발표와 매크로 이벤트를 기반으로 쓰레드 글을 써줘.
+
+[작성 규칙 — 반드시 지켜줘]
+- 전체 구성: 메인 포스트 1개 + 댓글 4~5개로 나눠서 작성
+- 문장은 짧게, 줄바꿈 자주 (모바일 최적화)
+- 각 이벤트가 "왜 중요한지", "어떤 종목/섹터에 영향 주는지" 구체적으로 설명
+- 실적 서프라이즈/실망 시 시나리오를 각각 제시 (투자 준비 도움)
+- 독자가 "아, 이날 이거 체크해야겠다" 느끼게 만들어줘
+- 마지막 댓글은 "이번 주 ORION 트레이더의 관전 포인트:" 로 마무리
+
+[이번 주~다음 주 주요 일정]
+{upcoming_events_str}
+
+[현재 시장 맥락]
+{thread_indicators}
+
+위 일정들 중 투자 측면에서 가장 중요한 2~3개 이벤트를 골라서,
+각 이벤트의 핵심 관전 포인트와 시나리오별 대응 전략을 쓰레드 형식으로 써줘.
+AI 투자, 빅테크 실적, 반도체 수출 같은 핵심 테마와 연결해서 설명하면 더 좋아.
+"""
+        st.code(thread_prompt_events, language="markdown")
+
 
 with tab_radar:
     st.subheader("🔍 타점 선택 (Entry Point Selection) - 포트폴리오 종목 타점")
