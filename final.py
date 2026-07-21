@@ -1816,15 +1816,17 @@ with tab_hedging:
     st.subheader("🛡️ 한국 시장 단기/스윙 헷징 통제실 (Hedge Fund Style)")
     st.caption("한국 시장의 높은 변동성과 수급 쏠림 현상을 역이용하여 리스크를 상쇄(Hedging)하는 통제실입니다.")
 
-    # 1. 지수 간 스프레드 트레이딩 (Index Spread Trading)
-    st.markdown("### 1. 📊 코스피200 vs 코스닥 스프레드 레이더")
-    st.caption("KOSPI 200(대형주)과 KOSDAQ(중소형/기술주) 지수 간 상대적 가격 격차가 평균으로 복귀하는 성질을 이용합니다.")
-    
+    # ── 데이터 로드 및 사전 연산 ──
     kospi200_df = macro_charts.get("kospi200_10y", pd.DataFrame())
     kosdaq_df = macro_charts.get("kosdaq_10y", pd.DataFrame())
     
+    # 기본 인덱스 및 Z-Score 연산
+    has_spread_data = False
+    curr_ratio = 1.0
+    curr_z = 0.0
+    combined = pd.DataFrame()
+    
     if not kospi200_df.empty and not kosdaq_df.empty:
-        # Align indexes
         combined = pd.DataFrame({
             "KOSPI200": kospi200_df["Close"],
             "KOSDAQ": kosdaq_df["Close"]
@@ -1838,43 +1840,141 @@ with tab_hedging:
             
             curr_ratio = combined["Ratio"].iloc[-1]
             curr_z = combined["Z_Score"].iloc[-1]
-            
-            # Signal Determination
-            if curr_z >= 2.0:
-                spread_verdict = "🔴 KOSPI 200 극단 고평가 / KOSDAQ 과매도"
-                spread_action = "👉 코스닥 매수(Long) + 코스피200 인버스(Short) 스프레드 매매 진입 추천"
-                spread_color = "#dc3545"
-            elif curr_z <= -2.0:
-                spread_verdict = "🟢 KOSDAQ 극단 고평가 / KOSPI 200 과매도"
-                spread_action = "👉 코스피200 매수(Long) + 코스닥 인버스(Short) 스프레드 매매 진입 추천"
-                spread_color = "#28a745"
-            else:
-                spread_verdict = "⚪ 정상 변동 범위 내 (평균 회귀 대기)"
-                spread_action = "👉 신규 진입 대기 (스프레드 비율 정상 상태)"
-                spread_color = "#6c757d"
-                
-            st.markdown(f"""
-            <div style='background-color:#f8f9fa; padding:15px; border-radius:8px; border-left: 6px solid {spread_color}; margin-bottom:15px;'>
-                <h5 style='margin-top:0; color:#333;'>현재 스프레드 상태: <span style='color:{spread_color}; font-weight:bold;'>{spread_verdict}</span></h5>
-                <p style='font-size:0.95em; color:#555; margin-bottom:5px;'>
-                <b>현재 KOSPI200/KOSDAQ 비율</b>: {curr_ratio:.4f} | <b>Z-Score</b>: {curr_z:+.2f} (임계치: ±2.0)<br>
-                {spread_action}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Simple line chart of Z-score (last 60 days)
-            z_df = pd.DataFrame({"Z-Score (KOSPI200/KOSDAQ 비율)": combined["Z_Score"].tail(60)})
-            st.line_chart(z_df)
+            has_spread_data = True
+
+    # 🚨 인버스 매수 추천 스코어링 (더욱 보수적으로 조건 강화)
+    inv_score = 0
+    inv_details = []
+    
+    # 1. 외인 선물 수급 상태 (선물 대량 매도가 확정되어야 가점)
+    f_fut = locals().get('foreign_futures', 0)
+    if f_fut <= -5000:
+        inv_score += 30
+        inv_details.append("외국인 선물 5천계약 이상 초대량 순매도 (하방 압력 극대화) (+30점)")
+    elif f_fut <= -2000:
+        inv_score += 15
+        inv_details.append("외국인 선물 2천계약 이상 순매도 중 (+15점)")
     else:
-        st.info("지수 데이터를 로드할 수 없습니다. (KOSPI 200 또는 KOSDAQ 데이터 로딩 실패)")
+        inv_details.append("외국인 선물 매도 압력 낮음 (0점)")
+        
+    # 2. VKOSPI 변동성 폭발 상태 (진짜 패닉 수준일 때만 가점)
+    if 'vkospi_10y' in locals() and not vkospi_10y.empty:
+        curr_vk = float(vkospi_10y['Close'].iloc[-1])
+        if curr_vk >= 38.0:
+            inv_score += 30
+            inv_details.append(f"VKOSPI {curr_vk:.1f}로 심각한 패닉 변동성 구간 진입 (+30점)")
+        elif curr_vk >= 25.0:
+            inv_score += 15
+            inv_details.append(f"VKOSPI {curr_vk:.1f}로 시장 변동성 확대 (+15점)")
+        else:
+            inv_details.append(f"VKOSPI {curr_vk:.1f}로 안정적 상태 (0점)")
+            
+    # 3. KOSPI 5일선 아래 위치 여부 (하락 모멘텀 확정)
+    k_val = locals().get('current_kospi_val', 0)
+    k_5ma = locals().get('kospi_5d_sma', 0)
+    if isinstance(k_val, (int, float)) and isinstance(k_5ma, (int, float)) and k_val < k_5ma:
+        inv_score += 20
+        inv_details.append("KOSPI 지수 5일 이평선 하회 (단기 추세 하방 압력 작동) (+20점)")
+    else:
+        inv_details.append("KOSPI 지수 5일 이평선 안착 유지 (0점)")
+        
+    # 4. 원/달러 환율 상태 (극단적 고환율 지속 시 가점)
+    if 'usd_krw' in locals() and not usd_krw.empty:
+        curr_ex = float(usd_krw['Close'].iloc[-1])
+        if curr_ex >= 1450.0:
+            inv_score += 20
+            inv_details.append(f"원/달러 환율 {curr_ex:.1f}원선 돌파로 외국인 자금 이탈 압박 극대화 (+20점)")
+        elif curr_ex >= 1400.0:
+            inv_score += 10
+            inv_details.append(f"원/달러 환율 {curr_ex:.1f}원선으로 고환율 지속 상태 (+10점)")
+        else:
+            inv_details.append(f"환율 안정 기조 (0점)")
+
+    st.divider()
+
+    # ── [NEW] 오늘의 추천 트레이딩 패널 ──
+    st.markdown("### 🎯 오늘의 추천 트레이딩 (Daily Tactical Signal)")
+    st.caption("시장 변동성과 지수 간 괴리율을 분석해 도출한 오늘 단 하루의 가장 최적화된 헷징/트레이딩 제언입니다.")
+
+    trade_recommendation = "관망 및 대기 (현금 자산 보존)"
+    trade_reason = "현재 시장 변동성 지표(VKOSPI)와 수급 요인들이 임계치를 넘지 않았으며, 지수 간 괴리율(Z-Score) 또한 안정을 유지하고 있어 무리한 포지션 진입 없이 현금을 지킬 때입니다."
+    trade_color = "#6c757d" # Gray
+
+    # 결정 알고리즘
+    if inv_score >= 70:
+        trade_recommendation = "🚨 KODEX 200선물인버스2X (곱버스, 252670) 분할 매수 (종가 베팅)"
+        trade_reason = f"현재 인버스 매수 스코어가 {inv_score}%로 위험 수준입니다. 외국인의 강한 선물 매도와 고환율, VKOSPI 급등이 동반되어 내일 추가 하락 확률이 매우 높습니다. 당일 종가 기준으로 곱버스를 분할 매수하여 하방 리스크를 헤지하십시오."
+        trade_color = "#dc3545" # Red
+    elif has_spread_data and curr_z >= 2.2:
+        trade_recommendation = "📊 코스닥 롱 (KODEX 코스닥150, 229870) / 코스피 숏 (KODEX 200선물인버스, 114800) 스프레드 매매"
+        trade_reason = f"현재 KOSPI 200 지수가 KOSDAQ 대비 역사적 과열 상태(Z-Score: {curr_z:+.2f})입니다. 두 지수 간 상대 강도가 평균으로 복귀하는 성질을 이용하여 코스닥 매수와 코스피 인버스를 동일 금액으로 동시 진입하여 무위험에 가까운 수렴 수익을 취하는 전략입니다."
+        trade_color = "#17a2b8" # Teal
+    elif has_spread_data and curr_z <= -2.2:
+        trade_recommendation = "📊 코스피 롱 (KODEX 200, 069500) / 코스닥 숏 (KODEX 코스닥150선물인버스, 251340) 스프레드 매매"
+        trade_reason = f"현재 KOSDAQ 지수가 KOSPI 200 대비 극단적으로 고평가(Z-Score: {curr_z:+.2f})되어 코스피가 극심히 소외되었습니다. 평균 회귀 원리에 의거, 코스피 매수와 코스닥 인버스를 동일 금액 동시 진입해 스프레드 축소 시 안정적인 초과 수익을 추구합니다."
+        trade_color = "#ffc107" # Yellow (Darkened text below)
+        
+    st.markdown(f"""
+    <div style='background-color:#f8f9fa; padding:20px; border-radius:10px; border-left: 8px solid {trade_color}; margin-bottom:20px;'>
+        <h4 style='margin-top:0; color:#333;'>💡 추천 헷징 포지션: <span style='color:{trade_color}; font-weight:bold;'>{trade_recommendation}</span></h4>
+        <p style='font-size:1.05em; color:#444; line-height:1.6; margin-bottom:0;'>
+        <b>추천 사유 및 실행 가이드</b>:<br>
+        {trade_reason}
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── 질문에 대한 상세 가이드 패널 ──
+    with st.expander("❓ [질문 가이드] 바닥확률(98%)인데 인버스 추천(70%)이 뜨는 이유는 무엇인가요?"):
+        st.markdown("""
+        **"거시적 진바닥 영역"과 "단기적 하락 모멘텀(떨어지는 칼날)"의 차이 때문입니다.**
+        
+        1. **바닥확률(98%)**: **중장기(Month) 관점**의 지표입니다. 역사적인 지수 저평가 수준과 장기 안전마진을 계산하여 '지금이 역사적으로 주식이 싼 저점 부근이 맞다'는 것을 뜻합니다.
+        2. **인버스 추천도(70%)**: **초단기(Daily) 관점**의 지표입니다. 지금 비록 바닥 근처이기는 하나, 오늘 당장의 수급(외인 선물 투매, 환율 폭등, 공포지수 폭발)은 밑으로 내리꽂는 힘이 극도로 강함을 뜻합니다.
+        
+        즉, **"여기가 역사적인 바닥 구역(98%)은 맞지만, 오늘 밤과 내일 당장은 칼날이 더 떨어질 확률(70%)이 크니, 무턱대고 현금 100% 매수를 하기보다 곱버스로 단기 방어막(Hedge)을 치거나 대기하는 것이 안전하다"**라는 상호보완적인 신호로 이해하셔야 합니다.
+        """)
+
+    st.divider()
+
+    # 1. 지수 간 스프레드 트레이딩 상세 차트
+    st.markdown("### 1. 📊 코스피200 vs 코스닥 스프레드 상세 분석")
+    if has_spread_data:
+        # Signal Verdict display
+        if curr_z >= 2.2:
+            spread_verdict = "🔴 KOSPI 200 극단 고평가 / KOSDAQ 과매도 (Z >= 2.2)"
+            spread_color = "#dc3545"
+        elif curr_z <= -2.2:
+            spread_verdict = "🟢 KOSDAQ 극단 고평가 / KOSPI 200 과매도 (Z <= -2.2)"
+            spread_color = "#28a745"
+        else:
+            spread_verdict = "⚪ 정상 변동 범위 내 (평균 회귀 대기)"
+            spread_color = "#6c757d"
+
+        st.markdown(f"**현재 Z-Score**: <span style='color:{spread_color}; font-weight:bold; font-size:1.1em;'>{curr_z:+.2f}</span> (진입 임계치: ±2.2)", unsafe_allow_html=True)
+        z_df = pd.DataFrame({"Z-Score (KOSPI200/KOSDAQ 비율)": combined["Z_Score"].tail(60)})
+        st.line_chart(z_df)
+    else:
+        st.info("지수 데이터를 로드할 수 없습니다.")
 
     st.divider()
 
     # 2. 개별주 짝짓기 매매 (Pairs Trading)
     st.markdown("### 2. 🤝 반도체 대장주 페어 트레이딩 (삼성전자 vs SK하이닉스)")
-    st.caption("삼성전자와 SK하이닉스의 가격 괴리를 이용한 교환 매매(Switching) 레이더입니다.")
     
+    with st.expander("💡 [필독] 반도체 대장주 페어 트레이딩(짝짓기)이란 무엇인가요?"):
+        st.markdown("""
+        삼성전자와 SK하이닉스는 같은 D램 메모리 반도체 기업이라 장기적으로 주가가 똑같이 움직입니다(높은 상관관계). 
+        하지만 단기 수급이나 특정 이슈로 인해 두 종목의 가격 격차(SK하이닉스 주가 / 삼성전자 주가)가 일시적으로 평균에서 과도하게 벌어질 때가 있습니다.
+        
+        이 격차가 20일 볼린저 밴드 상한선(하이닉스 이상 고평가)이나 하한선(삼성전자 이상 고평가)을 뚫고 지나가면, **결국 역사적 평균치로 다시 좁혀집니다(평균 회귀).**
+        
+        *   **주식 스위칭(갈아타기) 전략**:
+            - **상한선 돌파 시**: SK하이닉스를 일부 익절하여 상대적으로 저평가된 삼성전자로 교환합니다.
+            - **하한선 이탈 시**: 삼성전자를 일부 익절하여 상대적으로 저평가된 SK하이닉스로 교환합니다.
+        *   **효과**: 추가 현금을 한 푼도 입금하지 않고, 오직 두 대장주 간의 비정상적인 가격 괴리를 이용해 **내가 보유한 반도체 주식의 전체 수량(주수) 자체를 늘릴 수 있는** 헤지펀드식 안전마진 매매 기법입니다.
+        """)
+
     if st.button("🔄 페어 데이터 실시간 스캔 (삼성전자 & SK하이닉스 60일)", key="pairs_scan"):
         with st.spinner("두 종목의 실시간 데이터를 수집하여 괴율을 연산 중..."):
             try:
@@ -1883,7 +1983,6 @@ with tab_hedging:
                 hynix_df = yf.download("000660.KS", period="60d", progress=False)
                 
                 if not sec_df.empty and not hynix_df.empty:
-                    # Align index
                     pairs_df = pd.DataFrame({
                         "SEC": sec_df["Close"].squeeze(),
                         "HYNIX": hynix_df["Close"].squeeze()
@@ -1936,59 +2035,10 @@ with tab_hedging:
 
     st.divider()
 
-    # 3. 인버스 진입 확률 모델 (Inverse Entry Probability Model)
-    st.markdown("### 3. 🚨 역발상 곱버스/인버스 진입 타이밍 검출기")
-    st.caption("외인 선물 이탈, 시장 공포(VKOSPI) 팽창, 기술적 붕괴 수준을 스코어링하여 하방 매수 강도를 연산합니다.")
-
-    # Calculate Inverse Score
-    inv_score = 0
-    inv_details = []
+    # 3. 인버스 진입 확률 모델
+    st.markdown("### 3. 🚨 역발상 곱버스/인버스 상세 지표 상태")
     
-    # 1. 외인 선물 수급 감점/가점 (선물 대량 매도는 인버스 호재)
-    f_fut = locals().get('foreign_futures', 0)
-    if f_fut <= -3000:
-        inv_score += 30
-        inv_details.append("외국인 선물 3천계약 이상 대량 순매도 중 (+30점)")
-    elif f_fut <= -1000:
-        inv_score += 15
-        inv_details.append("외국인 선물 순매도 상태 (+15점)")
-    else:
-        inv_details.append("외국인 선물 매도 압력 낮음 (0점)")
-        
-    # 2. VKOSPI 변동성 폭발 상태 (변동성 팽창 = 하락 파동)
-    if 'vkospi_10y' in locals() and not vkospi_10y.empty:
-        curr_vk = float(vkospi_10y['Close'].iloc[-1])
-        if curr_vk >= 35.0:
-            inv_score += 30
-            inv_details.append(f"VKOSPI {curr_vk:.1f}로 심각한 패닉 변동성 구간 (+30점)")
-        elif curr_vk >= 22.0:
-            inv_score += 15
-            inv_details.append(f"VKOSPI {curr_vk:.1f}로 공포 국면 진입 (+15점)")
-        else:
-            inv_details.append(f"VKOSPI {curr_vk:.1f}로 안정 구간 (0점)")
-            
-    # 3. KOSPI 5일선 아래 위치 여부 (하락 추세)
-    k_val = locals().get('current_kospi_val', 0)
-    k_5ma = locals().get('kospi_5d_sma', 0)
-    if isinstance(k_val, (int, float)) and isinstance(k_5ma, (int, float)) and k_val < k_5ma:
-        inv_score += 20
-        inv_details.append("KOSPI 지수 5일 이평선 아래로 단기 하락 추세 (+20점)")
-    else:
-        inv_details.append("KOSPI 지수 5일 이평선 안착 유지 (0점)")
-        
-    # 4. 고환율 지속 여부
-    if 'usd_krw' in locals() and not usd_krw.empty:
-        curr_ex = float(usd_krw['Close'].iloc[-1])
-        if curr_ex >= 1430.0:
-            inv_score += 20
-            inv_details.append(f"원/달러 환율 {curr_ex:.1f}원선으로 고환율 지속 압박 (+20점)")
-        elif curr_ex >= 1380.0:
-            inv_score += 10
-            inv_details.append(f"원/달러 환율 {curr_ex:.1f}원선으로 강달러 기조 (+10점)")
-        else:
-            inv_details.append(f"환율 안정 기조 (0점)")
-            
-    # Verdict
+    # Verdict display
     if inv_score >= 70:
         inv_verdict = "🚨 인버스 종가 분할매수 적극 고려 (하방 압력 극대화)"
         inv_color = "#dc3545"
@@ -1998,10 +2048,10 @@ with tab_hedging:
     else:
         inv_verdict = "🟢 대기 / 현금 방어 (인버스 매수 보류)"
         inv_color = "#28a745"
-        
+
     st.markdown(f"""
     <div style='background-color:#f8f9fa; padding:20px; border-radius:10px; border-left: 8px solid {inv_color}; margin-bottom:20px;'>
-        <h4 style='margin-top:0; color:#333;'>🔥 인버스 매수 추천 강도: <span style='color:{inv_color}; font-weight:bold;'>{inv_score}%</span></h4>
+        <h4 style='margin-top:0; color:#333;'>🔥 인버스 매수 추천 스코어: <span style='color:{inv_color}; font-weight:bold;'>{inv_score}%</span></h4>
         <p style='font-size:1.1em; font-weight:bold; color:{inv_color};'>{inv_verdict}</p>
         <hr style='margin:10px 0;'>
         <ul style='font-size:0.95em; color:#666;'>
