@@ -1855,7 +1855,7 @@ with tab_hedging:
         inv_score += 15
         inv_details.append("외국인 선물 2천계약 이상 순매도 중 (+15점)")
     else:
-        inv_details.append("외국인 선물 매도 압력 낮음 (0점)")
+        inv_details.append("외국인 선물 매도 압력 낮음 또는 미입력 (0점) *(1번 '🚦 ORION Signal' 탭의 '외국인 선물 순매수' 입력값과 연동됩니다)*")
         
     # 2. VKOSPI 변동성 폭발 상태 (진짜 패닉 수준일 때만 가점)
     if 'vkospi_10y' in locals() and not vkospi_10y.empty:
@@ -1903,7 +1903,7 @@ with tab_hedging:
     # 결정 알고리즘
     if inv_score >= 70:
         trade_recommendation = "🚨 KODEX 200선물인버스2X (곱버스, 252670) 분할 매수 (종가 베팅)"
-        trade_reason = f"현재 인버스 매수 스코어가 {inv_score}%로 위험 수준입니다. 외국인의 강한 선물 매도와 고환율, VKOSPI 급등이 동반되어 내일 추가 하락 확률이 매우 높습니다. 당일 종가 기준으로 곱버스를 분할 매수하여 하방 리스크를 헤지하십시오."
+        trade_reason = f"현재 인버스 매수 추천 스코어가 {inv_score}%로 매우 강력한 수준(매수 매력도 극대화)입니다. 외국인의 강한 선물 매도와 고환율, VKOSPI 급등이 동반되어 단기 추가 하락 확률이 매우 높습니다. 당일 종가 기준으로 곱버스를 분할 매수하여 하방 리스크를 헤지하십시오."
         trade_color = "#dc3545" # Red
     elif has_spread_data and curr_z >= 2.2:
         trade_recommendation = "📊 코스닥 롱 (KODEX 코스닥150, 229870) / 코스피 숏 (KODEX 200선물인버스, 114800) 스프레드 매매"
