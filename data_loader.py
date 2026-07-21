@@ -8,8 +8,8 @@ import yfinance as yf
 import concurrent.futures
 import requests_cache
 
-# yfinance용 캐시 세션 (1시간 유지) - 429 Rate Limit 방지 및 속도 최적화
-yf_session = requests_cache.CachedSession('yfinance_v2.cache', expire_after=3600)
+# yfinance용 캐시 세션 (5분 유지) - 장중 실시간 데이터 지연 방지 및 Rate Limit 대응
+yf_session = requests_cache.CachedSession('yfinance_v2.cache', expire_after=300)
 
 import FinanceDataReader as fdr
 import streamlit as st
@@ -198,48 +198,31 @@ def fetch_korean_index_with_fallback(symbol_fdr, symbol_yf, start_10y):
         df = fetch_fdr_history(symbol_fdr, start_10y)
         if not df.empty:
             df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
-            today_str = pd.Timestamp.now().strftime('%Y-%m-%d')
             last_date_str = df.index[-1].strftime('%Y-%m-%d')
-            if last_date_str != today_str:
-                live_close = None
-                try:
-                    ticker = yf.Ticker(symbol_yf)
-                    live_close = float(ticker.fast_info.last_price)
-                except Exception:
-                    try:
-                        yf_data = yf.download(symbol_yf, period="1d")
-                        if not yf_data.empty:
-                            val_series = yf_data['Close']
-                            if isinstance(val_series, pd.DataFrame):
-                                live_close = float(val_series.iloc[-1].iloc[0])
-                            else:
-                                live_close = float(val_series.iloc[-1])
-                    except Exception:
-                        pass
-                
-                if live_close is not None and not np.isnan(live_close):
-                    new_row = pd.Series(index=df.columns, dtype='float64')
-                    new_row['Close'] = live_close
-                    try:
-                        yf_today_df = yf.download(symbol_yf, period="1d")
-                        if not yf_today_df.empty:
-                            for col in ['Open', 'High', 'Low', 'Volume']:
-                                if col in df.columns and col in yf_today_df.columns:
-                                    val_series = yf_today_df[col]
-                                    if isinstance(val_series, pd.DataFrame):
-                                        new_row[col] = float(val_series.iloc[-1].iloc[0])
-                                    else:
-                                        new_row[col] = float(val_series.iloc[-1])
-                    except Exception:
-                        pass
-                    df.loc[pd.Timestamp(today_str)] = new_row
+            
+            try:
+                yf_today_df = yf.download(symbol_yf, period="1d", progress=False)
+                if not yf_today_df.empty:
+                    yf_last_date_str = yf_today_df.index[-1].strftime('%Y-%m-%d')
+                    if yf_last_date_str > last_date_str:
+                        new_row = pd.Series(index=df.columns, dtype='float64')
+                        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                            if col in df.columns and col in yf_today_df.columns:
+                                val_series = yf_today_df[col]
+                                if isinstance(val_series, pd.DataFrame):
+                                    new_row[col] = float(val_series.iloc[-1].iloc[0])
+                                else:
+                                    new_row[col] = float(val_series.iloc[-1])
+                        df.loc[pd.Timestamp(yf_last_date_str)] = new_row
+            except Exception:
+                pass
             return df[~df.index.duplicated(keep='last')]
     except Exception:
         pass
     return pd.DataFrame()
 
 
-@st.cache_data(ttl=598)  # 캐시 무효화를 위해 ttl 1초 변경
+@st.cache_data(ttl=300)  # KOSPI 등 지연 방지를 위해 5분 쿨타임으로 축소
 def get_macro_charts():
     result = {}
     tickers = {
