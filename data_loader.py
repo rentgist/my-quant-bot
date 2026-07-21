@@ -193,6 +193,52 @@ def build_vkospi_proxy(kospi_df):
     return pd.DataFrame({"Close": rv}).dropna()
 
 
+def fetch_korean_index_with_fallback(symbol_fdr, symbol_yf, start_10y):
+    try:
+        df = fetch_fdr_history(symbol_fdr, start_10y)
+        if not df.empty:
+            df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
+            today_str = pd.Timestamp.now().strftime('%Y-%m-%d')
+            last_date_str = df.index[-1].strftime('%Y-%m-%d')
+            if last_date_str != today_str:
+                live_close = None
+                try:
+                    ticker = yf.Ticker(symbol_yf)
+                    live_close = float(ticker.fast_info.last_price)
+                except Exception:
+                    try:
+                        yf_data = yf.download(symbol_yf, period="1d")
+                        if not yf_data.empty:
+                            val_series = yf_data['Close']
+                            if isinstance(val_series, pd.DataFrame):
+                                live_close = float(val_series.iloc[-1].iloc[0])
+                            else:
+                                live_close = float(val_series.iloc[-1])
+                    except Exception:
+                        pass
+                
+                if live_close is not None and not np.isnan(live_close):
+                    new_row = pd.Series(index=df.columns, dtype='float64')
+                    new_row['Close'] = live_close
+                    try:
+                        yf_today_df = yf.download(symbol_yf, period="1d")
+                        if not yf_today_df.empty:
+                            for col in ['Open', 'High', 'Low', 'Volume']:
+                                if col in df.columns and col in yf_today_df.columns:
+                                    val_series = yf_today_df[col]
+                                    if isinstance(val_series, pd.DataFrame):
+                                        new_row[col] = float(val_series.iloc[-1].iloc[0])
+                                    else:
+                                        new_row[col] = float(val_series.iloc[-1])
+                    except Exception:
+                        pass
+                    df.loc[pd.Timestamp(today_str)] = new_row
+            return df[~df.index.duplicated(keep='last')]
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
 @st.cache_data(ttl=598)  # 캐시 무효화를 위해 ttl 1초 변경
 def get_macro_charts():
     result = {}
@@ -228,53 +274,9 @@ def get_macro_charts():
 
     # KOSPI 및 환율은 실시간성이 더 좋은 FinanceDataReader(fdr) 사용
     start_10y = (pd.Timestamp.now() - pd.DateOffset(years=10)).strftime('%Y-%m-%d')
-    try:
-        df_kospi = fetch_fdr_history("KS11", start_10y)
-        if not df_kospi.empty:
-            df_kospi.index = pd.to_datetime(df_kospi.index).tz_localize(None).normalize()
-            
-            # 장중 실시간 데이터 보완 (오늘 날짜 데이터가 반영되지 않은 경우 yfinance에서 보완)
-            today_str = pd.Timestamp.now().strftime('%Y-%m-%d')
-            last_date_str = df_kospi.index[-1].strftime('%Y-%m-%d')
-            if last_date_str != today_str:
-                live_close = None
-                try:
-                    ticker = yf.Ticker("^KS11")
-                    live_close = float(ticker.fast_info.last_price)
-                except Exception:
-                    try:
-                        # fast_info 실패 시 download로 fallback
-                        yf_kospi = yf.download("^KS11", period="1d")
-                        if not yf_kospi.empty:
-                            val_series = yf_kospi['Close']
-                            if isinstance(val_series, pd.DataFrame):
-                                live_close = float(val_series.iloc[-1].iloc[0])
-                            else:
-                                live_close = float(val_series.iloc[-1])
-                    except Exception:
-                        pass
-                
-                if live_close is not None and not np.isnan(live_close):
-                    new_row = pd.Series(index=df_kospi.columns, dtype='float64')
-                    new_row['Close'] = live_close
-                    # 가능한 경우 시고저가도 yfinance에서 채움
-                    try:
-                        yf_today_df = yf.download("^KS11", period="1d")
-                        if not yf_today_df.empty:
-                            for col in ['Open', 'High', 'Low', 'Volume']:
-                                if col in df_kospi.columns and col in yf_today_df.columns:
-                                    val_series = yf_today_df[col]
-                                    if isinstance(val_series, pd.DataFrame):
-                                        new_row[col] = float(val_series.iloc[-1].iloc[0])
-                                    else:
-                                        new_row[col] = float(val_series.iloc[-1])
-                    except Exception:
-                        pass
-                    df_kospi.loc[pd.Timestamp(today_str)] = new_row
-
-            result["kospi_10y"] = df_kospi[~df_kospi.index.duplicated(keep='last')]
-    except Exception:
-        result["kospi_10y"] = pd.DataFrame()
+    result["kospi_10y"] = fetch_korean_index_with_fallback("KS11", "^KS11", start_10y)
+    result["kosdaq_10y"] = fetch_korean_index_with_fallback("KQ11", "^KQ11", start_10y)
+    result["kospi200_10y"] = fetch_korean_index_with_fallback("KS200", "^KS200", start_10y)
 
     try:
         df_usdkrw = fetch_fdr_history("USD/KRW", start_10y)
