@@ -287,6 +287,7 @@ def get_macro_charts():
         else:
             vkospi_source = "없음 (전체 소스 실패)"
     result["vkospi_source"] = vkospi_source
+    result["fetched_at"] = get_kst_now().strftime("%m-%d %H:%M:%S")
 
     return result
 

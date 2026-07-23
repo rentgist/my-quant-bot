@@ -423,7 +423,8 @@ with tab_sniper:
         else:
             kospi_delta_str = "0.00% (0.00p)"
         
-        k_col1.metric("🇰🇷 KOSPI 현재가", f"{current_kospi_val:,.2f}", delta=kospi_delta_str)
+        fetched_at = macro_charts.get("fetched_at", "알 수 없음")
+        k_col1.metric(f"🇰🇷 KOSPI 현재가 (⏰ {fetched_at})", f"{current_kospi_val:,.2f}", delta=kospi_delta_str)
         k_col2.metric("📈 KOSPI 5일 이평선", f"{kospi_5d_sma:,.2f}")
         k_col3.metric(
             "🎯 5일선 안착 여부", 
