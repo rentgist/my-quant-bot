@@ -739,7 +739,12 @@ def calculate_cashflow_signal(foreign_futures, oi_trend, rsp_change_pct, kospi_h
     return flow_score, status, details
 
 
-def calculate_regime_classification(macro_score, flow_score, warning_days_override=None):
+def calculate_regime_classification(
+    macro_score,
+    flow_score,
+    kospi_above_ma20,
+    warning_days_override=None,
+):
     import os, json, datetime
     tracker_file = "regime_state.json"
     today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -752,7 +757,11 @@ def calculate_regime_classification(macro_score, flow_score, warning_days_overri
         except Exception:
             pass
             
-    is_warning = (flow_score >= 50 and macro_score < 50)
+    # GO는 합산 점수만으로 확정하지 않는다.
+    # 환율 안정만으로 macro_score 50점이 만들어질 수 있으므로,
+    # KOSPI의 실제 20일선 탈환을 별도 필수 게이트로 확인한다.
+    go_ready = macro_score >= 50 and flow_score >= 50 and kospi_above_ma20
+    is_warning = flow_score >= 50 and not go_ready
     warning_days = state.get("warning_days", 0)
     last_date = state.get("last_date")
     
@@ -773,22 +782,28 @@ def calculate_regime_classification(macro_score, flow_score, warning_days_overri
         
     warning_days = warning_days_override if warning_days_override is not None else max(1, min(5, warning_days)) if is_warning else 0
     
-    if macro_score >= 80 and flow_score >= 80:
+    if macro_score >= 80 and flow_score >= 80 and kospi_above_ma20:
         regime = "🟢 강력 GO (정배열)"
         action = "완벽한 추세장. 스나이퍼 예산 즉시 본대 투입 (풀배팅 가능)."
         color = "#21c354"
-    elif macro_score >= 50 and flow_score >= 50:
+    elif go_ready:
         regime = "🟡 조건부 GO (추세 전환)"
         action = "20일선 탈환 완료. 본대 자금 분할 진입 시작."
         color = "#fcca46"
-    elif flow_score >= 50 and macro_score < 50:
+    elif is_warning:
         if warning_days >= 3:
             regime = "✅ 경고 국면 확정 (3거래일 지지 성공)"
-            action = "매크로 회복(20일선) 임박. 3일선 지지 확인 완료. '선발대(10~20%)' 진입 검토."
+            if kospi_above_ma20:
+                action = "20일선은 회복했지만 매크로 점수가 부족합니다. '선발대(10~20%)'만 진입 검토."
+            else:
+                action = "수급 지지는 확인됐지만 20일선 미탈환 상태입니다. 본대 투입 없이 선발대 진입만 검토."
             color = "#ff9900"
         else:
             regime = f"⚠️ 경고 국면 (바닥 탈출 시도 - {warning_days}/3일 관찰 중)"
-            action = f"수급이 포착되었습니다. 내일도 5일선 지지 시 관찰 지속 (남은 기간: {3-warning_days}거래일)."
+            if kospi_above_ma20:
+                action = f"20일선은 회복했지만 매크로 확인이 부족합니다. 관찰 지속 (남은 기간: {3-warning_days}거래일)."
+            else:
+                action = f"수급은 포착됐지만 20일선 미탈환 상태입니다. 관찰 지속 (남은 기간: {3-warning_days}거래일)."
             color = "#ff9900"
     else:
         regime = "🔴 PASS (매수 보류)"

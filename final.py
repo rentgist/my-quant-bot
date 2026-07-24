@@ -742,8 +742,21 @@ with tab_sniper:
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("#### Step 3: 🎯 통합 판정 (Action Plan)")
-    
-    regime, action, r_color = calculate_regime_classification(kr_macro_score, kr_flow_score)
+
+    kospi_above_ma20 = False
+    if not kospi_10y.empty and len(kospi_10y) >= 20:
+        try:
+            kospi_close = float(kospi_10y["Close"].iloc[-1])
+            kospi_ma20 = float(kospi_10y["Close"].rolling(20).mean().iloc[-1])
+            kospi_above_ma20 = kospi_close >= kospi_ma20
+        except (KeyError, TypeError, ValueError):
+            kospi_above_ma20 = False
+
+    regime, action, r_color = calculate_regime_classification(
+        kr_macro_score,
+        kr_flow_score,
+        kospi_above_ma20,
+    )
     
     st.markdown(
         f"<div style='background:{r_color}22; border-left: 8px solid {r_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
