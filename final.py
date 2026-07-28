@@ -9,6 +9,12 @@ import datetime
 import altair as alt
 
 from config import get_kst_now
+from hedging import (
+    HEDGE_HORIZONS,
+    calculate_beta_hedge_size,
+    evaluate_hedge_state,
+    run_hedge_backtest,
+)
 from data_loader import (
     get_real_cnn_fg, 
     get_macro_charts, 
@@ -109,7 +115,14 @@ except ImportError:
 @st.cache_data(ttl=300)
 def get_intraday_market_internals():
     """5분(300초) 캐싱: KOSPI 상승/하락 종목수(Breadth) 및 프로그램 순매매 크롤링"""
-    data = {"advancing": 0, "declining": 0, "program_net": 0, "adr": 1.0}
+    data = {
+        "advancing": None,
+        "declining": None,
+        "program_net": None,
+        "adr": None,
+        "breadth_status": "unavailable",
+        "program_status": "unavailable",
+    }
     try:
         # 프로그램 매매 스크래핑 (단위: 백만원)
         res_prog = requests.get('https://finance.naver.com/sise/sise_program.naver', headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
@@ -118,9 +131,8 @@ def get_intraday_market_internals():
         # 최상단 차익+비차익 합계 (순매수) - 에러 대비용으로 단순 패스 가능성 열어둠
         # Naver Finance 프로그램 종합 순매수 텍스트 크롤링 (불안정할 수 있으므로 try-except)
         
-        # 임시 안전장치: 실제 크롤링 로직은 환경에 따라 달라지므로, 여기서는 에러 없이 통과하도록 안전하게 감쌈.
-        # 향후 정교한 DOM 탐색식 추가 예정 (현재는 실패 시 0 반환)
-        data["program_net"] = 0
+        # 프로그램 수급은 DOM 파서가 구현되기 전까지 결측으로 유지한다.
+        # 0은 실제 중립 수급으로 오인되므로 신호 점수에 포함하면 안 된다.
         
         # Breadth 스크래핑
         res_idx = requests.get('https://finance.naver.com/sise/sise_index.naver?code=KOSPI', headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
@@ -134,31 +146,81 @@ def get_intraday_market_internals():
                 text = dd.text.replace(',', '').strip()
                 if '상승' in text:
                     nums = [int(s) for s in text.split() if s.isdigit()]
-                    if nums: data["advancing"] = nums[0]
+                    if nums:
+                        data["advancing"] = nums[0]
                 elif '하락' in text:
                     nums = [int(s) for s in text.split() if s.isdigit()]
-                    if nums: data["declining"] = nums[0]
-                    
-        if data["declining"] > 0:
+                    if nums:
+                        data["declining"] = nums[0]
+
+        if (
+            data["advancing"] is not None
+            and data["declining"] is not None
+            and data["declining"] > 0
+        ):
             data["adr"] = data["advancing"] / data["declining"]
+            data["breadth_status"] = "ok"
     except Exception as e:
         pass # 크롤링 에러 시 대시보드 중단 방지
     return data
 
 @st.cache_data(ttl=86400)
 def get_daily_spread_adf(kospi_df, kosdaq_df):
-    """1일(86400초) 캐싱: 지수 간 ADF 공적분 검정"""
-    res = {"spread_adf_pvalue": 1.0, "is_cointegrated": False}
-    if not HAS_STATSMODELS: return res
+    """1일 캐싱: 로그가격 OLS 잔차에 대한 Engle-Granger 1단계 검정."""
+    res = {
+        "spread_adf_pvalue": None,
+        "is_cointegrated": False,
+        "status": "unavailable",
+        "hedge_ratio": None,
+        "residual_z": None,
+        "observations": 0,
+        "error": "",
+    }
+    if not HAS_STATSMODELS:
+        res["status"] = "statsmodels_missing"
+        res["error"] = "statsmodels 미설치"
+        return res
     try:
         if not kospi_df.empty and not kosdaq_df.empty:
-            ratio = (kospi_df['Close'] / kosdaq_df['Close']).dropna()
-            if len(ratio) > 30:
-                adf_result = adfuller(ratio)
-                res["spread_adf_pvalue"] = adf_result[1]
-                res["is_cointegrated"] = bool(adf_result[1] < 0.05)
-    except Exception:
-        pass
+            prices = pd.concat(
+                [
+                    pd.to_numeric(kospi_df["Close"], errors="coerce").rename("KOSPI200"),
+                    pd.to_numeric(kosdaq_df["Close"], errors="coerce").rename("KOSDAQ"),
+                ],
+                axis=1,
+            ).dropna()
+            prices = prices[(prices > 0).all(axis=1)].tail(504)
+            if len(prices) < 120:
+                res["status"] = "insufficient_data"
+                res["error"] = "공적분 검정에 필요한 120거래일 미만"
+                return res
+            y = np.log(prices["KOSPI200"])
+            x = sm.add_constant(np.log(prices["KOSDAQ"]))
+            model = sm.OLS(y, x).fit()
+            residual = model.resid
+            adf_result = adfuller(residual, autolag="AIC")
+            residual_std = residual.tail(60).std()
+            residual_z = (
+                (residual.iloc[-1] - residual.tail(60).mean()) / residual_std
+                if residual_std > 0
+                else 0.0
+            )
+            res.update(
+                {
+                    "spread_adf_pvalue": float(adf_result[1]),
+                    "is_cointegrated": bool(adf_result[1] < 0.05),
+                    "status": "ok",
+                    "hedge_ratio": float(model.params.iloc[1]),
+                    "residual_z": float(residual_z),
+                    "observations": int(len(prices)),
+                }
+            )
+        else:
+            res["status"] = "insufficient_data"
+            res["error"] = "지수 데이터 없음"
+    except Exception as exc:
+        res["status"] = "error"
+        res["error"] = str(exc)
     return res
 
 @st.cache_data(ttl=86400)
@@ -1984,6 +2046,48 @@ with tab_hedging:
     st.subheader("🛡️ 한국 시장 단기/스윙 헷징 통제실 (Hedge Fund Style)")
     st.caption("한국 시장의 높은 변동성과 수급 쏠림 현상을 역이용하여 리스크를 상쇄(Hedging)하는 통제실입니다.")
 
+    st.markdown("### 0. 운용 기간과 현재 포지션")
+    horizon_col, position_col, days_col = st.columns(3)
+    horizon_key = horizon_col.selectbox(
+        "헷징 운용 기간",
+        options=list(HEDGE_HORIZONS.keys()),
+        format_func=lambda key: HEDGE_HORIZONS[key].label,
+        help="2배 인버스는 초단기(1~3거래일)에만 허용됩니다.",
+    )
+    position_labels = {
+        "none": "보유 인버스 없음",
+        "inverse1x": "1배 인버스 보유",
+        "inverse2x": "2배 인버스 보유",
+    }
+    position_status = position_col.selectbox(
+        "현재 헷지 포지션",
+        options=list(position_labels.keys()),
+        format_func=lambda key: position_labels[key],
+    )
+    holding_days = days_col.number_input(
+        "현재 포지션 보유일",
+        min_value=0,
+        max_value=120,
+        value=0,
+        step=1,
+        disabled=position_status == "none",
+    )
+    hedge_policy = HEDGE_HORIZONS[horizon_key]
+    vkospi_source = macro_charts.get("vkospi_source", "없음")
+    hedge_data_quality = (
+        "unavailable"
+        if vkospi_10y.empty
+        else "proxy"
+        if "프록시" in vkospi_source
+        else "live"
+    )
+    st.info(
+        f"**선택 정책:** {hedge_policy.description}  \n"
+        f"상품: **{hedge_policy.product}** · 최대 보유: **{hedge_policy.max_days}거래일** · "
+        f"정책상 최대 투입: **총자산의 {hedge_policy.max_allocation * 100:.0f}%**  \n"
+        f"VKOSPI 데이터: `{vkospi_source}`"
+    )
+
     # 외국인 선물 입력창 (헷징 탭 전용 동기화 위젯)
     st.session_state['hedging_futures'] = st.session_state['foreign_futures']
     foreign_futures_hedging = st.number_input(
@@ -1992,6 +2096,12 @@ with tab_hedging:
         key="hedging_futures",
         on_change=sync_futures_hedging
     )
+    futures_confirmed = st.checkbox(
+        "오늘 최신 외국인 선물 수급값임을 확인",
+        value=False,
+        help="체크하지 않으면 이 값은 진입·청산 점수에서 제외됩니다.",
+    )
+    st.caption("외국인 선물 수급은 현재 수동 입력값입니다. 최신 값 확인 전에는 신규 레버리지 판단에 사용하지 않습니다.")
     # 로컬 변수로 바인딩하여 아래 연산에 반영
     foreign_futures = st.session_state['foreign_futures']
 
@@ -2005,6 +2115,15 @@ with tab_hedging:
     curr_ratio = 1.0
     curr_z = 0.0
     combined = pd.DataFrame()
+    spread_adf = {
+        "spread_adf_pvalue": None,
+        "is_cointegrated": False,
+        "status": "unavailable",
+        "hedge_ratio": None,
+        "residual_z": None,
+        "observations": 0,
+        "error": "검정 전",
+    }
     
     if not kospi200_df.empty and not kosdaq_df.empty:
         combined = pd.DataFrame({
@@ -2021,7 +2140,19 @@ with tab_hedging:
             curr_ratio = combined["Ratio"].iloc[-1]
             curr_z = combined["Z_Score"].iloc[-1]
             has_spread_data = True
-            spread_adf = get_daily_spread_adf(kospi_10y, kosdaq_df)
+            spread_adf = get_daily_spread_adf(kospi200_df, kosdaq_df)
+            if spread_adf.get("status") == "ok":
+                hedge_ratio = spread_adf.get("hedge_ratio", 1.0)
+                combined["Residual"] = (
+                    np.log(combined["KOSPI200"])
+                    - hedge_ratio * np.log(combined["KOSDAQ"])
+                )
+                residual_mean = combined["Residual"].rolling(60).mean()
+                residual_std = combined["Residual"].rolling(60).std().replace(0, np.nan)
+                combined["Residual_Z"] = (
+                    combined["Residual"] - residual_mean
+                ) / residual_std
+                curr_z = spread_adf.get("residual_z", curr_z)
 
     # 2) KOSPI 기술적 지표 (ATR 변동성, RSI) 연산
     has_tech = False
@@ -2071,19 +2202,19 @@ with tab_hedging:
         vk = vkospi_10y['Close']
         vk_ma5  = float(vk.rolling(5).mean().iloc[-1])
         vk_ma20 = float(vk.rolling(20).mean().iloc[-1])
-        vk_contango = vk_ma5 < vk_ma20
+        vk_momentum_falling = vk_ma5 < vk_ma20
 
         net_20d = float((kospi_10y['Close'].iloc[-1] / kospi_10y['Close'].iloc[-21] - 1) * 100)
         directional_ratio = abs(net_20d) / hv20 if hv20 > 0 else 0
 
-        if hv_pct >= 0.90 and not vk_contango:
+        if hv_pct >= 0.90 and not vk_momentum_falling:
             vol_regime = "🔴 패닉 변동성 (Panic Volatility)"
             vol_color  = "#dc3545"
-            vol_action = "곱버스 EXIT 검토 + 우량주 소량 선발대 진입 타이밍"
+            vol_action = "신규 곱버스 추격 금지. 기존 헷지 축소 조건과 현금 방어를 점검합니다."
             vol_details = [
                 f"실현변동성(HV20): {hv20:.1f}% — 역사적 상위 {(1-hv_pct)*100:.0f}%",
-                f"VKOSPI 구조: 백워데이션 (단기 {vk_ma5:.1f} > 장기 {vk_ma20:.1f}) — 공포 피크아웃 전형",
-                "👉 패닉 변동성은 보통 1~3일 이내 소멸. 곱버스 청산 후 현금 대기."
+                f"VKOSPI 모멘텀: 5일 평균 {vk_ma5:.1f} > 20일 평균 {vk_ma20:.1f} — 공포 확장 중",
+                "👉 이 값은 선물 만기구조(콘탱고/백워데이션)가 아니며, 단순 모멘텀으로만 해석합니다."
             ]
         elif hv_pct >= 0.75 and curr_atr_ratio >= 1.3:
             vol_regime = "🟠 추세 변동성 (Trending — 칼날 구간)"
@@ -2097,20 +2228,29 @@ with tab_hedging:
         elif hv_pct >= 0.60 and directional_ratio < 0.3:
             vol_regime = "🌊 휩쏘 변동성 (Whipsaw — 오르락내리락)"
             vol_color  = "#6f42c1"
-            vol_action = "모든 방향성 베팅 금지. 변동성 수확(Gamma Scalping 격) 전략 활성화."
+            vol_action = "신규 방향성 레버리지 금지. 현금 비중과 베타 노출만 재조정합니다."
             vol_details = [
                 f"실현변동성(HV20): {hv20:.1f}% — 높음 (상위 {(1-hv_pct)*100:.0f}%)",
                 f"방향성 비율: {directional_ratio:.2f} — 0.3 미만 (방향 없는 노이즈)",
-                "👉 ETF 리밸런싱, 고배당 Long/인버스 Short 마켓뉴트럴이 최적."
+                "👉 옵션·델타 데이터가 없으므로 Gamma Scalping 또는 시장중립이라고 표기하지 않습니다."
             ]
-        elif hv_pct <= 0.30 and vk_contango:
+        elif hv_pct >= 0.75:
+            vol_regime = "🟡 고변동성 반등/감속 (High-Vol Reversal)"
+            vol_color  = "#e0a800"
+            vol_action = "신규 레버리지 추격은 금지합니다. 기존 헷지는 과매도·수급 반전을 확인하며 분할 축소하고 현금을 유지합니다."
+            vol_details = [
+                f"실현변동성(HV20): {hv20:.1f}% — 역사적 {hv_pct*100:.0f}% 백분위",
+                f"VKOSPI 모멘텀: 5일 평균 {vk_ma5:.1f} < 20일 평균 {vk_ma20:.1f} — 공포 모멘텀 감속",
+                f"방향성 비율: {directional_ratio:.2f} — 고변동성은 남아 있어 정상 회복으로 보지 않음",
+            ]
+        elif hv_pct <= 0.30 and vk_momentum_falling:
             vol_regime = "😴 과도한 평온 (Quiet — 폭발 직전 주의)"
             vol_color  = "#17a2b8"
-            vol_action = "변동성 저점 매수 전략. 소량 VKOSPI 콜옵션 격(KODEX200 콜워런트) 대기."
+            vol_action = "변동성 압축 관찰. 방향 확인 전 레버리지 상품 진입은 보류합니다."
             vol_details = [
                 f"실현변동성(HV20): {hv20:.1f}% — 역사적 하위 {hv_pct*100:.0f}% (극단 저변동성)",
-                f"VKOSPI 구조: 콘탱고 ({vk_ma5:.1f} < {vk_ma20:.1f}) — 시장 과신 경보",
-                "👉 변동성 압축은 반드시 폭발을 동반. 포트 헷지 준비."
+                f"VKOSPI 모멘텀: 5일 평균 {vk_ma5:.1f} < 20일 평균 {vk_ma20:.1f}",
+                "👉 낮은 변동성이 향후 폭발을 보장하지는 않습니다. 추세 확인 후 대응합니다."
             ]
         else:
             vol_regime = "🟢 정상 회복 변동성 (Normal Recovery)"
@@ -2125,29 +2265,36 @@ with tab_hedging:
     # 🚨 인버스 매수 추천 스코어링
     inv_score = 0
     inv_details = []
-    
+
     internals = get_intraday_market_internals()
-    prog_net = internals.get("program_net", 0)
-    adr = internals.get("adr", 1.0)
-    
-    if internals.get("declining", 0) > 0 and adr <= 0.4:
+    prog_net = internals.get("program_net")
+    adr = internals.get("adr")
+
+    if adr is not None and adr <= 0.4:
         inv_score += 20
         inv_details.append(f"시장 Breadth (ADR) {adr:.2f}로 극심한 패닉 (+20점)")
-    elif internals.get("declining", 0) > 0 and adr <= 0.7:
+    elif adr is not None and adr <= 0.7:
         inv_score += 10
         inv_details.append(f"시장 Breadth (ADR) {adr:.2f}로 하락 종목 우위 (+10점)")
-        
-    if prog_net <= -300000:
+    else:
+        inv_details.append("시장 Breadth 데이터 없음/중립 (점수 제외)")
+
+    if prog_net is not None and prog_net <= -300000:
         inv_score += 20
         inv_details.append(f"프로그램 3,000억 이상 대규모 순매도 출회 (+20점)")
+    else:
+        inv_details.append("프로그램 순매매 데이터 미구현 (점수 제외)")
     
     f_fut = locals().get('foreign_futures', 0)
-    if f_fut <= -5000:
+    f_fut_signal = f_fut if futures_confirmed else None
+    if f_fut_signal is not None and f_fut_signal <= -5000:
         inv_score += 30
         inv_details.append("외국인 선물 5천계약 이상 초대량 순매도 (+30점)")
-    elif f_fut <= -2000:
+    elif f_fut_signal is not None and f_fut_signal <= -2000:
         inv_score += 15
         inv_details.append("외국인 선물 2천계약 이상 순매도 중 (+15점)")
+    elif f_fut_signal is None:
+        inv_details.append("외국인 선물 수급 미확인 (점수 제외)")
     else:
         inv_details.append("외국인 선물 매도 압력 낮음 (0점)")
         
@@ -2204,13 +2351,15 @@ with tab_hedging:
             exit_score += 20
             exit_details.append(f"⚠️ KOSPI RSI {curr_rsi:.1f} — 과매도 구간 진입. 인버스 분할 익절 시작 (+20)")
 
-    if f_fut >= 0:
+    if f_fut_signal is not None and f_fut_signal >= 0:
         exit_score += 25
         exit_details.append(f"외국인 선물 순매도 해소 → 하방 압력 소멸. 인버스 청산 신호 (+25)")
         exit_signals.append("🟢 외인 선물 전환")
-    elif f_fut >= -500:
+    elif f_fut_signal is not None and f_fut_signal >= -500:
         exit_score += 10
         exit_details.append(f"외국인 선물 매도 규모 급감 ({f_fut}계약) (+10)")
+    elif f_fut_signal is None:
+        exit_details.append("외국인 선물 수급 미확인 (청산 점수 제외)")
 
     if not vkospi_10y.empty:
         v_tail = vkospi_10y['Close'].tail(250)
@@ -2244,6 +2393,17 @@ with tab_hedging:
     else:
         exit_verdict = "⚫ 인버스 홀딩 유지 (청산 조건 미충족)"
         exit_color = "#6c757d"
+
+    hedge_decision = evaluate_hedge_state(
+        horizon_key=horizon_key,
+        position_status=position_status,
+        entry_score=inv_score,
+        exit_score=exit_score,
+        rsi=curr_rsi if has_tech else None,
+        foreign_futures=f_fut_signal,
+        holding_days=int(holding_days),
+        data_quality=hedge_data_quality,
+    )
 
     # 사전 계산: 볼린저 밴드 폭 (Strategy E용)
     bw = 100.0
@@ -2291,17 +2451,28 @@ with tab_hedging:
             "⑤ 현금 100% 대기",
         ],
         "상태": [
-            "🟢 활성" if inv_score >= 70 else ("🟡 준비" if inv_score >= 40 else "⛔ 비활성"),
-            "🟢 활성" if (has_spread_data and abs(curr_z) >= 2.3 and spread_adf.get('is_cointegrated', False)) else "⛔ 비활성",
-            "🟢 활성" if (not kospi_10y.empty and bw < 3.5) else "⛔ 비활성",
+            hedge_decision.headline,
+            "🟢 활성" if (
+                has_spread_data
+                and spread_adf.get("status") == "ok"
+                and abs(curr_z) >= 2.3
+                and spread_adf.get("is_cointegrated", False)
+            ) else "⛔ 비활성",
+            "🧪 연구용" if (not kospi_10y.empty and bw < 3.5) else "⛔ 비활성",
             "🟢 활성" if (curr_k <= curr_lower2 and curr_atr_ratio < 1.5) else ("🟡 준비" if curr_k <= curr_lower1 else "⛔ 비활성"),
-            "🟢 권장" if inv_score < 40 and abs(curr_z) < 2.0 else "⛔ 불필요",
+            "🟢 권장" if hedge_decision.action in {
+                "WAIT",
+                "WAIT_REVERSAL",
+                "BLOCK_DATA",
+                "BLOCK_PROXY_2X",
+                "REDUCE_BETA",
+            } else "🟡 병행",
         ],
         "예상 수익/리스크": [
-            f"단기 +3~8% / 손절 -2% (inv: {inv_score}점)",
-            f"중립 +1~3% / 공적분 붕괴 리스크 (Z: {curr_z:+.2f})",
-            f"배당 수익 +2~4%/yr / 추세장 리스크",
-            f"단기 +1~2% / 추세 역행 리스크",
+            f"{hedge_policy.label} / 최대 {hedge_policy.max_days}일 (진입: {inv_score}점)",
+            f"백테스트 확인 필요 / 공적분·모형 붕괴 위험 (Z: {curr_z:+.2f})",
+            "실제 베타·헤지비율 검증 전 실행 금지",
+            "백테스트 확인 필요 / 추세 역행 위험",
             "기회비용 / 자본 보존",
         ]
     }
@@ -2329,29 +2500,71 @@ with tab_hedging:
     st.markdown("### 🎯 오늘의 추천 트레이딩 (Daily Tactical Signal)")
     st.caption("시장 변동성과 지수 간 괴리율을 분석해 도출한 단 하루의 최적 헷징/트레이딩 제언입니다.")
 
-    trade_recommendation = "관망 및 대기 (현금 자산 보존)"
-    trade_reason = "변동성 지표(VKOSPI)와 수급 요인들이 임계치를 넘지 않았으며, 지수 괴리율(Z-Score) 또한 안정을 유지 중입니다."
-    trade_color = "#6c757d"
+    trade_recommendation = hedge_decision.headline
+    trade_reason = (
+        f"{hedge_decision.reason} 대상: {hedge_decision.product}. "
+        f"최대 보유기간은 {hedge_decision.max_holding_days}거래일입니다."
+    )
+    trade_color = {
+        "high": "#dc3545",
+        "medium": "#ffc107",
+        "low": "#6c757d",
+    }.get(hedge_decision.urgency, "#6c757d")
 
-    if inv_score >= 70:
-        trade_recommendation = "🚨 KODEX 200선물인버스2X (곱버스, 252670) 분할 매수 (종가 베팅)"
-        trade_reason = f"현재 인버스 매수 추천 스코어가 {inv_score}%로 매우 강력한 수준(매수 매력도 극대화)입니다. 외국인의 강한 선물 매도와 고환율, VKOSPI 급등이 동반되어 단기 추가 하락 확률이 매우 높습니다. 당일 종가 기준으로 곱버스를 분할 매수하여 하방 리스크를 헤지하십시오."
-        trade_color = "#dc3545"
-    elif has_tech and curr_atr_ratio >= 1.5:
-        trade_recommendation = "⚪ 관망 (시장 추세장 돌입으로 횡보/평균회귀 전략 비활성화)"
-        trade_reason = f"현재 코스피 ATR 변동성이 최근 20일 평균 대비 150% 이상({curr_atr_ratio*100:.1f}%) 폭발한 강한 추세장(Trend Market)입니다. 평균 회귀 전략이 크게 손실을 볼 수 있으므로 모든 헷징 포지션을 중단합니다."
+    if (
+        hedge_decision.action == "WAIT"
+        and has_tech
+        and curr_atr_ratio >= 1.5
+    ):
+        trade_recommendation = "⚪ 신규 방향성 헷지 보류 / 현금 베타 축소"
+        trade_reason = (
+            f"ATR이 최근 평균의 {curr_atr_ratio:.2f}배로 확대됐습니다. "
+            "휩쏘가 안정될 때까지 신규 레버리지보다 현금 비중 조절을 우선합니다."
+        )
         trade_color = "#6c757d"
-    elif has_spread_data and spread_adf.get("spread_adf_pvalue", 0) >= 0.05:
-        trade_recommendation = "⚪ 관망 (지수 간 Cointegration 붕괴로 평균회귀 비활성화)"
-        trade_reason = f"현재 코스피-코스닥 지수 비율의 ADF 검정 p-value가 {spread_adf.get('spread_adf_pvalue', 0):.3f}로 0.05를 초과하여 평균회귀 성질을 잃었습니다. 지수 스프레드 매매를 중단하십시오."
+    elif (
+        hedge_decision.action == "WAIT"
+        and has_spread_data
+        and spread_adf.get("status") != "ok"
+    ):
+        trade_recommendation = "⚪ 스프레드 전략 비활성 — 검정 데이터 확인 필요"
+        trade_reason = (
+            "공적분 검정이 정상 완료되지 않았습니다. "
+            f"상태: {spread_adf.get('status')} / 원인: {spread_adf.get('error', '알 수 없음')}"
+        )
         trade_color = "#6c757d"
-    elif has_spread_data and curr_z >= 2.3:
+    elif (
+        hedge_decision.action == "WAIT"
+        and has_spread_data
+        and spread_adf.get("status") == "ok"
+        and not spread_adf.get("is_cointegrated", False)
+    ):
+        pvalue = spread_adf.get("spread_adf_pvalue")
+        trade_recommendation = "⚪ 관망 (지수 간 공적분 붕괴로 평균회귀 비활성화)"
+        trade_reason = (
+            f"KOSPI200-KOSDAQ 로그가격 잔차의 ADF p-value가 {pvalue:.3f}로 "
+            "0.05를 초과했습니다. 스프레드 매매를 중단합니다."
+        )
+        trade_color = "#6c757d"
+    elif (
+        hedge_decision.action == "WAIT"
+        and has_spread_data
+        and spread_adf.get("status") == "ok"
+        and spread_adf.get("is_cointegrated", False)
+        and curr_z >= 2.3
+    ):
         trade_recommendation = "📊 코스닥 롱 / 코스피 숏 스프레드 매매 진입"
-        trade_reason = f"현재 KOSPI 200 지수가 KOSDAQ 대비 역사적 과열 상태(Z-Score: {curr_z:+.2f})입니다. Z-Score가 +0.5로 회귀할 때까지 유지하십시오."
+        trade_reason = f"공적분이 유효한 상태에서 KOSPI200 잔차 Z-Score가 {curr_z:+.2f}입니다. Z-Score가 +0.5로 회귀할 때 청산합니다."
         trade_color = "#17a2b8"
-    elif has_spread_data and curr_z <= -2.3:
+    elif (
+        hedge_decision.action == "WAIT"
+        and has_spread_data
+        and spread_adf.get("status") == "ok"
+        and spread_adf.get("is_cointegrated", False)
+        and curr_z <= -2.3
+    ):
         trade_recommendation = "📊 코스피 롱 / 코스닥 숏 스프레드 매매 진입"
-        trade_reason = f"현재 KOSDAQ 지수가 KOSPI 200 대비 극단적 고평가(Z-Score: {curr_z:+.2f})입니다. Z-Score가 -0.5로 회귀할 때 청산하십시오."
+        trade_reason = f"공적분이 유효한 상태에서 KOSPI200 잔차 Z-Score가 {curr_z:+.2f}입니다. Z-Score가 -0.5로 회귀할 때 청산합니다."
         trade_color = "#ffc107"
         
     st.markdown(f"""
@@ -2365,40 +2578,141 @@ with tab_hedging:
     """, unsafe_allow_html=True)
 
     # ════════════════════════════════════════════
-    # 🎲 포지션 사이저 (Strategy D)
+    # 🧮 베타 기반 포지션 사이저
     # ════════════════════════════════════════════
     st.divider()
-    st.markdown("### 🎲 포지션 사이저 (Kelly Criterion 기반)")
-    st.caption("감이 아닌 수학으로 최적 비중을 계산합니다. 과거 백테스트 승률과 손익비를 기반으로 현재 포지션에 투입할 최적 금액을 도출합니다.")
+    st.markdown("### 🧮 포트폴리오 베타 기반 헷지 규모")
+    st.caption("검증되지 않은 승률을 넣는 Kelly 방식 대신, 실제 주식 노출과 KOSPI200 베타를 기준으로 보호 규모를 계산합니다.")
 
-    col_k1, col_k2, col_k3 = st.columns(3)
-    total_asset = col_k1.number_input("💰 총 투자 자산 (만원)", value=5000, step=100)
-    win_rate_input = col_k2.number_input("📊 예상 승률 (%)", value=60, min_value=1, max_value=99, step=1, help="inv_score 70+ 구간 단기 승률 약 60~65%")
-    rr_ratio = col_k3.number_input("📈 손익비 (수익/손실 비율)", value=1.5, min_value=0.1, step=0.1, help="평균 수익 / 평균 손실")
+    size_col1, size_col2, size_col3, size_col4 = st.columns(4)
+    total_asset = size_col1.number_input("총 투자자산 (만원)", value=5000, min_value=0, step=100)
+    equity_weight_pct = size_col2.number_input("국내 주식 비중 (%)", value=70, min_value=0, max_value=100, step=5)
+    portfolio_beta = size_col3.number_input("KOSPI200 대비 베타", value=1.0, min_value=0.0, max_value=3.0, step=0.1)
+    target_coverage_pct = size_col4.number_input("목표 방어율 (%)", value=30, min_value=0, max_value=100, step=5)
 
-    W = win_rate_input / 100.0
-    L = 1.0 - W
-    R = rr_ratio
-    full_kelly = max(0, (W * R - L) / R if R > 0 else 0)
-    half_kelly = full_kelly / 2
-    safe_kelly = min(half_kelly, 0.20)
-    invest_amount = total_asset * safe_kelly
-    loss_limit = invest_amount * (1 / R) if R > 0 else 0
+    hedge_size = calculate_beta_hedge_size(
+        total_assets=total_asset,
+        equity_weight=equity_weight_pct / 100,
+        portfolio_beta=portfolio_beta,
+        target_coverage=target_coverage_pct / 100,
+        horizon_key=horizon_key,
+    )
+    size_metrics = st.columns(4)
+    size_metrics[0].metric("베타 조정 주식 노출", f"{hedge_size['beta_exposure']:,.0f}만원")
+    size_metrics[1].metric("목표 헷지 명목", f"{hedge_size['target_notional']:,.0f}만원")
+    size_metrics[2].metric("정책상 실제 투입", f"{hedge_size['recommended_allocation']:,.0f}만원")
+    size_metrics[3].metric("예상 방어율", f"{hedge_size['achieved_coverage'] * 100:.1f}%")
 
-    k_cols = st.columns(3)
-    k_cols[0].metric("Full Kelly 비중", f"{full_kelly*100:.1f}%")
-    k_cols[1].metric("Half Kelly 비중 (권장)", f"{half_kelly*100:.1f}%")
-    k_cols[2].metric("안전 적용 비중 (20% 캡)", f"{safe_kelly*100:.1f}%", f"투입액: {invest_amount:,.0f}만원")
+    if hedge_size["raw_allocation"] > hedge_size["policy_cap"]:
+        st.warning(
+            f"목표 방어율을 그대로 맞추려면 {hedge_size['raw_allocation']:,.0f}만원이 필요하지만, "
+            f"{hedge_policy.label}의 위험 한도는 {hedge_size['policy_cap']:,.0f}만원입니다. "
+            "부족한 방어는 레버리지 확대가 아니라 국내 주식 비중 축소·현금화로 보완하세요."
+        )
+    else:
+        st.info(
+            f"**계산 결과:** {hedge_decision.headline}일 때 최대 "
+            f"**{hedge_size['recommended_allocation']:,.0f}만원**까지 검토합니다. "
+            "신규 진입 신호라면 절반만 1차 집행하고 다음 거래일에 재평가합니다."
+        )
 
-    st.info(f"""
-    **📌 현재 추천 포지션 사이즈**
-    - 총 자산 {total_asset:,}만원 중 **{safe_kelly*100:.1f}% = {invest_amount:,.0f}만원** 인버스 진입
-    - 손절 기준: **-{loss_limit:,.0f}만원** 손실 시 즉시 청산 (1R 손실)
-    - 목표 수익: **+{invest_amount * (R):,.0f}만원** (손익비 {R}배 달성 시)
-    """)
+    # ════════════════════════════════════════════
+    # 🧪 실제 ETF 기반 헷지 백테스트
+    # ════════════════════════════════════════════
+    st.divider()
+    st.markdown("### 🧪 보유기간별 실제 인버스 ETF 백테스트")
+    st.caption(
+        "당일 종가로 신호를 만든 뒤 다음 거래일 시가에 체결하는 것으로 가정합니다. "
+        "252670·114800의 실제 가격과 거래비용을 사용하며, 미래 데이터는 신호 계산에 쓰지 않습니다."
+    )
+    transaction_cost_bps = st.number_input(
+        "편도 거래비용·슬리피지 (bp)",
+        value=15.0,
+        min_value=0.0,
+        max_value=100.0,
+        step=5.0,
+    )
+    inverse1x_10y = macro_charts.get("inverse1x_10y", pd.DataFrame())
+    inverse2x_10y = macro_charts.get("inverse2x_10y", pd.DataFrame())
+    hedge_backtests = {}
+    comparison_rows = []
+    for policy_key, policy in HEDGE_HORIZONS.items():
+        result = run_hedge_backtest(
+            kospi_hist=kospi_10y,
+            vkospi_hist=vkospi_10y,
+            usdkrw_hist=usd_krw,
+            inverse1x_hist=inverse1x_10y,
+            inverse2x_hist=inverse2x_10y,
+            horizon_key=policy_key,
+            transaction_cost_bps=transaction_cost_bps,
+        )
+        hedge_backtests[policy_key] = result
+        if result.get("status") == "ok":
+            metrics = result["metrics"]
+            comparison_rows.append(
+                {
+                    "기간 정책": policy.label,
+                    "사용 상품": policy.product,
+                    "거래 수": metrics["trades"],
+                    "승률": f"{metrics['win_rate']:.1f}%",
+                    "평균 거래": f"{metrics['avg_trade_return']:+.2f}%",
+                    "평균 보유": f"{metrics['avg_holding_days']:.1f}일",
+                    "무헷지 MDD": f"{metrics['unhedged_mdd']:.1f}%",
+                    "헷지 MDD": f"{metrics['hedged_mdd']:.1f}%",
+                    "MDD 개선": f"{metrics['mdd_improvement']:+.1f}%p",
+                }
+            )
 
-    with st.expander("❓ [질문 가이드] 바닥확률(98%)인데 인버스 추천(70%)이 뜨는 이유는?"):
-        st.markdown("거시적 진바닥(월간 관점)과 단기 하락 모멘텀(일간 투매)이 겹치는 구간이기 때문입니다.")
+    if comparison_rows:
+        st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
+        valid_candidates = [
+            (policy_key, result)
+            for policy_key, result in hedge_backtests.items()
+            if result.get("status") == "ok"
+            and result["metrics"]["avg_trade_return"] > 0
+            and result["metrics"]["profit_factor"] > 1
+            and result["metrics"]["mdd_improvement"] > 0
+        ]
+        if valid_candidates:
+            best_key, best_result = max(
+                valid_candidates,
+                key=lambda item: item[1]["metrics"]["mdd_improvement"],
+            )
+            best_metrics = best_result["metrics"]
+            st.success(
+                f"**현재 백데이터 연구 우선순위:** {HEDGE_HORIZONS[best_key].label} · "
+                f"평균 거래 {best_metrics['avg_trade_return']:+.2f}% · "
+                f"Profit Factor {best_metrics['profit_factor']:.2f} · "
+                f"MDD 개선 {best_metrics['mdd_improvement']:+.1f}%p. "
+                "동일 데이터에서 만든 규칙이므로 실전 확정 신호가 아니라 추가 검증 후보입니다."
+            )
+        else:
+            st.warning(
+                "양(+)의 평균 거래수익·Profit Factor 1 초과·MDD 개선을 동시에 충족한 기간 정책이 없습니다. "
+                "현재 규칙으로는 인버스 진입을 활성화하지 않는 편이 낫습니다."
+            )
+        selected_backtest = hedge_backtests.get(horizon_key, {})
+        if selected_backtest.get("status") == "ok":
+            selected_curve = selected_backtest["equity_curve"][["무헷지", "헷지 적용"]]
+            st.line_chart(selected_curve, height=300)
+            selected_metrics = selected_backtest["metrics"]
+            bt_metrics = st.columns(4)
+            bt_metrics[0].metric("거래 수", f"{selected_metrics['trades']}회")
+            bt_metrics[1].metric("승률", f"{selected_metrics['win_rate']:.1f}%")
+            bt_metrics[2].metric("최악 거래", f"{selected_metrics['worst_trade_return']:.2f}%")
+            bt_metrics[3].metric("MDD 개선", f"{selected_metrics['mdd_improvement']:+.1f}%p")
+    else:
+        messages = sorted({
+            result.get("message", "백테스트 데이터 부족")
+            for result in hedge_backtests.values()
+        })
+        st.warning(" / ".join(messages))
+
+    with st.expander("왜 바닥 점수와 인버스 점수가 동시에 높을 수 있나요?"):
+        st.markdown(
+            "바닥 점수는 3~6개월 장기 축적 관점이고, 인버스 점수는 1~10거래일의 하락 방어 관점입니다. "
+            "이번 업그레이드는 두 시간축을 분리하고, 극단적 과매도에서는 신규 인버스 추격을 차단합니다."
+        )
 
     st.divider()
     
@@ -2406,31 +2720,35 @@ with tab_hedging:
     st.markdown("### 🚨 곱버스/인버스 동적 진입 & 청산 엔진")
     col_in, col_out = st.columns(2)
     with col_in:
-        if inv_score >= 70:
-            inv_verdict = "🚨 종가 분할매수 적극 고려"
-            inv_color = "#dc3545"
-        elif inv_score >= 40:
-            inv_verdict = "🟡 헷징 포지션 준비 (분할 진입 검토)"
-            inv_color = "#ffc107"
-        else:
-            inv_verdict = "🟢 대기 / 현금 방어 (매수 보류)"
-            inv_color = "#28a745"
-            
+        inv_verdict = hedge_decision.headline
+        inv_color = {
+            "high": "#dc3545",
+            "medium": "#ffc107",
+            "low": "#28a745",
+        }.get(hedge_decision.urgency, "#6c757d")
+
         st.markdown(f"""
         <div style='background-color:#f8f9fa; padding:15px; border-radius:10px; border-left: 6px solid {inv_color}; height:100%;'>
-            <h5 style='margin-top:0;'>진입 엔진 (점수: <span style='color:{inv_color};'>{inv_score}%</span>)</h5>
+            <h5 style='margin-top:0;'>기간·포지션 통합 엔진 (진입 점수: <span style='color:{inv_color};'>{inv_score}%</span>)</h5>
             <p style='font-weight:bold; color:{inv_color};'>{inv_verdict}</p>
+            <p style='font-size:0.9em; color:#555;'>{hedge_decision.reason}</p>
             <ul style='font-size:0.9em; color:#666;'>
                 {"".join([f"<li>{d}</li>" for d in inv_details])}
             </ul>
         </div>
         """, unsafe_allow_html=True)
-        
+
     with col_out:
+        if position_status == "none":
+            exit_display_verdict = "보유 포지션 없음 — 청산 신호는 참고용"
+            exit_display_color = "#6c757d"
+        else:
+            exit_display_verdict = exit_verdict
+            exit_display_color = exit_color
         st.markdown(f"""
-        <div style='background-color:#f8f9fa; padding:15px; border-radius:10px; border-left: 6px solid {exit_color}; height:100%;'>
-            <h5 style='margin-top:0;'>청산(EXIT) 엔진 (점수: <span style='color:{exit_color};'>{exit_score}%</span>)</h5>
-            <p style='font-weight:bold; color:{exit_color};'>{exit_verdict}</p>
+        <div style='background-color:#f8f9fa; padding:15px; border-radius:10px; border-left: 6px solid {exit_display_color}; height:100%;'>
+            <h5 style='margin-top:0;'>청산(EXIT) 엔진 (점수: <span style='color:{exit_display_color};'>{exit_score}%</span>)</h5>
+            <p style='font-weight:bold; color:{exit_display_color};'>{exit_display_verdict}</p>
             <ul style='font-size:0.9em; color:#666;'>
                 {"".join([f"<li>{d}</li>" for d in exit_details])}
             </ul>
@@ -2439,9 +2757,15 @@ with tab_hedging:
 
     st.divider()
 
-    st.markdown("### 1. 📊 코스피200 vs 코스닥 스프레드 상세 분석")
+    st.markdown("### 1. 📊 코스피200 vs 코스닥 공적분 잔차 분석")
     if has_spread_data:
-        if curr_z >= 2.2:
+        if spread_adf.get("status") != "ok":
+            spread_verdict = "⚪ 공적분 검정 불가 — 전략 비활성"
+            spread_color = "#6c757d"
+        elif not spread_adf.get("is_cointegrated", False):
+            spread_verdict = "⚪ 공적분 관계 없음 — 평균회귀 전략 비활성"
+            spread_color = "#6c757d"
+        elif curr_z >= 2.2:
             spread_verdict = "🔴 KOSPI 200 극단 고평가 / KOSDAQ 과매도 (Z >= 2.2)"
             spread_color = "#dc3545"
         elif curr_z <= -2.2:
@@ -2450,9 +2774,22 @@ with tab_hedging:
         else:
             spread_verdict = "⚪ 정상 변동 범위 내 (평균 회귀 대기)"
             spread_color = "#6c757d"
-        st.markdown(f"**현재 Z-Score**: <span style='color:{spread_color}; font-weight:bold; font-size:1.1em;'>{curr_z:+.2f}</span> (진입 임계치: ±2.2)", unsafe_allow_html=True)
-        z_df = pd.DataFrame({"Z-Score (KOSPI200/KOSDAQ 비율)": combined["Z_Score"].tail(60)})
-        st.line_chart(z_df)
+        spread_status_text = (
+            f"ADF p={spread_adf['spread_adf_pvalue']:.3f}, "
+            f"헤지비율 β={spread_adf['hedge_ratio']:.3f}"
+            if spread_adf.get("status") == "ok"
+            else f"검정 불가: {spread_adf.get('status')} ({spread_adf.get('error', '')})"
+        )
+        st.markdown(
+            f"**현재 잔차 Z-Score**: <span style='color:{spread_color}; font-weight:bold; font-size:1.1em;'>{curr_z:+.2f}</span> "
+            f"(진입 임계치: ±2.2) · {spread_status_text}",
+            unsafe_allow_html=True,
+        )
+        st.markdown(f"**판정:** {spread_verdict}")
+        if spread_adf.get("status") == "ok":
+            z_column = "Residual_Z" if "Residual_Z" in combined.columns else "Z_Score"
+            z_df = pd.DataFrame({"공적분 잔차 Z-Score": combined[z_column].tail(60)})
+            st.line_chart(z_df)
     else:
         st.info("지수 데이터를 로드할 수 없습니다.")
 
@@ -2460,13 +2797,16 @@ with tab_hedging:
     
     st.markdown("### 2-1. ⚖️ 횡보장 전용 마켓 뉴트럴 (Market Neutral)")
     with st.expander("💡 [필독] 마켓 뉴트럴(시장 중립) 전략이란?"):
-        st.markdown("박스권에서 고배당 ETF(Long) + 인버스(Short) 1:1 매칭으로 알파 추구.")
+        st.markdown(
+            "고배당 ETF(Long)와 인버스(Short)를 단순 1:1로 섞는다고 시장중립이 되지는 않습니다. "
+            "두 자산의 rolling beta와 실제 헤지비율을 계산해 순베타가 0에 가까운지 검증해야 합니다."
+        )
     
     if not kospi_10y.empty:
         if bw < 3.5:
-            mn_status = f"🟢 횡보장 진입 (볼린저 밴드폭 {bw:.1f}%)"
-            mn_action = "👉 팩터 롱/숏 (고배당 Long + 인버스 Short) 진입 최적기!"
-            mn_color = "#28a745"
+            mn_status = f"🧪 횡보장 후보 (볼린저 밴드폭 {bw:.1f}%)"
+            mn_action = "👉 베타·공적분·거래비용 백테스트 전에는 연구용으로만 표시합니다."
+            mn_color = "#17a2b8"
         else:
             mn_status = f"⚫ 추세장 진행 중 (볼린저 밴드폭 {bw:.1f}%)"
             mn_action = "👉 지수의 변동성이 살아있으므로 마켓 뉴트럴 전략은 관망합니다."

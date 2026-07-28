@@ -238,6 +238,8 @@ def get_macro_charts():
         "irx_10y": "^IRX",     # 🆕 미국 단기금리(3개월물) — 장단기 스프레드 계산용
         "mu_2y": "MU",         # 🆕 마이크론(DRAM 업황 프록시) — 반도체 선행 지표
         "soxx_2y": "SOXX",     # 🆕 반도체 ETF (SOX 지수) — MU 상대 강도 비교 기준
+        "inverse1x_10y": "114800.KS",  # KODEX 인버스 — 단기/중단기 헷지 백테스트
+        "inverse2x_10y": "252670.KS",  # KODEX 200선물인버스2X — 초단기 헷지 백테스트
     }
     def fetch_macro(k, v):
         try:
