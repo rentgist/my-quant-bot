@@ -11,5 +11,6 @@ requests-cache
 google-generativeai
 google-genai
 pykrx
+statsmodels
 
 python-dotenv
