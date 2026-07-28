@@ -11,8 +11,11 @@ import altair as alt
 from config import get_kst_now
 from hedging import (
     HEDGE_HORIZONS,
+    build_daily_hedge_features,
+    build_plain_action_plan,
     calculate_beta_hedge_size,
     evaluate_hedge_state,
+    optimize_hedge_parameters,
     run_hedge_backtest,
 )
 from data_loader import (
@@ -222,6 +225,29 @@ def get_daily_spread_adf(kospi_df, kosdaq_df):
         res["status"] = "error"
         res["error"] = str(exc)
     return res
+
+
+@st.cache_data(ttl=3600)
+def get_hedge_optimization(
+    kospi_hist,
+    vkospi_hist,
+    usdkrw_hist,
+    inverse1x_hist,
+    inverse2x_hist,
+    horizon_key,
+    transaction_cost_bps,
+):
+    """Cache chronological parameter selection for the hedge dashboard."""
+    return optimize_hedge_parameters(
+        kospi_hist=kospi_hist,
+        vkospi_hist=vkospi_hist,
+        usdkrw_hist=usdkrw_hist,
+        inverse1x_hist=inverse1x_hist,
+        inverse2x_hist=inverse2x_hist,
+        horizon_key=horizon_key,
+        transaction_cost_bps=transaction_cost_bps,
+    )
+
 
 @st.cache_data(ttl=86400)
 def get_daily_multi_pairs():
@@ -2043,35 +2069,72 @@ with tab_calendar:
 
 
 with tab_hedging:
-    st.subheader("🛡️ 한국 시장 단기/스윙 헷징 통제실 (Hedge Fund Style)")
-    st.caption("한국 시장의 높은 변동성과 수급 쏠림 현상을 역이용하여 리스크를 상쇄(Hedging)하는 통제실입니다.")
+    st.subheader("🛡️ 오늘의 헷징 행동판")
+    st.caption("복잡한 지표보다 먼저, 오늘 할 일과 금액·보유기간·과거 결과를 보여드립니다.")
 
-    st.markdown("### 0. 운용 기간과 현재 포지션")
-    horizon_col, position_col, days_col = st.columns(3)
+    quick_action_panel = st.container()
+    simple_performance_panel = st.container()
+
+    st.markdown("### 3. 내 상황을 바꾸려면 여기서 선택하세요")
+    horizon_col, position_col, days_col, holding_amount_col = st.columns(4)
+    horizon_labels = {
+        "tactical": "오늘~3일만 방어",
+        "short": "약 1~2주 방어",
+        "defensive": "약 1~3개월 위험 줄이기",
+    }
     horizon_key = horizon_col.selectbox(
-        "헷징 운용 기간",
+        "얼마나 방어할까요?",
         options=list(HEDGE_HORIZONS.keys()),
-        format_func=lambda key: HEDGE_HORIZONS[key].label,
-        help="2배 인버스는 초단기(1~3거래일)에만 허용됩니다.",
+        format_func=lambda key: horizon_labels[key],
+        help="2배 인버스는 하루 수익률을 -2배로 따라가므로 오늘~3일 구간에서만 검토합니다.",
     )
     position_labels = {
-        "none": "보유 인버스 없음",
-        "inverse1x": "1배 인버스 보유",
-        "inverse2x": "2배 인버스 보유",
+        "none": "아니요, 없습니다",
+        "inverse1x": "네, 1배 인버스",
+        "inverse2x": "네, 2배 인버스",
     }
     position_status = position_col.selectbox(
-        "현재 헷지 포지션",
+        "지금 인버스가 있나요?",
         options=list(position_labels.keys()),
         format_func=lambda key: position_labels[key],
     )
     holding_days = days_col.number_input(
-        "현재 포지션 보유일",
+        "며칠째 보유 중인가요?",
         min_value=0,
         max_value=120,
         value=0,
         step=1,
         disabled=position_status == "none",
     )
+    current_hedge_amount = holding_amount_col.number_input(
+        "현재 보유금액 (만원)",
+        min_value=0,
+        value=0,
+        step=50,
+        disabled=position_status == "none",
+    )
+
+    account_col1, account_col2 = st.columns(2)
+    total_asset = account_col1.number_input(
+        "총 투자자산 (만원)",
+        value=5000,
+        min_value=0,
+        step=100,
+    )
+    equity_amount = account_col2.number_input(
+        "그중 국내 주식 금액 (만원)",
+        value=3500,
+        min_value=0,
+        step=100,
+    )
+    equity_weight_pct = (
+        min(float(equity_amount) / float(total_asset) * 100, 100)
+        if total_asset > 0
+        else 0.0
+    )
+    if equity_amount > total_asset and total_asset > 0:
+        st.warning("국내 주식 금액이 총 투자자산보다 큽니다. 계산에서는 총 투자자산까지만 반영합니다.")
+
     hedge_policy = HEDGE_HORIZONS[horizon_key]
     vkospi_source = macro_charts.get("vkospi_source", "없음")
     hedge_data_quality = (
@@ -2081,27 +2144,55 @@ with tab_hedging:
         if "프록시" in vkospi_source
         else "live"
     )
-    st.info(
-        f"**선택 정책:** {hedge_policy.description}  \n"
-        f"상품: **{hedge_policy.product}** · 최대 보유: **{hedge_policy.max_days}거래일** · "
-        f"정책상 최대 투입: **총자산의 {hedge_policy.max_allocation * 100:.0f}%**  \n"
-        f"VKOSPI 데이터: `{vkospi_source}`"
-    )
 
-    # 외국인 선물 입력창 (헷징 탭 전용 동기화 위젯)
-    st.session_state['hedging_futures'] = st.session_state['foreign_futures']
-    foreign_futures_hedging = st.number_input(
-        "⚡ 실시간 외국인 선물 순매수 계약 (여기에 바로 입력하셔도 1번 탭과 자동 동기화됩니다)",
-        step=100,
-        key="hedging_futures",
-        on_change=sync_futures_hedging
-    )
-    futures_confirmed = st.checkbox(
-        "오늘 최신 외국인 선물 수급값임을 확인",
-        value=False,
-        help="체크하지 않으면 이 값은 진입·청산 점수에서 제외됩니다.",
-    )
-    st.caption("외국인 선물 수급은 현재 수동 입력값입니다. 최신 값 확인 전에는 신규 레버리지 판단에 사용하지 않습니다.")
+    default_coverage = {"tactical": 20, "short": 25, "defensive": 30}[horizon_key]
+    with st.expander("선택 입력 · 잘 모르겠으면 기본값 그대로 두세요"):
+        advanced_col1, advanced_col2, advanced_col3 = st.columns(3)
+        portfolio_beta = advanced_col1.number_input(
+            "시장 민감도",
+            value=1.0,
+            min_value=0.0,
+            max_value=3.0,
+            step=0.1,
+            help="잘 모르겠으면 1.0을 사용하세요. 1.0은 KOSPI200과 비슷하게 움직인다는 뜻입니다.",
+        )
+        target_coverage_pct = advanced_col2.number_input(
+            "줄이고 싶은 하락 위험 (%)",
+            value=default_coverage,
+            min_value=0,
+            max_value=100,
+            step=5,
+        )
+        transaction_cost_bps = advanced_col3.number_input(
+            "왕복 비용 가정 (0.01% 단위)",
+            value=30.0,
+            min_value=0.0,
+            max_value=200.0,
+            step=10.0,
+            help="기본 30은 매수 0.15% + 매도 0.15%를 뜻합니다.",
+        ) / 2
+
+        st.session_state["hedging_futures"] = st.session_state["foreign_futures"]
+        foreign_futures_hedging = st.number_input(
+            "오늘 외국인 선물 순매수 계약",
+            step=100,
+            key="hedging_futures",
+            on_change=sync_futures_hedging,
+            help="모르면 0을 그대로 두고 아래 확인란을 체크하지 마세요.",
+        )
+        futures_confirmed = st.checkbox(
+            "이 숫자가 오늘 최신값임을 직접 확인했습니다",
+            value=False,
+        )
+
+    with st.expander("선택한 방어 방식의 기준 보기"):
+        st.markdown(
+            f"- 사용 수단: **{hedge_policy.product}**\n"
+            f"- 기본 최대 보유: **{hedge_policy.max_days}거래일**\n"
+            f"- 최대 투입 한도: **총자산의 {hedge_policy.max_allocation * 100:.0f}%**\n"
+            f"- 변동성 데이터: `{vkospi_source}`"
+        )
+
     # 로컬 변수로 바인딩하여 아래 연산에 반영
     foreign_futures = st.session_state['foreign_futures']
 
@@ -2384,10 +2475,62 @@ with tab_hedging:
         exit_details.append(f"미국 진바닥 확률 {us_score}% — 글로벌 동반 반등 가능성. 곱버스 청산 고려 (+15)")
 
     exit_score = min(exit_score, 100)
-    if exit_score >= 60:
+
+    # 라이브 점수와 백테스트 점수를 같은 공식으로 맞춘다.
+    # 수동 입력 수급은 점수 최적화에 섞지 않고, 안전 차단 조건으로만 사용한다.
+    historical_signal_features = build_daily_hedge_features(
+        kospi_10y,
+        vkospi_10y,
+        usd_krw,
+    )
+    if not historical_signal_features.empty:
+        latest_signal = historical_signal_features.iloc[-1]
+        inv_score = int(round(float(latest_signal["EntryScore"])))
+        exit_score = int(round(float(latest_signal["ExitScore"])))
+        curr_rsi = float(latest_signal["RSI"])
+        inv_details = [
+            f"최근 5일 KOSPI 변화: {latest_signal['RET5']:+.1f}%",
+            f"KOSPI가 5일 평균보다 {'낮음' if latest_signal['KOSPI'] < latest_signal['MA5'] else '높음'}",
+            f"최근 1년 변동성 위치: 상위 {(1-latest_signal['VK_RANK252'])*100:.0f}%",
+            f"원/달러 위험 수준: {latest_signal['USDKRW_Z60']:+.1f}",
+        ]
+        exit_details = [
+            f"KOSPI 과매도 정도(RSI): {curr_rsi:.1f}",
+            f"공포지수 5일 고점 대비 변화: {(latest_signal['VKOSPI'] / latest_signal['VK_5D_HIGH'] - 1) * 100:+.1f}%",
+            f"원/달러 최근 5일 변화: {latest_signal['USDKRW_RET5']:+.1f}%",
+        ]
+
+    inverse1x_10y = macro_charts.get("inverse1x_10y", pd.DataFrame())
+    inverse2x_10y = macro_charts.get("inverse2x_10y", pd.DataFrame())
+    hedge_optimization = get_hedge_optimization(
+        kospi_10y,
+        vkospi_10y,
+        usd_krw,
+        inverse1x_10y,
+        inverse2x_10y,
+        horizon_key,
+        transaction_cost_bps,
+    )
+    optimized_parameters = hedge_optimization.get("best_parameters", {})
+    optimized_entry_threshold = float(
+        optimized_parameters.get("entry_threshold", hedge_policy.entry_threshold)
+    )
+    optimized_exit_threshold = float(
+        optimized_parameters.get("exit_threshold", 35)
+    )
+    optimized_max_days = int(
+        optimized_parameters.get("max_holding_days", hedge_policy.max_days)
+    )
+    validation_passed = bool(
+        hedge_optimization.get("status") == "ok"
+        and hedge_optimization.get("passed", False)
+    )
+
+    optimized_full_exit_threshold = min(optimized_exit_threshold + 25, 70)
+    if exit_score >= optimized_full_exit_threshold:
         exit_verdict = "🚨 인버스 즉시 청산 (익절) 강력 권고"
         exit_color = "#28a745"
-    elif exit_score >= 35:
+    elif exit_score >= optimized_exit_threshold:
         exit_verdict = "⚠️ 인버스 분할 익절 시작 (50% 청산 후 대기)"
         exit_color = "#ffc107"
     else:
@@ -2403,7 +2546,137 @@ with tab_hedging:
         foreign_futures=f_fut_signal,
         holding_days=int(holding_days),
         data_quality=hedge_data_quality,
+        entry_threshold=optimized_entry_threshold,
+        exit_threshold=optimized_exit_threshold,
+        max_holding_days=optimized_max_days,
+        validation_passed=validation_passed,
     )
+
+    hedge_size = calculate_beta_hedge_size(
+        total_assets=total_asset,
+        equity_weight=equity_weight_pct / 100,
+        portfolio_beta=portfolio_beta,
+        target_coverage=target_coverage_pct / 100,
+        horizon_key=horizon_key,
+    )
+    plain_action = build_plain_action_plan(
+        decision=hedge_decision,
+        position_status=position_status,
+        holding_amount=current_hedge_amount,
+        recommended_allocation=hedge_size["recommended_allocation"],
+        policy_cap=hedge_size["policy_cap"],
+        entry_score=inv_score,
+        entry_threshold=optimized_entry_threshold,
+        exit_score=exit_score,
+        exit_threshold=optimized_exit_threshold,
+    )
+
+    action_color = {
+        "ENTER_PARTIAL": "#d97706",
+        "REDUCE_BETA": "#d97706",
+        "REDUCE": "#d97706",
+        "EXIT": "#dc2626",
+        "EXIT_TIME": "#dc2626",
+        "EXIT_2X_HORIZON": "#dc2626",
+        "HOLD": "#2563eb",
+    }.get(hedge_decision.action, "#475569")
+    with quick_action_panel:
+        st.markdown("### 1. 오늘 해야 할 일")
+        st.markdown(
+            f"""
+            <div style="background:#ffffff; border:2px solid {action_color}; border-radius:14px;
+                        padding:22px; margin:8px 0 14px 0;">
+                <div style="font-size:0.9rem; color:#64748b; margin-bottom:6px;">오늘의 결론</div>
+                <div style="font-size:1.55rem; line-height:1.35; font-weight:800; color:{action_color};">
+                    {plain_action['title']}
+                </div>
+                <div style="margin-top:14px; font-size:1.05rem; color:#0f172a;">
+                    <b>{plain_action['amount_label']}:</b> {plain_action['amount_value']}
+                    &nbsp;·&nbsp; <b>다시 확인:</b> {plain_action['next_check']}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        action_cols = st.columns(3)
+        action_cols[0].metric(
+            plain_action["amount_label"],
+            plain_action["amount_value"],
+        )
+        action_cols[1].metric(
+            "사용 수단",
+            "현금·주식 축소"
+            if hedge_decision.action == "REDUCE_BETA"
+            else "현금 유지"
+            if position_status == "none" and not hedge_decision.allow_new_entry
+            else hedge_decision.product.split(" (")[0],
+        )
+        action_cols[2].metric(
+            "최대 보유",
+            f"{hedge_decision.max_holding_days}거래일",
+        )
+        st.markdown(
+            "\n".join(
+                f"{idx}. {step}"
+                for idx, step in enumerate(plain_action["steps"], start=1)
+            )
+        )
+        st.caption(
+            f"현재 하락방어 신호 {inv_score:.0f}/{optimized_entry_threshold:.0f}점 · "
+            f"줄이기 신호 {exit_score:.0f}/{optimized_exit_threshold:.0f}점"
+        )
+
+    with simple_performance_panel:
+        st.markdown("### 2. 과거에는 얼마나 맞았나요?")
+        if hedge_optimization.get("status") == "ok":
+            holdout_metrics = hedge_optimization["holdout_metrics"]
+            signal_count = int(holdout_metrics["trades"])
+            reliability = (
+                "보통"
+                if signal_count >= 20
+                else "낮음"
+                if signal_count >= 10
+                else "매우 낮음"
+            )
+            performance_cols = st.columns(5)
+            performance_cols[0].metric(
+                "맞은 비율",
+                f"{holdout_metrics['win_rate']:.1f}%",
+                help="인버스 거래가 비용 차감 후 플러스였던 비율입니다.",
+            )
+            performance_cols[1].metric(
+                "한 번당 평균",
+                f"{holdout_metrics['avg_trade_return']:+.2f}%",
+            )
+            performance_cols[2].metric(
+                "가장 나빴던 한 번",
+                f"{holdout_metrics['worst_trade_return']:.2f}%",
+            )
+            performance_cols[3].metric("검증 신호", f"{signal_count}회")
+            performance_cols[4].metric("신뢰도", reliability)
+            st.caption(
+                f"적용 기준: 하락방어 {optimized_entry_threshold:.0f}점 · "
+                f"줄이기 {optimized_exit_threshold:.0f}점 · 최대 {optimized_max_days}거래일. "
+                f"과거 앞 70%에서 기준을 선택하고 최근 30%({hedge_optimization['holdout_start']} 이후)는 "
+                "기준 선택에 사용하지 않은 채 따로 확인했습니다."
+            )
+
+            if hedge_optimization.get("passed"):
+                st.success(
+                    f"과거 앞부분으로 기준을 정한 뒤, 이후 {hedge_optimization['holdout_start']}부터 "
+                    "따로 확인한 구간에서도 평균수익·손실방어 조건을 통과했습니다. "
+                    "다만 표본이 적으면 실제 결과는 크게 달라질 수 있습니다."
+                )
+            else:
+                st.warning(
+                    "최근 검증 구간에서 평균수익·손실방어 조건을 함께 통과하지 못했습니다. "
+                    "따라서 현재 화면은 인버스 매수보다 현금 확보를 우선합니다."
+                )
+        else:
+            st.warning(
+                "과거 검증에 필요한 데이터나 신호 횟수가 부족합니다. "
+                "검증되지 않은 인버스 신규 매수는 실행하지 않습니다."
+            )
 
     # 사전 계산: 볼린저 밴드 폭 (Strategy E용)
     bw = 100.0
@@ -2438,10 +2711,6 @@ with tab_hedging:
     # ════════════════════════════════════════════
     # 🗺️ 헷징 전략 통합 매트릭스 (Strategy E)
     # ════════════════════════════════════════════
-    st.divider()
-    st.markdown("### 🗺️ 헷징 전략 통합 매트릭스")
-    st.caption("현재 시장 상황에서 활성화해야 할 헷징 전략을 한눈에 확인합니다.")
-
     matrix_data = {
         "전략": [
             "① 곱버스(인버스) 매수",
@@ -2476,30 +2745,29 @@ with tab_hedging:
             "기회비용 / 자본 보존",
         ]
     }
-    st.dataframe(pd.DataFrame(matrix_data).set_index("전략"), use_container_width=True)
+    with st.expander("전문가용 · 다른 헷징 전략과 비교"):
+        st.dataframe(
+            pd.DataFrame(matrix_data).set_index("전략"),
+            width="stretch",
+        )
 
     # ════════════════════════════════════════════
     # 📊 변동성 레짐 정밀 분류기 UI (Strategy B)
     # ════════════════════════════════════════════
-    st.markdown("### 📊 변동성 레짐 정밀 분류기")
-    st.markdown(f"""
-    <div style='background-color:#f8f9fa; padding:20px; border-radius:10px; border-left: 8px solid {vol_color}; margin-bottom:20px;'>
-        <h4 style='margin-top:0; color:#333;'>상태: <span style='color:{vol_color}; font-weight:bold;'>{vol_regime}</span></h4>
-        <p style='font-size:1.05em; color:#444; line-height:1.6; margin-bottom:10px;'>
-        <b>대응 액션</b>: {vol_action}
-        </p>
-        <ul style='font-size:0.95em; color:#666;'>
-            {"".join([f"<li>{d}</li>" for d in vol_details])}
-        </ul>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.divider()
+    with st.expander("전문가용 · 시장 상태를 판단한 근거"):
+        st.markdown(f"""
+        <div style='background-color:#f8f9fa; padding:20px; border-radius:10px; border-left: 8px solid {vol_color}; margin-bottom:20px;'>
+            <h4 style='margin-top:0; color:#333;'>상태: <span style='color:{vol_color}; font-weight:bold;'>{vol_regime}</span></h4>
+            <p style='font-size:1.05em; color:#444; line-height:1.6; margin-bottom:10px;'>
+            <b>대응 액션</b>: {vol_action}
+            </p>
+            <ul style='font-size:0.95em; color:#666;'>
+                {"".join([f"<li>{d}</li>" for d in vol_details])}
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ── 오늘의 추천 트레이딩 패널 ──
-    st.markdown("### 🎯 오늘의 추천 트레이딩 (Daily Tactical Signal)")
-    st.caption("시장 변동성과 지수 간 괴리율을 분석해 도출한 단 하루의 최적 헷징/트레이딩 제언입니다.")
-
     trade_recommendation = hedge_decision.headline
     trade_reason = (
         f"{hedge_decision.reason} 대상: {hedge_decision.product}. "
@@ -2567,73 +2835,54 @@ with tab_hedging:
         trade_reason = f"공적분이 유효한 상태에서 KOSPI200 잔차 Z-Score가 {curr_z:+.2f}입니다. Z-Score가 -0.5로 회귀할 때 청산합니다."
         trade_color = "#ffc107"
         
-    st.markdown(f"""
-    <div style='background-color:#f8f9fa; padding:20px; border-radius:10px; border-left: 8px solid {trade_color}; margin-bottom:20px;'>
-        <h4 style='margin-top:0; color:#333;'>💡 추천 헷징 포지션: <span style='color:{trade_color}; font-weight:bold;'>{trade_recommendation}</span></h4>
-        <p style='font-size:1.05em; color:#444; line-height:1.6; margin-bottom:0;'>
-        <b>실행 가이드</b>:<br>
-        {trade_reason}
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    with st.expander("전문가용 · 오늘 결론의 상세 계산"):
+        st.markdown(f"""
+        <div style='background-color:#f8f9fa; padding:20px; border-radius:10px; border-left: 8px solid {trade_color}; margin-bottom:20px;'>
+            <h4 style='margin-top:0; color:#333;'>추천 헷징 포지션: <span style='color:{trade_color}; font-weight:bold;'>{trade_recommendation}</span></h4>
+            <p style='font-size:1.05em; color:#444; line-height:1.6; margin-bottom:0;'>
+            <b>계산 근거</b>:<br>
+            {trade_reason}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ════════════════════════════════════════════
     # 🧮 베타 기반 포지션 사이저
     # ════════════════════════════════════════════
-    st.divider()
-    st.markdown("### 🧮 포트폴리오 베타 기반 헷지 규모")
-    st.caption("검증되지 않은 승률을 넣는 Kelly 방식 대신, 실제 주식 노출과 KOSPI200 베타를 기준으로 보호 규모를 계산합니다.")
-
-    size_col1, size_col2, size_col3, size_col4 = st.columns(4)
-    total_asset = size_col1.number_input("총 투자자산 (만원)", value=5000, min_value=0, step=100)
-    equity_weight_pct = size_col2.number_input("국내 주식 비중 (%)", value=70, min_value=0, max_value=100, step=5)
-    portfolio_beta = size_col3.number_input("KOSPI200 대비 베타", value=1.0, min_value=0.0, max_value=3.0, step=0.1)
-    target_coverage_pct = size_col4.number_input("목표 방어율 (%)", value=30, min_value=0, max_value=100, step=5)
-
-    hedge_size = calculate_beta_hedge_size(
-        total_assets=total_asset,
-        equity_weight=equity_weight_pct / 100,
-        portfolio_beta=portfolio_beta,
-        target_coverage=target_coverage_pct / 100,
-        horizon_key=horizon_key,
-    )
-    size_metrics = st.columns(4)
-    size_metrics[0].metric("베타 조정 주식 노출", f"{hedge_size['beta_exposure']:,.0f}만원")
-    size_metrics[1].metric("목표 헷지 명목", f"{hedge_size['target_notional']:,.0f}만원")
-    size_metrics[2].metric("정책상 실제 투입", f"{hedge_size['recommended_allocation']:,.0f}만원")
-    size_metrics[3].metric("예상 방어율", f"{hedge_size['achieved_coverage'] * 100:.1f}%")
-
-    if hedge_size["raw_allocation"] > hedge_size["policy_cap"]:
-        st.warning(
-            f"목표 방어율을 그대로 맞추려면 {hedge_size['raw_allocation']:,.0f}만원이 필요하지만, "
-            f"{hedge_policy.label}의 위험 한도는 {hedge_size['policy_cap']:,.0f}만원입니다. "
-            "부족한 방어는 레버리지 확대가 아니라 국내 주식 비중 축소·현금화로 보완하세요."
+    with st.expander("내 계좌 기준 금액 계산 자세히 보기"):
+        size_metrics = st.columns(4)
+        size_metrics[0].metric(
+            "시장에 노출된 금액",
+            f"{hedge_size['beta_exposure']:,.0f}만원",
         )
-    else:
-        st.info(
-            f"**계산 결과:** {hedge_decision.headline}일 때 최대 "
-            f"**{hedge_size['recommended_allocation']:,.0f}만원**까지 검토합니다. "
-            "신규 진입 신호라면 절반만 1차 집행하고 다음 거래일에 재평가합니다."
+        size_metrics[1].metric(
+            "줄이고 싶은 위험",
+            f"{hedge_size['target_notional']:,.0f}만원",
         )
+        size_metrics[2].metric(
+            "실제 사용 상한",
+            f"{hedge_size['recommended_allocation']:,.0f}만원",
+        )
+        size_metrics[3].metric(
+            "예상 방어 비율",
+            f"{hedge_size['achieved_coverage'] * 100:.1f}%",
+        )
+
+        if hedge_size["raw_allocation"] > hedge_size["policy_cap"]:
+            st.warning(
+                f"목표를 그대로 맞추려면 {hedge_size['raw_allocation']:,.0f}만원이 필요하지만 "
+                f"안전 한도는 {hedge_size['policy_cap']:,.0f}만원입니다. "
+                "부족한 부분은 인버스를 늘리지 말고 국내 주식 금액을 줄여 보완합니다."
+            )
+        else:
+            st.info(
+                f"현재 계좌 입력값으로 계산한 최대 방어 예산은 "
+                f"**{hedge_size['recommended_allocation']:,.0f}만원**입니다."
+            )
 
     # ════════════════════════════════════════════
     # 🧪 실제 ETF 기반 헷지 백테스트
     # ════════════════════════════════════════════
-    st.divider()
-    st.markdown("### 🧪 보유기간별 실제 인버스 ETF 백테스트")
-    st.caption(
-        "당일 종가로 신호를 만든 뒤 다음 거래일 시가에 체결하는 것으로 가정합니다. "
-        "252670·114800의 실제 가격과 거래비용을 사용하며, 미래 데이터는 신호 계산에 쓰지 않습니다."
-    )
-    transaction_cost_bps = st.number_input(
-        "편도 거래비용·슬리피지 (bp)",
-        value=15.0,
-        min_value=0.0,
-        max_value=100.0,
-        step=5.0,
-    )
-    inverse1x_10y = macro_charts.get("inverse1x_10y", pd.DataFrame())
-    inverse2x_10y = macro_charts.get("inverse2x_10y", pd.DataFrame())
     hedge_backtests = {}
     comparison_rows = []
     for policy_key, policy in HEDGE_HORIZONS.items():
@@ -2663,101 +2912,100 @@ with tab_hedging:
                 }
             )
 
-    if comparison_rows:
-        st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
-        valid_candidates = [
-            (policy_key, result)
-            for policy_key, result in hedge_backtests.items()
-            if result.get("status") == "ok"
-            and result["metrics"]["avg_trade_return"] > 0
-            and result["metrics"]["profit_factor"] > 1
-            and result["metrics"]["mdd_improvement"] > 0
-        ]
-        if valid_candidates:
-            best_key, best_result = max(
-                valid_candidates,
-                key=lambda item: item[1]["metrics"]["mdd_improvement"],
+    with st.expander("고급 분석 · 전체 기간 백테스트 표와 차트"):
+        st.caption(
+            "당일 종가 신호를 다음 거래일 시가에 실행하고, 실제 252670·114800 가격과 "
+            f"왕복 {transaction_cost_bps * 2:.2f}bp 비용을 반영했습니다."
+        )
+        if comparison_rows:
+            st.dataframe(
+                pd.DataFrame(comparison_rows),
+                width="stretch",
+                hide_index=True,
             )
-            best_metrics = best_result["metrics"]
-            st.success(
-                f"**현재 백데이터 연구 우선순위:** {HEDGE_HORIZONS[best_key].label} · "
-                f"평균 거래 {best_metrics['avg_trade_return']:+.2f}% · "
-                f"Profit Factor {best_metrics['profit_factor']:.2f} · "
-                f"MDD 개선 {best_metrics['mdd_improvement']:+.1f}%p. "
-                "동일 데이터에서 만든 규칙이므로 실전 확정 신호가 아니라 추가 검증 후보입니다."
-            )
+            valid_candidates = [
+                (policy_key, result)
+                for policy_key, result in hedge_backtests.items()
+                if result.get("status") == "ok"
+                and result["metrics"]["avg_trade_return"] > 0
+                and result["metrics"]["profit_factor"] > 1
+                and result["metrics"]["mdd_improvement"] > 0
+            ]
+            if valid_candidates:
+                best_key, best_result = max(
+                    valid_candidates,
+                    key=lambda item: item[1]["metrics"]["mdd_improvement"],
+                )
+                best_metrics = best_result["metrics"]
+                st.success(
+                    f"전체 기간 참고 결과: {HEDGE_HORIZONS[best_key].label} · "
+                    f"평균 {best_metrics['avg_trade_return']:+.2f}% · "
+                    f"수익/손실 비율 {best_metrics['profit_factor']:.2f} · "
+                    f"최대 낙폭 개선 {best_metrics['mdd_improvement']:+.1f}%p"
+                )
+            selected_backtest = hedge_backtests.get(horizon_key, {})
+            if selected_backtest.get("status") == "ok":
+                selected_curve = selected_backtest["equity_curve"][["무헷지", "헷지 적용"]]
+                st.line_chart(selected_curve, height=300)
         else:
-            st.warning(
-                "양(+)의 평균 거래수익·Profit Factor 1 초과·MDD 개선을 동시에 충족한 기간 정책이 없습니다. "
-                "현재 규칙으로는 인버스 진입을 활성화하지 않는 편이 낫습니다."
-            )
-        selected_backtest = hedge_backtests.get(horizon_key, {})
-        if selected_backtest.get("status") == "ok":
-            selected_curve = selected_backtest["equity_curve"][["무헷지", "헷지 적용"]]
-            st.line_chart(selected_curve, height=300)
-            selected_metrics = selected_backtest["metrics"]
-            bt_metrics = st.columns(4)
-            bt_metrics[0].metric("거래 수", f"{selected_metrics['trades']}회")
-            bt_metrics[1].metric("승률", f"{selected_metrics['win_rate']:.1f}%")
-            bt_metrics[2].metric("최악 거래", f"{selected_metrics['worst_trade_return']:.2f}%")
-            bt_metrics[3].metric("MDD 개선", f"{selected_metrics['mdd_improvement']:+.1f}%p")
-    else:
-        messages = sorted({
-            result.get("message", "백테스트 데이터 부족")
-            for result in hedge_backtests.values()
-        })
-        st.warning(" / ".join(messages))
+            messages = sorted({
+                result.get("message", "백테스트 데이터 부족")
+                for result in hedge_backtests.values()
+            })
+            st.warning(" / ".join(messages))
 
-    with st.expander("왜 바닥 점수와 인버스 점수가 동시에 높을 수 있나요?"):
         st.markdown(
-            "바닥 점수는 3~6개월 장기 축적 관점이고, 인버스 점수는 1~10거래일의 하락 방어 관점입니다. "
-            "이번 업그레이드는 두 시간축을 분리하고, 극단적 과매도에서는 신규 인버스 추격을 차단합니다."
+            "**용어:** 승률은 돈을 번 거래 비율, 평균 거래는 한 번 실행했을 때의 평균 결과, "
+            "최대 낙폭은 평가금액이 고점에서 가장 크게 줄었던 폭입니다."
         )
 
-    st.divider()
-    
     # 🚨 인버스 진입 및 청산 통합 UI (Strategy A 연동)
-    st.markdown("### 🚨 곱버스/인버스 동적 진입 & 청산 엔진")
-    col_in, col_out = st.columns(2)
-    with col_in:
-        inv_verdict = hedge_decision.headline
-        inv_color = {
-            "high": "#dc3545",
-            "medium": "#ffc107",
-            "low": "#28a745",
-        }.get(hedge_decision.urgency, "#6c757d")
+    with st.expander("고급 분석 · 점수 계산 내역"):
+        col_in, col_out = st.columns(2)
+        with col_in:
+            inv_verdict = hedge_decision.headline
+            inv_color = {
+                "high": "#dc3545",
+                "medium": "#ffc107",
+                "low": "#28a745",
+            }.get(hedge_decision.urgency, "#6c757d")
 
-        st.markdown(f"""
-        <div style='background-color:#f8f9fa; padding:15px; border-radius:10px; border-left: 6px solid {inv_color}; height:100%;'>
-            <h5 style='margin-top:0;'>기간·포지션 통합 엔진 (진입 점수: <span style='color:{inv_color};'>{inv_score}%</span>)</h5>
-            <p style='font-weight:bold; color:{inv_color};'>{inv_verdict}</p>
-            <p style='font-size:0.9em; color:#555;'>{hedge_decision.reason}</p>
-            <ul style='font-size:0.9em; color:#666;'>
-                {"".join([f"<li>{d}</li>" for d in inv_details])}
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style='background-color:#f8f9fa; padding:15px; border-radius:10px; border-left: 6px solid {inv_color}; height:100%;'>
+                <h5 style='margin-top:0;'>하락방어 신호: <span style='color:{inv_color};'>{inv_score}/{optimized_entry_threshold:.0f}점</span></h5>
+                <p style='font-weight:bold; color:{inv_color};'>{inv_verdict}</p>
+                <p style='font-size:0.9em; color:#555;'>{hedge_decision.reason}</p>
+                <ul style='font-size:0.9em; color:#666;'>
+                    {"".join([f"<li>{d}</li>" for d in inv_details])}
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
 
-    with col_out:
-        if position_status == "none":
-            exit_display_verdict = "보유 포지션 없음 — 청산 신호는 참고용"
-            exit_display_color = "#6c757d"
-        else:
-            exit_display_verdict = exit_verdict
-            exit_display_color = exit_color
-        st.markdown(f"""
-        <div style='background-color:#f8f9fa; padding:15px; border-radius:10px; border-left: 6px solid {exit_display_color}; height:100%;'>
-            <h5 style='margin-top:0;'>청산(EXIT) 엔진 (점수: <span style='color:{exit_display_color};'>{exit_score}%</span>)</h5>
-            <p style='font-weight:bold; color:{exit_display_color};'>{exit_display_verdict}</p>
-            <ul style='font-size:0.9em; color:#666;'>
-                {"".join([f"<li>{d}</li>" for d in exit_details])}
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
+        with col_out:
+            if position_status == "none":
+                exit_display_verdict = "보유 인버스가 없어 지금은 확인만 합니다"
+                exit_display_color = "#6c757d"
+            else:
+                exit_display_verdict = exit_verdict
+                exit_display_color = exit_color
+            st.markdown(f"""
+            <div style='background-color:#f8f9fa; padding:15px; border-radius:10px; border-left: 6px solid {exit_display_color}; height:100%;'>
+                <h5 style='margin-top:0;'>줄이기 신호: <span style='color:{exit_display_color};'>{exit_score}/{optimized_exit_threshold:.0f}점</span></h5>
+                <p style='font-weight:bold; color:{exit_display_color};'>{exit_display_verdict}</p>
+                <ul style='font-size:0.9em; color:#666;'>
+                    {"".join([f"<li>{d}</li>" for d in exit_details])}
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
 
     st.divider()
+    st.markdown("### 4. 더 깊은 연구 도구 · 처음에는 건너뛰어도 됩니다")
+    st.caption(
+        "아래의 지수 관계·마켓뉴트럴·볼린저 분석은 연구용 보조 화면입니다. "
+        "오늘 실행은 위의 ‘오늘 해야 할 일’만 따르면 됩니다."
+    )
 
-    st.markdown("### 1. 📊 코스피200 vs 코스닥 공적분 잔차 분석")
+    st.markdown("#### 선택 연구 ① 코스피200과 코스닥 관계 분석")
     if has_spread_data:
         if spread_adf.get("status") != "ok":
             spread_verdict = "⚪ 공적분 검정 불가 — 전략 비활성"
