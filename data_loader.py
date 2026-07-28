@@ -483,11 +483,15 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
         base["Gap_High"] = gap_high
         base["MACD_dir"] = calc_macd(close)[1]
 
-        ma5  = close.rolling(5).mean().iloc[-1]
-        ma20 = close.rolling(20).mean().iloc[-1]
+        ma5   = close.rolling(5).mean().iloc[-1]
+        ma20  = close.rolling(20).mean().iloc[-1]
+        ma60  = close.rolling(60).mean().iloc[-1] if len(close) >= 60 else None
+        ma120 = close.rolling(120).mean().iloc[-1] if len(close) >= 120 else None
         std  = close.rolling(20).std().iloc[-1]
         base["MA5"]       = ma5
         base["MA20"]      = ma20
+        base["MA60"]      = ma60
+        base["MA120"]     = ma120
         base["BB_upper"]  = ma20 + 2 * std
         base["BB_lower"]  = ma20 - 2 * std
         base["Vol_ratio"] = round(float(vol.iloc[-1] / vol.rolling(20).mean().iloc[-2] * 100), 1)

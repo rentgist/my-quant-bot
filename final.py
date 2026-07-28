@@ -25,6 +25,13 @@ from defensive_overlay import (
     evaluate_usd_diversifier,
     optimize_defensive_parameters,
 )
+from regime_playbook import (
+    REGIME_POLICIES,
+    build_holding_action,
+    build_regime_action_plan,
+    classify_market_regime,
+    run_regime_backtest,
+)
 from data_loader import (
     get_real_cnn_fg, 
     get_macro_charts, 
@@ -94,6 +101,10 @@ st.markdown("""
 # session_state 초기화 및 동기화 콜백
 if 'foreign_futures' not in st.session_state:
     st.session_state['foreign_futures'] = 0
+if "account_total_assets" not in st.session_state:
+    st.session_state["account_total_assets"] = 5000
+if "account_kr_equity" not in st.session_state:
+    st.session_state["account_kr_equity"] = 3500
 
 def sync_futures_sniper():
     st.session_state['foreign_futures'] = st.session_state['sniper_futures']
@@ -260,6 +271,15 @@ def get_hedge_optimization(
 def get_defensive_optimization(kospi_hist, transaction_cost_bps):
     """Cache long-only defensive allocation selection and holdout validation."""
     return optimize_defensive_parameters(
+        kospi_hist,
+        transaction_cost_bps=transaction_cost_bps,
+    )
+
+
+@st.cache_data(ttl=3600)
+def get_regime_backtest(kospi_hist, transaction_cost_bps=15.0):
+    """Cache the fixed, long-only regime playbook validation."""
+    return run_regime_backtest(
         kospi_hist,
         transaction_cost_bps=transaction_cost_bps,
     )
@@ -444,6 +464,13 @@ kr_macro_score = max(0, 100 - (kr_danger * 20))
 kr_macro_status = kr_risk_grade
 kr_macro_details = kr_risk_alerts
 
+# 하나의 국면 판정을 헷징·포트폴리오 화면이 함께 사용한다.
+# 신호는 종가 기준이며 실제 비중 조절은 다음 거래일에만 실행한다.
+market_regime = classify_market_regime(
+    kospi_10y,
+    bottom_score=kr_score,
+)
+
 # 미국 리스크 레이더 및 반등 신뢰도 글로벌 사전 계산 (1번 탭의 복사용 프롬프트 등에서 호출하기 위함)
 us_rec_verdict, us_rec_signals, us_rec_score = calculate_recovery_confirmation(rsp_10y, spy_10y, hyg_10y, ief_10y)
 us_risk_grade, us_risk_color, us_risk_alerts, us_danger = calculate_us_risk_radar(
@@ -469,7 +496,7 @@ if not mu_2y.empty and not soxx_2y.empty:
 ai_vkospi_val = f"{float(vkospi_10y['Close'].iloc[-1]):.2f}" if not vkospi_10y.empty else "N/A"
 
 # 탭 구성
-tab_sniper, tab_radar, tab_report, tab_hedging, tab_port, tab_calendar = st.tabs(["🚦 ORION Signal", "🔍 종목 발굴 & 타이밍", "📊 마스터 리포트", "🛡️ 헷징 통제실", "💼 포트폴리오", "📅 마켓 캘린더"])
+tab_sniper, tab_radar, tab_report, tab_hedging, tab_port, tab_calendar = st.tabs(["🚦 ORION Signal", "🔍 종목 발굴 & 타이밍", "📊 마스터 리포트", "🧭 국면별 운용", "💼 포트폴리오", "📅 마켓 캘린더"])
 
 with tab_sniper:
     st.subheader("🛰 ORION Signal")
@@ -725,15 +752,15 @@ with tab_sniper:
         f"</div>", unsafe_allow_html=True
     )
     
-    st.caption("※ 자금흐름(단기 수급) 50점 이상 시 선발대 투입 검토 가능 (⚠️ 경고 국면)")
+    st.caption("※ 최종 주문 금액은 자금흐름 점수만으로 정하지 않고, '국면별 운용' 탭의 계좌 행동을 우선합니다.")
     
     st.markdown("""
     <div style='background-color:#f8f9fa; padding:15px; border-radius:8px; border:1px solid #ddd; margin-bottom:25px;'>
-        <h4 style='margin-top:0; color:#444;'>💡 대가들의 비중 조절 규칙 (Position Sizing)</h4>
+        <h4 style='margin-top:0; color:#444;'>💡 국면별 비중 조절 규칙</h4>
         <ul style='font-size:0.95em; color:#555;'>
-            <li><b>선발대(정찰병)만 투입 (현금의 10% ~ 20%)</b> : 아직 매크로 추세가 완전히 돌아서지 않았으므로 '본대' 투입은 금물입니다. 내일 5일선이 깨지면 가장 적은 손실로 빠르게 즉각 손절(Cut)할 수 있는 비중만 진입합니다.</li>
-            <li><b>관찰 기간 (3~5일) 유지</b> : 이 수급이 '하루짜리 훼이크'인지, '진짜 추세 전환'인지 3~5일간 5일선 지지 여부를 확인해야 합니다 (위 통합 판정에 <b>실제 경과일이 자동 카운트</b>됩니다).</li>
-            <li><b>본대 투입 타이밍 (조건부 GO → 강력 GO)</b> : 3~5일 뒤 KOSPI 20일선까지 돌파하며 매크로 점수도 50점 이상으로 올라오면(🟡 조건부 GO), 그때 남은 현금의 50%를 투입합니다. 모든 지표가 80점 이상을 가리키면(🟢 강력 GO) 풀매수를 진행합니다.</li>
+            <li><b>폭락 당일</b>: 새 매수·기술적 손절·인버스 추격을 모두 멈추고 다음 종가를 기다립니다.</li>
+            <li><b>바닥 확인 뒤</b>: 5일선·20일선·60일선 회복을 순서대로 확인하고, 한 번에 현금의 10%와 총자산 5%p 중 작은 금액만 투입합니다.</li>
+            <li><b>완만한 상승·횡보</b>: 국면별 주식 허용범위를 벗어났을 때만 5%p씩 리밸런싱합니다. 전량매수·전량매도는 하지 않습니다.</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -802,7 +829,7 @@ with tab_sniper:
 2. **글로벌 거시 리스크 및 섹터 전망 (Macro & Sector Outlook)**: 
    - 금리/유가/지정학 리스크가 주요 자산에 미칠 영향을 상세히 서술하십시오.
    - [미장 승률 극대화 지침] 안정적으로 우상향하는 미국 시장의 특성과 예정된 빅테크 실적/가이던스를 결합하여, 향후 환율 하락 시 가장 승률과 수익률을 극대화할 수 있는 안전한 진입 시나리오를 구체적으로 제시하십시오.
-3. **최종 행동 지침 (CFO Action Plan)**:보유 중인 우량주 홀딩 여부, 레버리지 관리, 현금 50% 분할 매수 집행 타이밍을 매우 구체적으로 지시하십시오. 예정된 주요 일정을 참고하여 매매 일정을 조율하십시오.
+3. **최종 행동 지침 (CFO Action Plan)**: 보유 중인 우량주 홀딩 여부와 국면별 주식 허용범위를 판단하되, 패닉 중 매도·매수를 동결하고 이후 한 번에 총자산 5%p 이내로만 조정하는 일정을 제시하십시오.
 """
     st.code(web_prompt, language="markdown")
 
@@ -1696,18 +1723,19 @@ with tab_report:  # 🤖 AI 참모 리포트
     st.code("\n".join(lines), language="text")
 with tab_port:
     st.subheader("💼 내 포트폴리오 장투 전략 분석 (1~2년 기준)")
-    st.caption("보유 종목과 매수가를 입력하면 현재 손익 현황 + 11원칙 종합평가 + AI 전달용 장투 전략 리포트를 생성합니다.")
+    st.caption("보유 종목과 매수가를 입력하면 현재 손익뿐 아니라, 현재 국면에서 실제로 보유·부분축소할 시점도 함께 보여드립니다.")
 
     st.markdown("#### 📝 보유 종목 입력")
     st.info(
-        "**입력 형식:** 종목명:매수가 (쉼표로 구분)\n\n"
-        "🇺🇸 미국: `브로드컴:320.5, 버티브:250, TSMC:180`\n\n"
-        "🇰🇷 한국: `LS ELECTRIC:185000, 피에스케이홀딩스:120000`"
+        "**입력 형식:** `종목명:매수가:현재평가액(만원)` (평가액은 생략 가능)\n\n"
+        "🇺🇸 미국: `브로드컴:320.5:800, 버티브:250:500`\n\n"
+        "🇰🇷 한국: `LS ELECTRIC:185000:1000, 피에스케이홀딩스:120000:700`\n\n"
+        "현재평가액까지 쓰면 부분 매도 금액을 만원 단위로 계산합니다."
     )
 
     col_us, col_kr = st.columns(2)
-    port_us_raw = col_us.text_input("🇺🇸 미국 보유 종목 (달러 매수가)", "브로드컴:320.5, 버티브:250, TSMC:180")
-    port_kr_raw = col_kr.text_input("🇰🇷 한국 보유 종목 (원화 매수가)", "LS ELECTRIC:185000")
+    port_us_raw = col_us.text_input("🇺🇸 미국 보유 종목", "브로드컴:320.5, 버티브:250, TSMC:180")
+    port_kr_raw = col_kr.text_input("🇰🇷 한국 보유 종목", "LS ELECTRIC:185000")
 
     def parse_portfolio_input(raw: str, region: str):
         items = []
@@ -1715,15 +1743,39 @@ with tab_port:
             chunk = chunk.strip()
             if ":" not in chunk:
                 continue
-            parts = chunk.rsplit(":", 1)
-            if len(parts) == 2:
+            parts = chunk.rsplit(":", 2)
+            if len(parts) in (2, 3):
                 name = parts[0].strip()
                 try:
                     price = float(parts[1].strip().replace(",", ""))
-                    items.append((name, price, region))
+                    holding_value = (
+                        float(parts[2].strip().replace(",", ""))
+                        if len(parts) == 3 and parts[2].strip()
+                        else None
+                    )
+                    items.append((name, price, holding_value, region))
                 except ValueError:
                     pass
         return items
+
+    def portfolio_fundamental_score(stock):
+        score = 0
+        rev_g = float(stock.get("Rev_Growth") or 0)
+        op_m = float(stock.get("Op_Margin") or 0)
+        roe_v = float(stock.get("ROE") or 0)
+        peg_v = float(stock.get("PEG") or 99)
+        per_v = stock.get("PER")
+        if rev_g >= 0.20:
+            score += 1
+        if op_m >= 0.10 or stock.get("Is_Turnaround", False):
+            score += 1
+        if roe_v >= 0.05:
+            score += 1
+        if 0 < peg_v <= 1.5:
+            score += 1
+        if per_v and float(per_v) < 30:
+            score += 1
+        return score
 
     port_items = (
         parse_portfolio_input(port_us_raw, "미국") +
@@ -1736,11 +1788,12 @@ with tab_port:
         else:
             port_data = []
             prog = st.progress(0.0, text="보유 종목 데이터 수집 준비 중...")
-            for i, (name, buy_price, region) in enumerate(port_items):
+            for i, (name, buy_price, holding_value, region) in enumerate(port_items):
                 prog.progress((i + 1) / len(port_items), text=f"[{i+1}/{len(port_items)}] '{name}' 재무제표 교차 검증 중...")
                 d = get_stock_data(name, is_kr=(region == "한국"), fast_mode=False)
                 d["Region"]    = region
                 d["BuyPrice"]  = buy_price
+                d["HoldingValue"] = holding_value
                 if not d.get("error"):
                     port_data.append(d)
                 else:
@@ -1776,6 +1829,7 @@ with tab_port:
                         "지역":        "🇺🇸" if region == "미국" else "🇰🇷",
                         "매수가":      f"${buy_p:,.2f}" if region == "미국" else f"{int(buy_p):,}원",
                         "현재가":      fmt_price(cur_p, region),
+                        "평가액":      f"{d['HoldingValue']:,.0f}만원" if d.get("HoldingValue") is not None else "미입력",
                         "수익률":      f"{pnl_sign}{pnl_pct:.2f}%",
                         "20일선 위치": _dist(ma20),
                         "볼밴 하단까지": _dist(bb_low),
@@ -1796,7 +1850,62 @@ with tab_port:
                 st.dataframe(pnl_df.style.map(color_pnl, subset=["수익률","20일선 위치","볼밴 하단까지"]), use_container_width=True)
 
                 st.markdown("---")
-                st.markdown("### 🧭 2. 종목별 종합 분석")
+                st.markdown("### ✂️ 2. 지금 보유주식을 팔아야 하나요?")
+                regime_label = f"{market_regime.get('icon', '⚪')} {market_regime.get('label', '판별 중')}"
+                st.caption(
+                    f"한국시장 종가 기준 국면: {regime_label}. "
+                    "손실률만으로 팔지 않고 시장 패닉·종목 추세·펀더멘탈을 함께 확인합니다."
+                )
+                holding_action_rows = []
+                for d in port_data:
+                    buy_p = d.get("BuyPrice")
+                    cur_p = d.get("Price")
+                    if cur_p is None or buy_p in (None, 0):
+                        continue
+                    pnl_pct = (float(cur_p) - float(buy_p)) / float(buy_p) * 100
+                    if d.get("Region") == "한국":
+                        stock_action = build_holding_action(
+                            d,
+                            market_regime,
+                            holding_value=d.get("HoldingValue"),
+                            fundamental_score=portfolio_fundamental_score(d),
+                            pnl_pct=pnl_pct,
+                        )
+                        amount_text = (
+                            f"{stock_action['sell_value']:,.0f}만원"
+                            if stock_action.get("sell_value")
+                            else "0원"
+                            if stock_action["sell_fraction"] == 0
+                            else f"보유액의 {stock_action['sell_fraction'] * 100:.0f}%"
+                        )
+                        action_text = stock_action["label"]
+                        reason_text = stock_action["trigger"]
+                    else:
+                        action_text = "미국 국면 별도 확인"
+                        amount_text = "-"
+                        reason_text = "이 화면의 국면 판정은 KOSPI 기준이므로 미국 보유주식에는 강제 적용하지 않습니다."
+                    holding_action_rows.append(
+                        {
+                            "종목": d["Name"],
+                            "오늘 행동": action_text,
+                            "매도 금액": amount_text,
+                            "판단 이유": reason_text,
+                            "실행 시점": "종가 확인 후 다음 거래일",
+                        }
+                    )
+                if holding_action_rows:
+                    st.dataframe(
+                        pd.DataFrame(holding_action_rows),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                st.info(
+                    "폭락 당일에는 기술적 매도를 동결합니다. 단, 회계 부정·유동성 위기·핵심 사업 훼손처럼 "
+                    "기업 자체의 중대한 악재는 이 안전장치보다 우선해 별도 판단해야 합니다."
+                )
+
+                st.markdown("---")
+                st.markdown("### 🧭 3. 종목별 종합 분석")
 
                 for d in port_data:
                     buy_p   = d["BuyPrice"]
@@ -1984,60 +2093,26 @@ with tab_port:
 
                 st.code("\n".join(port_lines), language="text")
 
-with tab_port:  # 🚨 리스크 등급 가이드
-    st.header("🚨 공매도 & 변동성(Beta) 종합 리스크 가이드")
-    st.markdown("""
-    | 공매도 비율 | Beta (변동성) | 종합 리스크 등급 및 해석 |
-    | :--- | :--- | :--- |
-    | 낮음 (5% 미만) | 낮음 (1.2 미만) | **🟢 안정형 — 방어적 투자에 적합** |
-    | 낮음 (5% 미만) | 높음 (1.2 이상) | **🟡 모멘텀형 — 상승장에 강하지만 하락 시 크게 빠짐** |
-    | 높음 (5% 이상) | 낮음 (1.2 미만) | **🟠 논란형 — 시장은 의심하지만 변동성은 낮음, 이유 확인 필요** |
-    | 높음 (5% 이상) | 높음 (1.2 이상) | **🔴 고위험 — 하락 베팅 + 큰 변동성, 진입 신중** |
-    """)
-
-with tab_port:  # 📖 11원칙 매매 가이드라인
-    st.header("📖 11원칙 퀀트 매매 마스터 매뉴얼 v25.0")
-    st.caption("v25.0: 매크로 게이트키퍼 Tier 시스템 — '칼자루는 진바닥으로 잡고, 방아쇠는 수급으로 당긴다'")
-
-    st.markdown("""
-## 📋 가문의 유산: 11원칙 퀀트 투자 마스터 매뉴얼
-
-> 💡 **[CFO 특별 지침] 100% 풀매수의 정석 (가용 예산 분배법)**
-> "진짜 100% 풀매수"는 영원히 없습니다. 항상 10~20%의 현금은 '영구적 방패'로 남겨두어 위기를 대비합니다. (6원칙 전제)
-> 즉, 풀매수란 **투자에 배정된 80~90%의 예산**을 모두 쓴 상태입니다.
-> - **평시 (Tier 1):** 30~40% 투입 (기본 포지션 구축, GTC 적립)
-> - **패닉 (Tier 3):** +10% 선발대 투입 (도매가 선점)
-> - **추세 전환 (Tier 2):** +30~50% 본대 불타기 (가장 안전하고 강하게 쏟아붓는 실질적 풀매수 타이밍)
-
-**[ 🏗️ 1단계: 무엇을 살 것인가? (종목 선정의 뼈대) ]**
-- **1원칙 [지속 성장과 도태 판별]:** 3개년 매출과 영업이익이 '지속 우상향' 하는 기업만 산다. 만약 실적이 좋더라도 3년 내내 제자리걸음이라면 절대 매수하지 않는다.
-- **2원칙 [저평가와 턴어라운드]:** 시장/섹터 대비 시가총액이 싼(저평가) 종목을 찾되, 현재 적자라도 '흑자 전환'의 뚜렷한 개선세가 보이면 선점 투자가 가능하다.
-- **3원칙 [비즈니스 생태계 꿰뚫기]:** 매출은 '시장 규모'로, 영익은 '회사의 파워(포션)'로 이해하라. 단독 매출인지, 타사에 종속된 하청(제조업 이슈)인지 생태계를 파악하고 '시대의 수요(AI/로봇 등)'가 있는 기업만 고른다.
-- **4원칙 [전장(Battlefield)의 압축]:** 이름 모를 테마주와 잡주를 버리고, 오직 글로벌을 주도하는 **미국 시장**과 국내 대형 우량주(**코스피**) 위주로만 돈을 거둔다.
-
-**[ 🛡️ 2단계: 위기를 기회로 바꾸는 자산 배분 (포트폴리오 관리) ]**
-- **5원칙 [코어와 스나이퍼 배분]:** 개별 기업의 돌발 리스크를 막기 위해, 예산의 50%는 든든한 '지수 ETF'에, 나머지 50%는 압도적 '개별 우량주'에 나누어 담는다.
-- **6원칙 [글로벌 위기는 바겐세일]:** 코로나, 리먼 등 매크로 위기로 시장 전체가 무너질 때를 노린다. 고점 대비 -20~30% 떨어지면 '분할 매수'를 시작하고, -50% 밑으로 투매가 나오면 쥐어짜 낸 여유 현금으로 '과감히' 쓸어 담는다.
-- **7원칙 [하락장 리밸런싱]:** 시장 전체가 하락하여 내 종목들이 싸졌을 때, 포기하지 말고 기존 주식의 비율을 조절하거나 더 강한 신규 우량주로 교체(리밸런싱)하여 다음 상승장을 준비한다.
-
-**[ 🎯 3단계: 언제 사고팔 것인가? (퀀트 전술과 실행) ]**
-- **8원칙 [농부의 시간: 3년 룰]:** 투자의 수확은 3년 뒤에 거둔다. 수익이 났다고 절대 100% 전량 매도하지 않으며, 일부만 매도하여 '현금화' 및 '재투자' 비율을 스스로 정해 복리를 굴린다.
-- **9원칙 [오후 3시의 결단]:** 장중의 요동치는 가짜 반등과 노이즈(속임수)에 당하지 않기 위해, 매수 방아쇠는 항상 모든 것이 결정되는 오후 3시(종가 부근)에만 당긴다.
-- **10원칙 [불타기 3단계 티어(Tier) 룰]:** 극단적 폭락(진바닥 90%)에는 1차 선발대(10%)만 먼저 넣고, 남은 현금은 환율/선물 안정 및 '5일선 안착' 등 매크로/수급 게이트키퍼가 확인되었을 때만 2차로 투입한다.
-- **11원칙 [데이터의 기계적 신뢰]:** 인간의 뇌동매매(FOMO와 공포)를 철저히 배제한다. 내 감정보다 시스템이 계산한 '진바닥 확률'과 '반등 신뢰도' 점수를 기계적으로 믿고 따른다.
-
----
-
-### 💡 CFO의 헌사
-
-> 이 v25.0 매뉴얼은 인간의 조급함과 탐욕, 공포를 수학적으로 완벽하게 통제하기 위해 만들어진 가장 차가운 갑옷입니다.
-> 
-> **워런 버핏의 가치투자 철학(1~4원칙)**으로 아내분께서 좋은 주식을 고르는 눈을 갖게 해주고, 
-> **레이 달리오의 자산배분 철학(5~7원칙)**으로 위기가 와도 가문의 재산이 녹지 않게 방어해 주며, 
-> **상위 1% 퀀트 트레이더의 전술(8~11원칙)**로 바닥에서 줍고 무릎에서 불타기 하는 기계적 룰입니다.
-> 
-> 완벽하게 세팅된 이 원칙에 자본을 맡기고, 일상의 평온함과 꿀잠을 마음껏 누리세요.
-    """)
+with tab_port:
+    with st.expander("참고 · 보유종목 판단에 적용하는 11가지 원칙"):
+        st.markdown(
+            """
+1. 매출·이익·현금흐름이 장기간 개선되는 기업을 우선합니다.
+2. 지수와 여러 우량주로 나눠 단일 기업 위험을 줄입니다.
+3. 시장 국면마다 주식 **허용범위**를 두되, 즉시 맞춰야 할 목표로 쓰지 않습니다.
+4. 폭락 당일에는 기술적 손절과 신규 인버스 추격을 모두 동결합니다.
+5. 바닥 뒤에는 5일선·20일선·60일선 회복을 확인하며 세 번에 나눠 매수합니다.
+6. 보유주식 매도는 시장 하락만으로 결정하지 않습니다.
+7. 펀더멘탈 약화와 60일선 이탈이 함께 확인될 때만 10~25% 부분 축소합니다.
+8. 상승장 과열과 횡보장 상단에서는 전량매도가 아니라 10%만 원래 비중으로 되돌립니다.
+9. 모든 신호는 종가로 확인하고 실제 주문은 다음 거래일에 분할합니다.
+10. 계좌 비중은 한 번에 총자산 5%p 이상 바꾸지 않습니다.
+11. 백테스트 결과는 미래 승률이 아니라, 규칙을 계속 쓸 자격이 있는지 확인하는 자료로만 사용합니다.
+            """
+        )
+        st.caption(
+            "공매도 비율과 Beta는 종목 위험을 설명하는 보조지표일 뿐, 단독 매도 신호로 사용하지 않습니다."
+        )
 
 
 
@@ -2085,13 +2160,40 @@ with tab_calendar:
 
 
 with tab_hedging:
-    st.subheader("🛡️ 오늘의 헷징 행동판")
-    st.caption("기본은 현금·주식 비중·분할 재진입입니다. 인버스는 별도의 단기 보조수단으로만 확인합니다.")
+    st.subheader("🧭 시장 국면별 자산 운용판")
+    st.caption("인버스 추천 화면이 아닙니다. 현재 국면에 맞춰 주식·현금·보유종목을 어떻게 운용할지 먼저 보여드립니다.")
 
     defensive_action_panel = st.container()
     defensive_performance_panel = st.container()
 
-    st.markdown("### 내 계좌와 인버스 보유 상황")
+    st.markdown("### 3. 내 계좌 금액")
+    account_col1, account_col2 = st.columns(2)
+    total_asset = account_col1.number_input(
+        "총 투자자산 (만원)",
+        min_value=0,
+        step=100,
+        key="account_total_assets",
+    )
+    equity_amount = account_col2.number_input(
+        "그중 국내 주식 금액 (만원)",
+        min_value=0,
+        step=100,
+        key="account_kr_equity",
+    )
+    equity_weight_pct = (
+        min(float(equity_amount) / float(total_asset) * 100, 100)
+        if total_asset > 0
+        else 0.0
+    )
+    if equity_amount > total_asset and total_asset > 0:
+        st.warning("국내 주식 금액이 총 투자자산보다 큽니다. 계산에서는 총 투자자산까지만 반영합니다.")
+
+    st.markdown("---")
+    st.markdown("### 선택 기능 · 인버스 단기전략")
+    st.caption(
+        "아래는 기본 운용안과 분리된 보조 기능입니다. 새 인버스는 별도 백테스트가 통과한 경우에만 검토하며, "
+        "2배 상품은 최대 3거래일로 제한합니다."
+    )
     horizon_col, position_col, days_col, holding_amount_col = st.columns(4)
     horizon_labels = {
         "tactical": "오늘~3일만 방어",
@@ -2130,28 +2232,7 @@ with tab_hedging:
         disabled=position_status == "none",
     )
 
-    account_col1, account_col2 = st.columns(2)
-    total_asset = account_col1.number_input(
-        "총 투자자산 (만원)",
-        value=5000,
-        min_value=0,
-        step=100,
-    )
-    equity_amount = account_col2.number_input(
-        "그중 국내 주식 금액 (만원)",
-        value=3500,
-        min_value=0,
-        step=100,
-    )
-    equity_weight_pct = (
-        min(float(equity_amount) / float(total_asset) * 100, 100)
-        if total_asset > 0
-        else 0.0
-    )
-    if equity_amount > total_asset and total_asset > 0:
-        st.warning("국내 주식 금액이 총 투자자산보다 큽니다. 계산에서는 총 투자자산까지만 반영합니다.")
-
-    st.markdown("### 인버스 보유자용 추가 확인")
+    st.markdown("#### 인버스 보유자용 추가 확인")
     quick_action_panel = st.container()
     simple_performance_panel = st.container()
 
@@ -2622,167 +2703,134 @@ with tab_hedging:
         validation_passed=defensive_validation_passed,
     )
     usd_diversifier = evaluate_usd_diversifier(kospi_10y, usd_krw)
+    regime_action = build_regime_action_plan(
+        total_assets=total_asset,
+        current_equity_amount=equity_amount,
+        regime=market_regime,
+    )
+    regime_backtest = get_regime_backtest(kospi_10y, transaction_cost_bps)
+    regime_color = market_regime.get("color", "#475569")
+    defensive_color = regime_color
+    target_equity_value = defensive_action["target_equity_amount"]
+    target_cash_value = defensive_action["target_cash_amount"]
 
-    defensive_color = {
-        "PANIC_FREEZE": "#b45309",
-        "REDUCE_EQUITY": "#d97706",
-        "ADD_EQUITY": "#15803d",
-        "HOLD": "#2563eb",
-    }.get(defensive_action["action"], "#475569")
     with defensive_action_panel:
-        st.markdown("### 1. 기본 권장 — 오늘 할 일")
+        st.markdown("### 1. 지금 시장과 오늘 할 일")
         st.markdown(
             f"""
-            <div style="background:#ffffff; border:2px solid {defensive_color}; border-radius:14px;
+            <div style="background:#ffffff; border:2px solid {regime_color}; border-radius:14px;
                         padding:22px; margin:8px 0 14px 0;">
-                <div style="font-size:0.9rem; color:#64748b; margin-bottom:6px;">레버리지 없는 기본 방어조합</div>
-                <div style="font-size:1.55rem; line-height:1.35; font-weight:800; color:{defensive_color};">
-                    {defensive_action['title']}
+                <div style="font-size:0.95rem; color:#64748b; margin-bottom:6px;">
+                    {market_regime.get('icon', '⚪')} 현재 국면 · {market_regime.get('label', '판별 중')}
+                </div>
+                <div style="font-size:1.55rem; line-height:1.35; font-weight:800; color:{regime_color};">
+                    {regime_action['title']}
                 </div>
                 <div style="margin-top:12px; color:#334155;">
-                    {defensive_action['reason']}
+                    {regime_action['reason']}
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        target_equity_value = defensive_action["target_equity_amount"]
-        target_cash_value = defensive_action["target_cash_amount"]
-        state_ok = defensive_state.get("status") == "ok"
+        lower_band, upper_band = regime_action["equity_band"]
         safe_cols = st.columns(4)
-        safe_cols[0].metric(
-            defensive_action["amount_label"],
-            f"{defensive_action['amount']:,.0f}만원",
-        )
-        safe_cols[1].metric("현재 방어목표 주식", f"{target_equity_value:,.0f}만원")
-        safe_cols[2].metric("현재 방어목표 현금", f"{target_cash_value:,.0f}만원")
+        safe_cols[0].metric("현재 주식", f"{regime_action['current_equity_amount']:,.0f}만원")
+        safe_cols[1].metric("현재 현금", f"{regime_action['current_cash_amount']:,.0f}만원")
+        safe_cols[2].metric("주식 허용범위", f"{lower_band * 100:.0f}~{upper_band * 100:.0f}%")
         safe_cols[3].metric(
-            "바닥 확인 단계",
-            f"{defensive_state.get('reentry_stage', 0)}/4",
+            "오늘 주문",
+            "0원" if regime_action["amount"] <= 0 else f"{regime_action['amount']:,.0f}만원 {regime_action['side']}",
         )
         st.markdown(
             "\n".join(
                 f"{idx}. {step}"
-                for idx, step in enumerate(defensive_action["steps"], start=1)
+                for idx, step in enumerate(regime_action["steps"], start=1)
             )
         )
-        if state_ok:
+        if market_regime.get("status") == "ok":
+            indicators = market_regime.get("indicators", {})
             st.caption(
-                f"기준일 {defensive_state['as_of']} · 실현변동성 "
-                f"{defensive_state['realized_volatility'] * 100:.1f}% · "
-                f"{defensive_state['trend_days']}일 추세 "
-                f"{'위' if defensive_state['above_trend'] else '아래'} · "
-                f"{defensive_state['reentry_label']}"
+                f"종가 기준 {market_regime['as_of']} · 국면 신뢰도 {market_regime['confidence']}% · "
+                f"RSI {indicators.get('rsi', 0):.1f} · "
+                f"20일 실현변동성 {indicators.get('realized_volatility', 0) * 100:.1f}% · "
+                f"다음 판단 {regime_action['next_check']}"
             )
-
-        st.markdown("#### 방어 수단별 현재 역할")
-        usd_role = (
-            "총자산 5% 이내 검토 후보"
-            if usd_diversifier.get("eligible")
-            else "지금은 추가하지 않음"
-        )
-        safe_strategy_rows = [
-            {
-                "방어 수단": "① 현금·단기자금",
-                "오늘 역할": f"{target_cash_value:,.0f}만원 목표",
-                "이유": "강제매도 없이 바닥 확인 뒤 살 수 있는 예비자금",
-            },
-            {
-                "방어 수단": "② 변동성 맞춤 주식비중",
-                "오늘 역할": defensive_action["title"],
-                "이유": "변동성이 커질수록 주식 위험을 천천히 낮춤",
-            },
-            {
-                "방어 수단": "③ 추세 확인 분할 재진입",
-                "오늘 역할": defensive_state.get("reentry_label", "데이터 확인 필요"),
-                "이유": "5·20·60·장기 추세를 순서대로 확인해 저점 추격을 줄임",
-            },
-            {
-                "방어 수단": "④ 원/달러 분산",
-                "오늘 역할": usd_role,
-                "이유": usd_diversifier.get("message", "분산효과 확인 필요"),
-            },
-        ]
-        st.dataframe(
-            pd.DataFrame(safe_strategy_rows),
-            width="stretch",
-            hide_index=True,
-        )
-        st.caption(
-            "원/달러는 실제 상품·수수료를 반영한 주문 신호가 아니라 분산 후보입니다. "
-            "옵션·변동성 ETN·레버리지·마켓뉴트럴은 기본 전략에서 제외합니다."
+        st.info(
+            "이 범위는 오늘 당장 맞춰야 할 목표가 아닙니다. 특히 패닉 안전장치가 켜진 날은 "
+            "범위를 벗어나도 매도하지 않고, 패닉 해제 후 최대 5%p씩만 조정합니다. "
+            "인버스는 아래 선택 기능에서만 별도로 다룹니다."
         )
 
     with defensive_performance_panel:
-        st.markdown("### 2. 최근 미사용 구간에서 실제로 방어됐나요?")
-        if defensive_optimization.get("status") == "ok":
-            defensive_metrics = defensive_optimization["holdout_metrics"]
-            performance_cols = st.columns(5)
-            performance_cols[0].metric(
-                "하락 20일 방어율",
-                f"{defensive_metrics['defense_rate']:.1f}%",
-                help="KOSPI의 20거래일 수익이 마이너스였던 구간 중, 방어조합의 손실이 더 작았던 비율입니다.",
+        st.markdown("### 2. 국면이 바뀌면 수익을 내는 방법도 바뀝니다")
+        regime_rows = []
+        for code in ("CRASH", "BOTTOM_RECOVERY", "UPTREND", "SIDEWAYS"):
+            policy = REGIME_POLICIES[code]
+            lower, upper = policy["equity_band"]
+            regime_rows.append(
+                {
+                    "시장 국면": f"{policy['icon']} {policy['label']}",
+                    "주식 범위": f"{lower * 100:.0f}~{upper * 100:.0f}%",
+                    "수익을 노리는 방법": policy["earning_method"],
+                    "실행 원칙": policy["core_strategy"],
+                    "하지 않는 것": policy["avoid"],
+                }
             )
-            performance_cols[1].metric(
-                "최대낙폭 개선",
-                f"{defensive_metrics['mdd_improvement']:+.1f}%p",
+        st.dataframe(pd.DataFrame(regime_rows), width="stretch", hide_index=True)
+        st.caption(
+            "기본 전략은 주식·현금·저위험 단기자금만 사용합니다. "
+            "옵션 매도, 변동성 ETN, 레버리지, 공매도, 마켓뉴트럴은 기본 화면에서 제외했습니다."
+        )
+
+        with st.expander("과거 데이터에서 이 고정 규칙을 확인한 결과"):
+            if regime_backtest.get("status") == "ok":
+                metrics = regime_backtest["holdout_metrics"]
+                validation_cols = st.columns(4)
+                validation_cols[0].metric(
+                    "최근 구간 전략수익",
+                    f"{metrics['strategy_total_return']:+.1f}%",
+                    delta=f"KOSPI {metrics['benchmark_total_return']:+.1f}%",
+                )
+                validation_cols[1].metric(
+                    "전략 최대낙폭",
+                    f"{metrics['strategy_mdd']:.1f}%",
+                    delta=f"KOSPI {metrics['benchmark_mdd']:.1f}%",
+                )
+                validation_cols[2].metric(
+                    "전략 변동성",
+                    f"{metrics['strategy_volatility']:.1f}%",
+                    delta=f"KOSPI {metrics['benchmark_volatility']:.1f}%",
+                )
+                validation_cols[3].metric(
+                    "하락일 민감도",
+                    f"{metrics['downside_capture']:.0f}%",
+                    help="KOSPI 하락일 손실을 몇 % 따라갔는지 보여줍니다. 낮을수록 방어적입니다.",
+                )
+                st.caption(
+                    f"{regime_backtest['holdout_start']} 이후 최근 30% 구간입니다. "
+                    "국면별 40~90% 범위, 5거래일 확인, 회당 5%p 조정, 편도 비용을 적용했습니다. "
+                    "수익률이 KOSPI보다 낮으면 방어로 줄인 손실보다 포기한 상승 수익이 컸다는 뜻입니다."
+                )
+                st.line_chart(regime_backtest["equity_curve"], height=300)
+            else:
+                st.warning(regime_backtest.get("message", "검증 데이터가 부족합니다."))
+
+        with st.expander("전문가용 · 예전 20% 목표 모델은 왜 기본값에서 뺐나요?"):
+            st.markdown(
+                "예전 값은 `목표변동성 ÷ 현재변동성`으로 계산한 스트레스 모델의 이론적 목표였습니다. "
+                "위험을 줄이는 데는 유용하지만, 장기 투자자에게 현금 80%를 즉시 요구하면 반등 수익을 크게 놓칠 수 있습니다. "
+                "지금은 이 계산을 주문으로 쓰지 않고 참고 검증으로만 남깁니다."
             )
-            performance_cols[2].metric(
-                "방어조합 최대낙폭",
-                f"{defensive_metrics['strategy_mdd']:.1f}%",
-            )
-            performance_cols[3].metric(
-                "변동성 감소",
-                f"{defensive_metrics['volatility_reduction']:.1f}%",
-            )
-            performance_cols[4].metric(
-                "최근 수익",
-                f"{defensive_metrics['strategy_total_return']:+.1f}%",
-                delta=f"KOSPI {defensive_metrics['benchmark_total_return']:+.1f}%",
-            )
-            st.caption(
-                f"과거 앞 70%에서 목표변동성·추세기간·방어상한을 선택하고, "
-                f"{defensive_optimization['holdout_start']} 이후 최근 30%는 선택에 쓰지 않고 확인했습니다. "
-                f"하락 20일 표본은 {defensive_metrics['defense_windows']}개입니다."
-            )
-            if defensive_validation_passed:
-                st.success(
-                    "최근 검증구간에서도 최대낙폭과 변동성이 줄었고, 위험 대비 수익 기준도 통과했습니다. "
-                    "다만 과거 방어율은 미래 승률을 보장하지 않습니다."
+            if defensive_optimization.get("status") == "ok":
+                old_metrics = defensive_optimization["holdout_metrics"]
+                st.caption(
+                    f"이전 모델 참고: 최근 수익 {old_metrics['strategy_total_return']:+.1f}% "
+                    f"(KOSPI {old_metrics['benchmark_total_return']:+.1f}%), "
+                    f"최대낙폭 {old_metrics['strategy_mdd']:.1f}%."
                 )
             else:
-                st.warning(
-                    "최근 검증구간에서 방어력과 위험 대비 수익 기준을 함께 통과하지 못했습니다. "
-                    "따라서 자동 비중조절 주문은 보류하고 현금만 유지합니다."
-                )
-            with st.expander("백테스트 설정과 전체 기간 차트"):
-                st.markdown(
-                    f"- 목표 연 변동성: **{defensive_parameters['target_volatility'] * 100:.0f}%**\n"
-                    f"- 장기 추세선: **{defensive_parameters['trend_days']}거래일**\n"
-                    f"- 추세 이탈 시 주식 상한: **{defensive_parameters['defensive_cap'] * 100:.0f}%**\n"
-                    f"- 비중 확인 주기: **{defensive_parameters['rebalance_days']}거래일**\n"
-                    "- 한 번의 비중 변경: **총자산 10%p 이내**\n"
-                    f"- 거래비용: **편도 {transaction_cost_bps:.1f}bp**\n"
-                    "- 현금 수익률: **0%로 보수적 가정**"
-                )
-                st.line_chart(
-                    defensive_optimization["equity_curve"],
-                    height=300,
-                )
-                full_metrics = defensive_optimization["full_metrics"]
-                st.caption(
-                    f"전체 기간 참고: 방어조합 연환산 {full_metrics['strategy_annual_return']:+.1f}% · "
-                    f"KOSPI {full_metrics['benchmark_annual_return']:+.1f}% · "
-                    f"평균 주식비중 {full_metrics['average_equity_weight']:.1f}% · "
-                    f"최대낙폭 개선 {full_metrics['mdd_improvement']:+.1f}%p"
-                )
-        else:
-            st.warning(
-                defensive_optimization.get(
-                    "message",
-                    "방어 조합을 시간순으로 검증할 데이터가 부족합니다.",
-                )
-            )
+                st.caption("이전 모델 검증 데이터가 부족합니다.")
 
     action_color = {
         "ENTER_PARTIAL": "#d97706",
@@ -2931,6 +2979,10 @@ with tab_hedging:
             st.error(
                 "⛔ 사용 중지: 과거 검증 자료가 부족합니다. 오늘 인버스 신규 주문은 0원입니다."
             )
+
+    # 아래의 과거 스프레드·마켓뉴트럴·볼린저 연구 화면은 사용자 행동판에서
+    # 완전히 퇴역시켰습니다. 헷징 탭은 여기까지가 실제 사용 화면입니다.
+    st.stop()
 
     # 사전 계산: 볼린저 밴드 폭 (Strategy E용)
     bw = 100.0
