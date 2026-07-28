@@ -18,6 +18,12 @@ from hedging import (
     optimize_hedge_parameters,
     run_hedge_backtest,
 )
+from defensive_overlay import (
+    build_defensive_action_plan,
+    current_defensive_state,
+    evaluate_usd_diversifier,
+    optimize_defensive_parameters,
+)
 from data_loader import (
     get_real_cnn_fg, 
     get_macro_charts, 
@@ -245,6 +251,15 @@ def get_hedge_optimization(
         inverse1x_hist=inverse1x_hist,
         inverse2x_hist=inverse2x_hist,
         horizon_key=horizon_key,
+        transaction_cost_bps=transaction_cost_bps,
+    )
+
+
+@st.cache_data(ttl=3600)
+def get_defensive_optimization(kospi_hist, transaction_cost_bps):
+    """Cache long-only defensive allocation selection and holdout validation."""
+    return optimize_defensive_parameters(
+        kospi_hist,
         transaction_cost_bps=transaction_cost_bps,
     )
 
@@ -2070,12 +2085,12 @@ with tab_calendar:
 
 with tab_hedging:
     st.subheader("🛡️ 오늘의 헷징 행동판")
-    st.caption("복잡한 지표보다 먼저, 오늘 할 일과 금액·보유기간·과거 결과를 보여드립니다.")
+    st.caption("기본은 현금·주식 비중·분할 재진입입니다. 인버스는 별도의 단기 보조수단으로만 확인합니다.")
 
-    quick_action_panel = st.container()
-    simple_performance_panel = st.container()
+    defensive_action_panel = st.container()
+    defensive_performance_panel = st.container()
 
-    st.markdown("### 3. 내 상황을 바꾸려면 여기서 선택하세요")
+    st.markdown("### 내 계좌와 인버스 보유 상황")
     horizon_col, position_col, days_col, holding_amount_col = st.columns(4)
     horizon_labels = {
         "tactical": "오늘~3일만 방어",
@@ -2134,6 +2149,10 @@ with tab_hedging:
     )
     if equity_amount > total_asset and total_asset > 0:
         st.warning("국내 주식 금액이 총 투자자산보다 큽니다. 계산에서는 총 투자자산까지만 반영합니다.")
+
+    st.markdown("### 인버스 보유자용 추가 확인")
+    quick_action_panel = st.container()
+    simple_performance_panel = st.container()
 
     hedge_policy = HEDGE_HORIZONS[horizon_key]
     vkospi_source = macro_charts.get("vkospi_source", "없음")
@@ -2310,7 +2329,7 @@ with tab_hedging:
         elif hv_pct >= 0.75 and curr_atr_ratio >= 1.3:
             vol_regime = "🟠 추세 변동성 (Trending — 칼날 구간)"
             vol_color  = "#fd7e14"
-            vol_action = "인버스/곱버스 홀딩 유지. 신규 현물 매수 금지."
+            vol_action = "현금을 유지하고 주식 비중은 주간 한도 안에서만 조정합니다. 신규 레버리지는 금지합니다."
             vol_details = [
                 f"실현변동성(HV20): {hv20:.1f}% — 확장 국면 (역사적 {hv_pct*100:.0f}% 백분위)",
                 f"ATR 비율: {curr_atr_ratio:.2f}x — 강한 방향성 동반",
@@ -2346,7 +2365,7 @@ with tab_hedging:
         else:
             vol_regime = "🟢 정상 회복 변동성 (Normal Recovery)"
             vol_color  = "#28a745"
-            vol_action = "헷징 포지션 청산 완료. 분할 매수 재개 적기."
+            vol_action = "인버스는 정리하고, 회복 단계에 맞춰 현금을 분할 투입합니다."
             vol_details = [
                 f"실현변동성(HV20): {hv20:.1f}% — 정상 범위 ({hv_pct*100:.0f}% 백분위)",
                 f"방향성 비율: {directional_ratio:.2f} — 안정적 회복 추세",
@@ -2571,6 +2590,198 @@ with tab_hedging:
         exit_threshold=optimized_exit_threshold,
     )
 
+    defensive_optimization = get_defensive_optimization(
+        kospi_10y,
+        transaction_cost_bps,
+    )
+    defensive_parameters = defensive_optimization.get(
+        "best_parameters",
+        {
+            "target_volatility": 0.12,
+            "trend_days": 200,
+            "defensive_cap": 0.55,
+            "rebalance_days": 5,
+            "minimum_equity": 0.20,
+            "max_rebalance_step": 0.10,
+        },
+    )
+    defensive_state = current_defensive_state(
+        kospi_10y,
+        defensive_parameters,
+    )
+    defensive_validation_passed = bool(
+        defensive_optimization.get("status") == "ok"
+        and defensive_optimization.get("passed", False)
+    )
+    defensive_action = build_defensive_action_plan(
+        total_assets=total_asset,
+        current_equity_amount=equity_amount,
+        state=defensive_state,
+        validation_passed=defensive_validation_passed,
+    )
+    usd_diversifier = evaluate_usd_diversifier(kospi_10y, usd_krw)
+
+    defensive_color = {
+        "PANIC_FREEZE": "#b45309",
+        "REDUCE_EQUITY": "#d97706",
+        "ADD_EQUITY": "#15803d",
+        "HOLD": "#2563eb",
+    }.get(defensive_action["action"], "#475569")
+    with defensive_action_panel:
+        st.markdown("### 1. 기본 권장 — 오늘 할 일")
+        st.markdown(
+            f"""
+            <div style="background:#ffffff; border:2px solid {defensive_color}; border-radius:14px;
+                        padding:22px; margin:8px 0 14px 0;">
+                <div style="font-size:0.9rem; color:#64748b; margin-bottom:6px;">레버리지 없는 기본 방어조합</div>
+                <div style="font-size:1.55rem; line-height:1.35; font-weight:800; color:{defensive_color};">
+                    {defensive_action['title']}
+                </div>
+                <div style="margin-top:12px; color:#334155;">
+                    {defensive_action['reason']}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        target_equity_value = defensive_action["target_equity_amount"]
+        target_cash_value = defensive_action["target_cash_amount"]
+        state_ok = defensive_state.get("status") == "ok"
+        safe_cols = st.columns(4)
+        safe_cols[0].metric(
+            defensive_action["amount_label"],
+            f"{defensive_action['amount']:,.0f}만원",
+        )
+        safe_cols[1].metric("현재 방어목표 주식", f"{target_equity_value:,.0f}만원")
+        safe_cols[2].metric("현재 방어목표 현금", f"{target_cash_value:,.0f}만원")
+        safe_cols[3].metric(
+            "바닥 확인 단계",
+            f"{defensive_state.get('reentry_stage', 0)}/4",
+        )
+        st.markdown(
+            "\n".join(
+                f"{idx}. {step}"
+                for idx, step in enumerate(defensive_action["steps"], start=1)
+            )
+        )
+        if state_ok:
+            st.caption(
+                f"기준일 {defensive_state['as_of']} · 실현변동성 "
+                f"{defensive_state['realized_volatility'] * 100:.1f}% · "
+                f"{defensive_state['trend_days']}일 추세 "
+                f"{'위' if defensive_state['above_trend'] else '아래'} · "
+                f"{defensive_state['reentry_label']}"
+            )
+
+        st.markdown("#### 방어 수단별 현재 역할")
+        usd_role = (
+            "총자산 5% 이내 검토 후보"
+            if usd_diversifier.get("eligible")
+            else "지금은 추가하지 않음"
+        )
+        safe_strategy_rows = [
+            {
+                "방어 수단": "① 현금·단기자금",
+                "오늘 역할": f"{target_cash_value:,.0f}만원 목표",
+                "이유": "강제매도 없이 바닥 확인 뒤 살 수 있는 예비자금",
+            },
+            {
+                "방어 수단": "② 변동성 맞춤 주식비중",
+                "오늘 역할": defensive_action["title"],
+                "이유": "변동성이 커질수록 주식 위험을 천천히 낮춤",
+            },
+            {
+                "방어 수단": "③ 추세 확인 분할 재진입",
+                "오늘 역할": defensive_state.get("reentry_label", "데이터 확인 필요"),
+                "이유": "5·20·60·장기 추세를 순서대로 확인해 저점 추격을 줄임",
+            },
+            {
+                "방어 수단": "④ 원/달러 분산",
+                "오늘 역할": usd_role,
+                "이유": usd_diversifier.get("message", "분산효과 확인 필요"),
+            },
+        ]
+        st.dataframe(
+            pd.DataFrame(safe_strategy_rows),
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption(
+            "원/달러는 실제 상품·수수료를 반영한 주문 신호가 아니라 분산 후보입니다. "
+            "옵션·변동성 ETN·레버리지·마켓뉴트럴은 기본 전략에서 제외합니다."
+        )
+
+    with defensive_performance_panel:
+        st.markdown("### 2. 최근 미사용 구간에서 실제로 방어됐나요?")
+        if defensive_optimization.get("status") == "ok":
+            defensive_metrics = defensive_optimization["holdout_metrics"]
+            performance_cols = st.columns(5)
+            performance_cols[0].metric(
+                "하락 20일 방어율",
+                f"{defensive_metrics['defense_rate']:.1f}%",
+                help="KOSPI의 20거래일 수익이 마이너스였던 구간 중, 방어조합의 손실이 더 작았던 비율입니다.",
+            )
+            performance_cols[1].metric(
+                "최대낙폭 개선",
+                f"{defensive_metrics['mdd_improvement']:+.1f}%p",
+            )
+            performance_cols[2].metric(
+                "방어조합 최대낙폭",
+                f"{defensive_metrics['strategy_mdd']:.1f}%",
+            )
+            performance_cols[3].metric(
+                "변동성 감소",
+                f"{defensive_metrics['volatility_reduction']:.1f}%",
+            )
+            performance_cols[4].metric(
+                "최근 수익",
+                f"{defensive_metrics['strategy_total_return']:+.1f}%",
+                delta=f"KOSPI {defensive_metrics['benchmark_total_return']:+.1f}%",
+            )
+            st.caption(
+                f"과거 앞 70%에서 목표변동성·추세기간·방어상한을 선택하고, "
+                f"{defensive_optimization['holdout_start']} 이후 최근 30%는 선택에 쓰지 않고 확인했습니다. "
+                f"하락 20일 표본은 {defensive_metrics['defense_windows']}개입니다."
+            )
+            if defensive_validation_passed:
+                st.success(
+                    "최근 검증구간에서도 최대낙폭과 변동성이 줄었고, 위험 대비 수익 기준도 통과했습니다. "
+                    "다만 과거 방어율은 미래 승률을 보장하지 않습니다."
+                )
+            else:
+                st.warning(
+                    "최근 검증구간에서 방어력과 위험 대비 수익 기준을 함께 통과하지 못했습니다. "
+                    "따라서 자동 비중조절 주문은 보류하고 현금만 유지합니다."
+                )
+            with st.expander("백테스트 설정과 전체 기간 차트"):
+                st.markdown(
+                    f"- 목표 연 변동성: **{defensive_parameters['target_volatility'] * 100:.0f}%**\n"
+                    f"- 장기 추세선: **{defensive_parameters['trend_days']}거래일**\n"
+                    f"- 추세 이탈 시 주식 상한: **{defensive_parameters['defensive_cap'] * 100:.0f}%**\n"
+                    f"- 비중 확인 주기: **{defensive_parameters['rebalance_days']}거래일**\n"
+                    "- 한 번의 비중 변경: **총자산 10%p 이내**\n"
+                    f"- 거래비용: **편도 {transaction_cost_bps:.1f}bp**\n"
+                    "- 현금 수익률: **0%로 보수적 가정**"
+                )
+                st.line_chart(
+                    defensive_optimization["equity_curve"],
+                    height=300,
+                )
+                full_metrics = defensive_optimization["full_metrics"]
+                st.caption(
+                    f"전체 기간 참고: 방어조합 연환산 {full_metrics['strategy_annual_return']:+.1f}% · "
+                    f"KOSPI {full_metrics['benchmark_annual_return']:+.1f}% · "
+                    f"평균 주식비중 {full_metrics['average_equity_weight']:.1f}% · "
+                    f"최대낙폭 개선 {full_metrics['mdd_improvement']:+.1f}%p"
+                )
+        else:
+            st.warning(
+                defensive_optimization.get(
+                    "message",
+                    "방어 조합을 시간순으로 검증할 데이터가 부족합니다.",
+                )
+            )
+
     action_color = {
         "ENTER_PARTIAL": "#d97706",
         "REDUCE_BETA": "#d97706",
@@ -2581,7 +2792,7 @@ with tab_hedging:
         "HOLD": "#2563eb",
     }.get(hedge_decision.action, "#475569")
     with quick_action_panel:
-        st.markdown("### 1. 오늘 해야 할 일")
+        st.markdown("#### 인버스 보유자용 행동")
         st.markdown(
             f"""
             <div style="background:#ffffff; border:2px solid {action_color}; border-radius:14px;
@@ -2627,7 +2838,7 @@ with tab_hedging:
         )
 
     with simple_performance_panel:
-        st.markdown("### 2. 과거에는 얼마나 맞았나요?")
+        st.markdown("#### 인버스 단기전략의 과거 결과")
         if hedge_optimization.get("status") == "ok":
             holdout_metrics = hedge_optimization["holdout_metrics"]
             signal_count = int(holdout_metrics["trades"])
@@ -2709,46 +2920,39 @@ with tab_hedging:
         except: pass
 
     # ════════════════════════════════════════════
-    # 🗺️ 헷징 전략 통합 매트릭스 (Strategy E)
+    # 🗺️ 저위험 방어수단 통합 매트릭스
     # ════════════════════════════════════════════
     matrix_data = {
         "전략": [
-            "① 곱버스(인버스) 매수",
-            "② 코스피200↔코스닥 스프레드",
-            "③ 마켓뉴트럴 (고배당 L/인버스 S)",
-            "④ 볼린저 리밸런싱",
-            "⑤ 현금 100% 대기",
+            "① 현금·단기자금 완충",
+            "② 변동성 맞춤 주식비중",
+            "③ 장기추세 필터",
+            "④ 단계별 재진입",
+            "⑤ 원/달러 소규모 분산",
         ],
         "상태": [
-            hedge_decision.headline,
-            "🟢 활성" if (
-                has_spread_data
-                and spread_adf.get("status") == "ok"
-                and abs(curr_z) >= 2.3
-                and spread_adf.get("is_cointegrated", False)
-            ) else "⛔ 비활성",
-            "🧪 연구용" if (not kospi_10y.empty and bw < 3.5) else "⛔ 비활성",
-            "🟢 활성" if (curr_k <= curr_lower2 and curr_atr_ratio < 1.5) else ("🟡 준비" if curr_k <= curr_lower1 else "⛔ 비활성"),
-            "🟢 권장" if hedge_decision.action in {
-                "WAIT",
-                "WAIT_REVERSAL",
-                "BLOCK_DATA",
-                "BLOCK_PROXY_2X",
-                "REDUCE_BETA",
-            } else "🟡 병행",
+            "🟢 기본",
+            "🟢 검증 통과" if defensive_validation_passed else "🟡 주문 보류",
+            "🟢 정상 추세" if defensive_state.get("above_trend") else "🟠 방어 추세",
+            f"{defensive_state.get('reentry_stage', 0)}/4 단계",
+            "🟡 5% 이내 후보" if usd_diversifier.get("eligible") else "⚪ 제외",
         ],
-        "예상 수익/리스크": [
-            f"{hedge_policy.label} / 최대 {hedge_policy.max_days}일 (진입: {inv_score}점)",
-            f"백테스트 확인 필요 / 공적분·모형 붕괴 위험 (Z: {curr_z:+.2f})",
-            "실제 베타·헤지비율 검증 전 실행 금지",
-            "백테스트 확인 필요 / 추세 역행 위험",
-            "기회비용 / 자본 보존",
+        "역할과 한도": [
+            f"목표 {target_cash_value:,.0f}만원 / 바닥 매수용 예비자금",
+            "목표변동성에 맞추되 주간 총자산 10%p 이내 조정",
+            f"{defensive_state.get('trend_days', 200)}일선 아래에서는 주식 상한 축소",
+            defensive_state.get("reentry_label", "데이터 확인 필요"),
+            usd_diversifier.get("message", "분산효과 확인 필요"),
         ]
     }
-    with st.expander("전문가용 · 다른 헷징 전략과 비교"):
+    with st.expander("전문가용 · 기본 방어조합의 구성"):
         st.dataframe(
             pd.DataFrame(matrix_data).set_index("전략"),
             width="stretch",
+        )
+        st.info(
+            "기본 전략에서 제외: 옵션·콜라(만기·프리미엄), 변동성 ETN(경로·롤 비용), "
+            "레버리지/곱버스(일간 재설정), 페어·마켓뉴트럴(상관·모형 붕괴)."
         )
 
     # ════════════════════════════════════════════
@@ -2768,72 +2972,14 @@ with tab_hedging:
         """, unsafe_allow_html=True)
 
     # ── 오늘의 추천 트레이딩 패널 ──
-    trade_recommendation = hedge_decision.headline
+    trade_recommendation = defensive_action["title"]
     trade_reason = (
-        f"{hedge_decision.reason} 대상: {hedge_decision.product}. "
-        f"최대 보유기간은 {hedge_decision.max_holding_days}거래일입니다."
+        f"{defensive_action['reason']} "
+        f"현재 위험이 이어질 때의 방어 목표는 국내 주식 {target_equity_value:,.0f}만원, "
+        f"현금 {target_cash_value:,.0f}만원입니다. "
+        "복잡한 숏·옵션 전략은 오늘 실행 대상이 아닙니다."
     )
-    trade_color = {
-        "high": "#dc3545",
-        "medium": "#ffc107",
-        "low": "#6c757d",
-    }.get(hedge_decision.urgency, "#6c757d")
-
-    if (
-        hedge_decision.action == "WAIT"
-        and has_tech
-        and curr_atr_ratio >= 1.5
-    ):
-        trade_recommendation = "⚪ 신규 방향성 헷지 보류 / 현금 베타 축소"
-        trade_reason = (
-            f"ATR이 최근 평균의 {curr_atr_ratio:.2f}배로 확대됐습니다. "
-            "휩쏘가 안정될 때까지 신규 레버리지보다 현금 비중 조절을 우선합니다."
-        )
-        trade_color = "#6c757d"
-    elif (
-        hedge_decision.action == "WAIT"
-        and has_spread_data
-        and spread_adf.get("status") != "ok"
-    ):
-        trade_recommendation = "⚪ 스프레드 전략 비활성 — 검정 데이터 확인 필요"
-        trade_reason = (
-            "공적분 검정이 정상 완료되지 않았습니다. "
-            f"상태: {spread_adf.get('status')} / 원인: {spread_adf.get('error', '알 수 없음')}"
-        )
-        trade_color = "#6c757d"
-    elif (
-        hedge_decision.action == "WAIT"
-        and has_spread_data
-        and spread_adf.get("status") == "ok"
-        and not spread_adf.get("is_cointegrated", False)
-    ):
-        pvalue = spread_adf.get("spread_adf_pvalue")
-        trade_recommendation = "⚪ 관망 (지수 간 공적분 붕괴로 평균회귀 비활성화)"
-        trade_reason = (
-            f"KOSPI200-KOSDAQ 로그가격 잔차의 ADF p-value가 {pvalue:.3f}로 "
-            "0.05를 초과했습니다. 스프레드 매매를 중단합니다."
-        )
-        trade_color = "#6c757d"
-    elif (
-        hedge_decision.action == "WAIT"
-        and has_spread_data
-        and spread_adf.get("status") == "ok"
-        and spread_adf.get("is_cointegrated", False)
-        and curr_z >= 2.3
-    ):
-        trade_recommendation = "📊 코스닥 롱 / 코스피 숏 스프레드 매매 진입"
-        trade_reason = f"공적분이 유효한 상태에서 KOSPI200 잔차 Z-Score가 {curr_z:+.2f}입니다. Z-Score가 +0.5로 회귀할 때 청산합니다."
-        trade_color = "#17a2b8"
-    elif (
-        hedge_decision.action == "WAIT"
-        and has_spread_data
-        and spread_adf.get("status") == "ok"
-        and spread_adf.get("is_cointegrated", False)
-        and curr_z <= -2.3
-    ):
-        trade_recommendation = "📊 코스피 롱 / 코스닥 숏 스프레드 매매 진입"
-        trade_reason = f"공적분이 유효한 상태에서 KOSPI200 잔차 Z-Score가 {curr_z:+.2f}입니다. Z-Score가 -0.5로 회귀할 때 청산합니다."
-        trade_color = "#ffc107"
+    trade_color = defensive_color
         
     with st.expander("전문가용 · 오늘 결론의 상세 계산"):
         st.markdown(f"""
@@ -2999,13 +3145,13 @@ with tab_hedging:
             """, unsafe_allow_html=True)
 
     st.divider()
-    st.markdown("### 4. 더 깊은 연구 도구 · 처음에는 건너뛰어도 됩니다")
-    st.caption(
-        "아래의 지수 관계·마켓뉴트럴·볼린저 분석은 연구용 보조 화면입니다. "
-        "오늘 실행은 위의 ‘오늘 해야 할 일’만 따르면 됩니다."
+    st.markdown("### 실행 대상에서 뺀 고위험 연구 기록")
+    st.warning(
+        "아래 지표는 연구 기록만 남기며 매수·매도 추천을 만들지 않습니다. "
+        "상관관계 붕괴, 공매도 실행, 잦은 매매 위험 때문에 기본 행동판에서는 제외했습니다."
     )
 
-    st.markdown("#### 선택 연구 ① 코스피200과 코스닥 관계 분석")
+    st.markdown("#### 제외 ① 코스피200·코스닥 스프레드")
     if has_spread_data:
         if spread_adf.get("status") != "ok":
             spread_verdict = "⚪ 공적분 검정 불가 — 전략 비활성"
@@ -3033,7 +3179,7 @@ with tab_hedging:
             f"(진입 임계치: ±2.2) · {spread_status_text}",
             unsafe_allow_html=True,
         )
-        st.markdown(f"**판정:** {spread_verdict}")
+        st.markdown(f"**연구 상태:** {spread_verdict} · **실행: 제외**")
         if spread_adf.get("status") == "ok":
             z_column = "Residual_Z" if "Residual_Z" in combined.columns else "Z_Score"
             z_df = pd.DataFrame({"공적분 잔차 Z-Score": combined[z_column].tail(60)})
@@ -3043,7 +3189,7 @@ with tab_hedging:
 
     st.divider()
     
-    st.markdown("### 2-1. ⚖️ 횡보장 전용 마켓 뉴트럴 (Market Neutral)")
+    st.markdown("#### 제외 ② 마켓뉴트럴")
     with st.expander("💡 [필독] 마켓 뉴트럴(시장 중립) 전략이란?"):
         st.markdown(
             "고배당 ETF(Long)와 인버스(Short)를 단순 1:1로 섞는다고 시장중립이 되지는 않습니다. "
@@ -3051,14 +3197,9 @@ with tab_hedging:
         )
     
     if not kospi_10y.empty:
-        if bw < 3.5:
-            mn_status = f"🧪 횡보장 후보 (볼린저 밴드폭 {bw:.1f}%)"
-            mn_action = "👉 베타·공적분·거래비용 백테스트 전에는 연구용으로만 표시합니다."
-            mn_color = "#17a2b8"
-        else:
-            mn_status = f"⚫ 추세장 진행 중 (볼린저 밴드폭 {bw:.1f}%)"
-            mn_action = "👉 지수의 변동성이 살아있으므로 마켓 뉴트럴 전략은 관망합니다."
-            mn_color = "#6c757d"
+        mn_status = f"⛔ 기본 전략 제외 (볼린저 밴드폭 {bw:.1f}%)"
+        mn_action = "실제 순베타·차입비용·공매도 가능 여부를 검증하지 않았으므로 실행하지 않습니다."
+        mn_color = "#6c757d"
             
         st.markdown(f"""
         <div style='background-color:#f8f9fa; padding:15px; border-radius:8px; border-left: 6px solid {mn_color}; margin-bottom:15px;'>
@@ -3082,17 +3223,17 @@ with tab_hedging:
     st.divider()
 
     # ════════════════════════════════════════════
-    # 📈 변동성 수확 (Strategy C)
+    # 📈 변동성 수확 연구 기록
     # ════════════════════════════════════════════
-    st.markdown("### 2-2. 📈 변동성 수확 — 볼린저 밴드 리밸런싱 신호")
-    st.caption("횡보/휩쏘 구간에서 KOSPI가 볼린저 밴드 상·하단에 닿을 때 기계적으로 리밸런싱하여 '변동성 프리미엄'을 수확하는 전략입니다.")
+    st.markdown("#### 제외 ③ 볼린저 단기매매")
+    st.caption("밴드 접촉만으로는 바닥을 확인할 수 없어 기본 행동판의 분할 재진입 조건으로 사용하지 않습니다.")
 
     with st.expander("💡 [필독] 볼린저 밴드 리밸런싱 전략이란?"):
         st.markdown("""
-        **실행 규칙 (1:1 매칭)**:
-        - 📉 **하단 터치 시**: 보유 현금의 10% → KODEX 200 매수
-        - 📈 **상단 터치 시**: 전량 익절
-        - ⚡ **추세장(ATR 비율 1.5 이상)에서는 자동 비활성화**
+        **제외 이유**:
+        - 밴드 하단을 따라 계속 하락하는 추세장에서 저점 매수가 반복될 수 있습니다.
+        - 밴드 상단 전량 매도는 장기 상승 수익을 잘라낼 수 있습니다.
+        - 화면에는 연구용 위치만 표시하고 주문 문구는 만들지 않습니다.
         """)
 
     if not kospi_10y.empty and ma20_s is not None:
@@ -3109,21 +3250,21 @@ with tab_hedging:
             bb_color = "#6c757d"
             bb_action = "ATR 변동성이 과도하여 평균 회귀 가정이 무효입니다."
         elif curr_k <= curr_lower2:
-            bb_signal = f"🟢 볼밴 하단 터치 (밴드 내 위치: {band_pos:.0f}%) — 매수 리밸런싱"
-            bb_color = "#28a745"
-            bb_action = "현금 10%를 KODEX 200 분할 매수. 목표: MA20 복귀 시 익절."
+            bb_signal = f"⚪ 볼밴 하단 터치 (밴드 내 위치: {band_pos:.0f}%) — 연구 기록"
+            bb_color = "#6c757d"
+            bb_action = "이 신호만으로 매수하지 않습니다. 위의 4단계 회복 조건을 따릅니다."
         elif curr_k <= curr_lower1:
-            bb_signal = f"🟡 볼밴 -1σ 접근 (밴드 내 위치: {band_pos:.0f}%) — 소량 선매수 준비"
-            bb_color = "#ffc107"
-            bb_action = "현금의 5% 선매수. 하단(-2σ) 추가 터치 시 나머지 10% 진입."
+            bb_signal = f"⚪ 볼밴 -1σ 접근 (밴드 내 위치: {band_pos:.0f}%) — 연구 기록"
+            bb_color = "#6c757d"
+            bb_action = "별도 주문을 만들지 않습니다."
         elif curr_k >= curr_upper2:
-            bb_signal = f"🔴 볼밴 상단 터치 (밴드 내 위치: {band_pos:.0f}%) — 익절 리밸런싱"
-            bb_color = "#dc3545"
-            bb_action = "이전 매수분 전량 익절. 인버스 소량 진입 검토."
+            bb_signal = f"⚪ 볼밴 상단 터치 (밴드 내 위치: {band_pos:.0f}%) — 연구 기록"
+            bb_color = "#6c757d"
+            bb_action = "전량매도나 인버스 진입 근거로 사용하지 않습니다."
         elif curr_k >= curr_upper1:
-            bb_signal = f"🟠 볼밴 +1σ 접근 (밴드 내 위치: {band_pos:.0f}%) — 부분 익절 준비"
-            bb_color = "#fd7e14"
-            bb_action = "이전 매수분의 50% 분할 익절. 상단 터치 시 청산."
+            bb_signal = f"⚪ 볼밴 +1σ 접근 (밴드 내 위치: {band_pos:.0f}%) — 연구 기록"
+            bb_color = "#6c757d"
+            bb_action = "별도 주문을 만들지 않습니다."
         else:
             bb_signal = f"⚪ 밴드 중립 구간 (밴드 내 위치: {band_pos:.0f}%) — 대기"
             bb_color = "#6c757d"
@@ -3146,48 +3287,21 @@ with tab_hedging:
 
     st.divider()
 
-    st.markdown("### 3. 🤝 다중 페어 트레이딩 (Statistical Arbitrage)")
+    st.markdown("#### 제외 ④ 다중 페어 트레이딩")
     with st.expander("💡 [필독] 페어 트레이딩(짝짓기) 스위칭 전략"):
-        st.markdown("고평가된 종목을 팔고 저평가된 종목으로 갈아타는 강력한 헤지펀드 전략입니다.")
+        st.markdown(
+            "고평가 자산을 팔고 저평가 자산을 사는 방식이지만, "
+            "개인 계좌에서는 공매도·차입비용·상관 붕괴를 통제하기 어려워 기본 전략에서 제외합니다."
+        )
 
-    if st.button("🔄 전 종목 페어 데이터 실시간 스캔", key="pairs_scan"):
-        with st.spinner("한국 증시 핵심 페어 통계 분석 중..."):
-            multi_pairs_data = get_daily_multi_pairs()
-            if multi_pairs_data:
-                pair_names = list(multi_pairs_data.keys())
-                tabs = st.tabs(pair_names)
-                for i, p_name in enumerate(pair_names):
-                    p_data = multi_pairs_data[p_name]
-                    with tabs[i]:
-                        if p_data["df"] is not None:
-                            p_color = p_data["color"]
-                            st.markdown(f"""
-                            <div style='background-color:#f8f9fa; padding:15px; border-radius:8px; border-left: 6px solid {p_color}; margin-bottom:15px;'>
-                                <h5 style='margin-top:0; color:#333;'>상태: <span style='color:{p_color}; font-weight:bold;'>{p_data["status"]}</span></h5>
-                                <p style='font-size:0.95em; color:#555; margin-bottom:5px;'>
-                                {p_data["action"]}
-                                </p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            df = p_data["df"]
-                            chart_df = pd.DataFrame({
-                                "비율 (S/L)": df["Ratio"].tail(40),
-                                "MA20": df["MA20"].tail(40),
-                                "+2σ": df["Upper"].tail(40),
-                                "-2σ": df["Lower"].tail(40)
-                            })
-                            st.line_chart(chart_df)
-                        else:
-                            st.error("데이터 수집 실패")
-            else:
-                st.error("오류 발생")
+    st.caption("공매도·헤지비율·상관 붕괴 위험 때문에 스캐너와 주문 신호를 비활성화했습니다.")
 
     st.divider()
     
-    st.markdown("### 4. 🛡️ 헷징 매매 가이드 및 대상 ETF 상품")
+    st.markdown("#### 기본 전략에서 제외한 상품")
     st.markdown("""
-    - **곱버스 (KOSPI 2X 인버스)**: `KODEX 200선물인버스2X` (252670)
-    - **코스닥 인버스**: `KODEX 코스닥150선물인버스` (251340)
-    - **달러 헷징 (달러 선물)**: `KODEX 미국달러선물2X` (261250)
+    - **2배 인버스·달러 2배 상품:** 일간 재설정과 휩쏘 손실 때문에 기본 조합에서 제외
+    - **옵션·변동성 ETN:** 만기, 프리미엄 전액 손실, 롤 비용 때문에 제외
+    - **페어·마켓뉴트럴:** 공매도 실행과 상관관계 붕괴 위험 때문에 제외
+    - **원/달러 분산:** 최근 상관과 추세가 확인될 때만 총자산 5% 이내의 후보로 표시
     """)
