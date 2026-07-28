@@ -190,6 +190,16 @@ def evaluate_hedge_state(
             allow_new_entry=False,
             urgency="high",
         )
+    if horizon_key != "defensive" and not validation_passed:
+        return HedgeDecision(
+            action="BLOCK_VALIDATION",
+            headline="인버스 신규 진입 사용 중지 — 백테스트 탈락",
+            reason="최근 별도 검증에서 평균수익과 계좌 손실 방어 기준을 함께 통과하지 못했습니다. 시장 점수와 관계없이 신규 매수하지 않습니다.",
+            product=policy.product,
+            max_holding_days=max_days,
+            allow_new_entry=False,
+            urgency="high",
+        )
     if data_quality == "proxy" and horizon_key == "tactical":
         return HedgeDecision(
             action="BLOCK_PROXY_2X",
@@ -235,17 +245,6 @@ def evaluate_hedge_state(
             product=policy.product,
             max_holding_days=max_days,
             allow_new_entry=True,
-            urgency="medium",
-        )
-
-    if not validation_passed:
-        return HedgeDecision(
-            action="BLOCK_VALIDATION",
-            headline="신규 인버스 보류 — 과거 검증 부족",
-            reason="최근 구간을 따로 떼어 확인했을 때 수익성과 손실 방어가 함께 확인되지 않았습니다.",
-            product=policy.product,
-            max_holding_days=max_days,
-            allow_new_entry=False,
             urgency="medium",
         )
 
@@ -318,6 +317,7 @@ def build_plain_action_plan(
     policy_cap = max(float(policy_cap), 0.0)
     reserve_amount = min(recommended_allocation, policy_cap)
     remaining_days = max(decision.max_holding_days, 1)
+    next_check = "다음 거래일 종가 후"
 
     if decision.action == "ENTER_PARTIAL":
         first_order = reserve_amount * 0.5
@@ -374,13 +374,23 @@ def build_plain_action_plan(
             f"최대 {remaining_days}거래일 제한을 지킵니다.",
             f"청산 점수가 {exit_threshold:.0f}점 이상이면 절반을 줄입니다.",
         ]
+    elif decision.action == "BLOCK_VALIDATION":
+        title = "오늘 인버스 신규 주문은 0원입니다"
+        amount_label = "오늘 신규 주문"
+        amount_value = "0원"
+        next_check = "전략 재검증 후"
+        steps = [
+            "평균수익 또는 계좌 손실 방어 기준을 통과하지 못해 신규 매수하지 않습니다.",
+            "하락방어 점수는 시장이 위험한 정도이며 인버스 매수 허가가 아닙니다.",
+            "전략이 새 검증을 통과할 때까지 현금으로 유지합니다.",
+        ]
     else:
         title = "오늘은 인버스를 새로 사지 마세요"
         amount_label = "오늘 신규 주문"
         amount_value = "0원"
         steps = [
             "인버스·곱버스 신규 주문은 넣지 않습니다.",
-            f"방어 예산 {policy_cap:,.0f}만원은 현금으로 남겨 둡니다.",
+            f"인버스 최대 한도는 {policy_cap:,.0f}만원이지만 현재 배정은 0원입니다.",
             "다음 거래일 종가 후 조건을 다시 확인합니다.",
         ]
 
@@ -389,13 +399,104 @@ def build_plain_action_plan(
         "amount_label": amount_label,
         "amount_value": amount_value,
         "steps": steps,
-        "next_check": "다음 거래일 종가 후",
+        "next_check": next_check,
         "entry_progress": (
             min(max(float(entry_score), 0.0) / max(float(entry_threshold), 1.0), 1.0)
         ),
         "exit_progress": (
             min(max(float(exit_score), 0.0) / max(float(exit_threshold), 1.0), 1.0)
         ),
+    }
+
+
+def build_inverse_validation_summary(
+    optimization: dict[str, Any],
+) -> dict[str, Any]:
+    """Turn holdout metrics into a plain-language use/stop gate."""
+
+    if (
+        optimization.get("status") != "ok"
+        or not isinstance(optimization.get("holdout_metrics"), dict)
+    ):
+        return {
+            "state": "UNAVAILABLE",
+            "usable": False,
+            "label": "사용 중지",
+            "headline": "검증 자료가 부족해 이 전략을 사용하지 않습니다",
+            "reason": "과거 결과를 확인할 수 없으면 인버스 신규 주문은 0원입니다.",
+            "checks": [],
+        }
+
+    metrics = optimization["holdout_metrics"]
+    trades = int(metrics.get("trades", 0))
+    average = float(metrics.get("avg_trade_return", 0.0))
+    profit_factor = float(metrics.get("profit_factor", 0.0))
+    mdd_improvement = float(metrics.get("mdd_improvement", 0.0))
+    checks = [
+        {
+            "label": "거래당 평균",
+            "value": f"{average:+.2f}%",
+            "passed": average > 0,
+            "rule": "0%보다 커야 사용",
+        },
+        {
+            "label": "수익/손실 비율",
+            "value": f"{profit_factor:.2f}",
+            "passed": profit_factor > 1,
+            "rule": "1.00보다 커야 사용",
+        },
+        {
+            "label": "계좌 낙폭 개선",
+            "value": f"{mdd_improvement:+.1f}%p",
+            "passed": mdd_improvement > 0,
+            "rule": "0%p보다 커야 사용",
+        },
+        {
+            "label": "검증 거래",
+            "value": f"{trades}회",
+            "passed": trades >= 3,
+            "rule": "최소 3회 필요",
+        },
+    ]
+    usable = bool(optimization.get("passed", False)) and all(
+        check["passed"] for check in checks
+    )
+
+    if usable:
+        return {
+            "state": "PASSED",
+            "usable": True,
+            "label": "조건부 사용 가능",
+            "headline": "과거 검증을 통과했습니다 — 오늘 조건을 추가 확인하세요",
+            "reason": "백테스트 통과는 매수 확정이 아닙니다. 오늘 시장 조건까지 통과할 때만 소액 분할 진입합니다.",
+            "checks": checks,
+        }
+
+    if average <= 0:
+        reason = (
+            f"최근 별도 검증에서 거래당 평균이 {average:+.2f}%였습니다. "
+            "평균적으로 손해 본 전략이므로 신규 진입에 사용하지 않습니다."
+        )
+    elif profit_factor <= 1:
+        reason = (
+            f"벌었을 때와 잃었을 때를 합산한 수익/손실 비율이 {profit_factor:.2f}로 "
+            "기준 1.00을 넘지 못했습니다."
+        )
+    elif mdd_improvement <= 0:
+        reason = (
+            f"인버스를 사용해도 계좌 최대낙폭 개선이 {mdd_improvement:+.1f}%p로 "
+            "실제 방어 효과가 확인되지 않았습니다."
+        )
+    else:
+        reason = f"검증 거래가 {trades}회뿐이라 전략을 사용할 근거가 부족합니다."
+
+    return {
+        "state": "FAILED",
+        "usable": False,
+        "label": "사용 중지",
+        "headline": "백테스트 탈락 — 오늘 인버스 신규 주문은 0원입니다",
+        "reason": reason,
+        "checks": checks,
     }
 
 

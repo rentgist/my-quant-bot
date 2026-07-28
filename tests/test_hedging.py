@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from hedging import (
+    build_inverse_validation_summary,
     build_plain_action_plan,
     calculate_beta_hedge_size,
     evaluate_hedge_state,
@@ -77,6 +78,20 @@ class HedgePolicyTests(unittest.TestCase):
         self.assertEqual(decision.action, "BLOCK_VALIDATION")
         self.assertFalse(decision.allow_new_entry)
 
+    def test_failed_holdout_overrides_high_market_score(self):
+        decision = evaluate_hedge_state(
+            horizon_key="tactical",
+            position_status="none",
+            entry_score=90,
+            exit_score=30,
+            rsi=31.0,
+            foreign_futures=5000,
+            data_quality="proxy",
+            validation_passed=False,
+        )
+        self.assertEqual(decision.action, "BLOCK_VALIDATION")
+        self.assertIn("사용 중지", decision.headline)
+
     def test_plain_action_plan_turns_reduce_into_amount(self):
         decision = evaluate_hedge_state(
             horizon_key="tactical",
@@ -101,6 +116,69 @@ class HedgePolicyTests(unittest.TestCase):
         )
         self.assertEqual(plan["amount_value"], "500만원")
         self.assertIn("매도", plan["title"])
+
+    def test_failed_validation_plan_says_strategy_is_stopped(self):
+        decision = evaluate_hedge_state(
+            horizon_key="short",
+            position_status="none",
+            entry_score=90,
+            exit_score=0,
+            rsi=45.0,
+            foreign_futures=-3000,
+            data_quality="live",
+            validation_passed=False,
+        )
+        plan = build_plain_action_plan(
+            decision=decision,
+            position_status="none",
+            holding_amount=0,
+            recommended_allocation=350,
+            policy_cap=500,
+            entry_score=90,
+            entry_threshold=70,
+            exit_score=0,
+            exit_threshold=35,
+        )
+        self.assertIn("0원", plan["title"])
+        self.assertEqual(plan["amount_value"], "0원")
+        self.assertEqual(plan["next_check"], "전략 재검증 후")
+
+    def test_negative_average_is_plainly_marked_unusable(self):
+        summary = build_inverse_validation_summary(
+            {
+                "status": "ok",
+                "passed": False,
+                "holdout_metrics": {
+                    "trades": 14,
+                    "avg_trade_return": -1.37,
+                    "win_rate": 42.9,
+                    "worst_trade_return": -13.77,
+                    "profit_factor": 0.72,
+                    "mdd_improvement": 0.8,
+                },
+            }
+        )
+        self.assertFalse(summary["usable"])
+        self.assertEqual(summary["label"], "사용 중지")
+        self.assertIn("-1.37%", summary["reason"])
+
+    def test_positive_validation_is_conditionally_usable(self):
+        summary = build_inverse_validation_summary(
+            {
+                "status": "ok",
+                "passed": True,
+                "holdout_metrics": {
+                    "trades": 8,
+                    "avg_trade_return": 0.45,
+                    "win_rate": 50.0,
+                    "worst_trade_return": -2.0,
+                    "profit_factor": 1.20,
+                    "mdd_improvement": 1.1,
+                },
+            }
+        )
+        self.assertTrue(summary["usable"])
+        self.assertEqual(summary["label"], "조건부 사용 가능")
 
 
 class HedgeBacktestTests(unittest.TestCase):

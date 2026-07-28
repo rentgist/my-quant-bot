@@ -12,6 +12,7 @@ from config import get_kst_now
 from hedging import (
     HEDGE_HORIZONS,
     build_daily_hedge_features,
+    build_inverse_validation_summary,
     build_plain_action_plan,
     calculate_beta_hedge_size,
     evaluate_hedge_state,
@@ -2544,6 +2545,7 @@ with tab_hedging:
         hedge_optimization.get("status") == "ok"
         and hedge_optimization.get("passed", False)
     )
+    inverse_validation = build_inverse_validation_summary(hedge_optimization)
 
     optimized_full_exit_threshold = min(optimized_exit_threshold + 25, 70)
     if exit_score >= optimized_full_exit_threshold:
@@ -2786,13 +2788,44 @@ with tab_hedging:
         "ENTER_PARTIAL": "#d97706",
         "REDUCE_BETA": "#d97706",
         "REDUCE": "#d97706",
+        "BLOCK_VALIDATION": "#b91c1c",
+        "BLOCK_DATA": "#b91c1c",
+        "BLOCK_PROXY_2X": "#b91c1c",
         "EXIT": "#dc2626",
         "EXIT_TIME": "#dc2626",
         "EXIT_2X_HORIZON": "#dc2626",
         "HOLD": "#2563eb",
     }.get(hedge_decision.action, "#475569")
     with quick_action_panel:
-        st.markdown("#### 인버스 보유자용 행동")
+        validation_color = (
+            "#15803d" if inverse_validation["usable"] else "#b91c1c"
+        )
+        validation_background = (
+            "#f0fdf4" if inverse_validation["usable"] else "#fef2f2"
+        )
+        st.markdown("#### 인버스 전략 사용 여부")
+        st.markdown(
+            f"""
+            <div style="background:{validation_background}; border:2px solid {validation_color}; border-radius:14px;
+                        padding:20px; margin:8px 0 16px 0;">
+                <div style="font-size:0.9rem; color:#64748b; margin-bottom:5px;">백테스트 최종 판정</div>
+                <div style="font-size:1.45rem; line-height:1.35; font-weight:800; color:{validation_color};">
+                    {inverse_validation['headline']}
+                </div>
+                <div style="margin-top:10px; color:#334155;">
+                    {inverse_validation['reason']}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if not inverse_validation["usable"]:
+            st.info(
+                f"현재 하락방어 {inv_score:.0f}점은 **시장이 많이 흔들리고 있다는 뜻**일 뿐입니다. "
+                "**인버스 매수 확률이나 매수 허가가 아닙니다.**"
+            )
+
+        st.markdown("#### 그래서 오늘 할 일")
         st.markdown(
             f"""
             <div style="background:#ffffff; border:2px solid {action_color}; border-radius:14px;
@@ -2822,23 +2855,30 @@ with tab_hedging:
             if position_status == "none" and not hedge_decision.allow_new_entry
             else hedge_decision.product.split(" (")[0],
         )
-        action_cols[2].metric(
-            "최대 보유",
-            f"{hedge_decision.max_holding_days}거래일",
-        )
+        if position_status == "none" and not hedge_decision.allow_new_entry:
+            action_cols[2].metric("다시 확인", plain_action["next_check"])
+        else:
+            action_cols[2].metric(
+                "최대 보유",
+                f"{hedge_decision.max_holding_days}거래일",
+            )
         st.markdown(
             "\n".join(
                 f"{idx}. {step}"
                 for idx, step in enumerate(plain_action["steps"], start=1)
             )
         )
-        st.caption(
-            f"현재 하락방어 신호 {inv_score:.0f}/{optimized_entry_threshold:.0f}점 · "
-            f"줄이기 신호 {exit_score:.0f}/{optimized_exit_threshold:.0f}점"
-        )
+        with st.expander("75점 같은 시장 점수는 무슨 뜻인가요?"):
+            st.markdown(
+                f"- **현재 하락방어 {inv_score:.0f}점:** 시장 하락·변동성·환율 위험의 강도\n"
+                f"- **진입 참고선 {optimized_entry_threshold:.0f}점:** 검증을 통과한 전략에서만 확인하는 2차 조건\n"
+                f"- **현재 줄이기 {exit_score:.0f}점:** 이미 인버스를 가진 사람의 축소·청산 참고값\n\n"
+                "**판단 순서:** 백테스트 사용 가능 → 오늘 시장 조건 통과 → 분할 주문. "
+                "첫 단계가 탈락하면 시장 점수가 높아도 주문은 0원입니다."
+            )
 
     with simple_performance_panel:
-        st.markdown("#### 인버스 단기전략의 과거 결과")
+        st.markdown("#### 왜 사용하거나 중지하나요?")
         if hedge_optimization.get("status") == "ok":
             holdout_metrics = hedge_optimization["holdout_metrics"]
             signal_count = int(holdout_metrics["trades"])
@@ -2849,44 +2889,47 @@ with tab_hedging:
                 if signal_count >= 10
                 else "매우 낮음"
             )
-            performance_cols = st.columns(5)
-            performance_cols[0].metric(
-                "맞은 비율",
-                f"{holdout_metrics['win_rate']:.1f}%",
-                help="인버스 거래가 비용 차감 후 플러스였던 비율입니다.",
-            )
-            performance_cols[1].metric(
-                "한 번당 평균",
-                f"{holdout_metrics['avg_trade_return']:+.2f}%",
-            )
-            performance_cols[2].metric(
-                "가장 나빴던 한 번",
-                f"{holdout_metrics['worst_trade_return']:.2f}%",
-            )
-            performance_cols[3].metric("검증 신호", f"{signal_count}회")
-            performance_cols[4].metric("신뢰도", reliability)
-            st.caption(
-                f"적용 기준: 하락방어 {optimized_entry_threshold:.0f}점 · "
-                f"줄이기 {optimized_exit_threshold:.0f}점 · 최대 {optimized_max_days}거래일. "
-                f"과거 앞 70%에서 기준을 선택하고 최근 30%({hedge_optimization['holdout_start']} 이후)는 "
-                "기준 선택에 사용하지 않은 채 따로 확인했습니다."
-            )
-
-            if hedge_optimization.get("passed"):
+            if inverse_validation["usable"]:
                 st.success(
-                    f"과거 앞부분으로 기준을 정한 뒤, 이후 {hedge_optimization['holdout_start']}부터 "
-                    "따로 확인한 구간에서도 평균수익·손실방어 조건을 통과했습니다. "
-                    "다만 표본이 적으면 실제 결과는 크게 달라질 수 있습니다."
+                    "✅ 사용 가능: 최근 별도 검증에서 평균수익·손익비·계좌 낙폭 개선을 모두 통과했습니다."
                 )
             else:
-                st.warning(
-                    "최근 검증 구간에서 평균수익·손실방어 조건을 함께 통과하지 못했습니다. "
-                    "따라서 현재 화면은 인버스 매수보다 현금 확보를 우선합니다."
+                st.error(
+                    f"⛔ 사용 중지: {inverse_validation['reason']} 오늘 신규 주문은 0원입니다."
+                )
+
+            performance_cols = st.columns(3)
+            performance_cols[0].metric(
+                "거래당 평균 결과",
+                f"{holdout_metrics['avg_trade_return']:+.2f}%",
+                help="비용을 반영한 한 번의 인버스 거래 평균입니다. 0% 이하면 전략을 사용하지 않습니다.",
+            )
+            performance_cols[1].metric(
+                "수익으로 끝난 거래",
+                f"{holdout_metrics['win_rate']:.1f}%",
+                help="비용을 차감한 뒤 플러스였던 거래 비율입니다. 이것만으로 매수를 결정하지 않습니다.",
+            )
+            performance_cols[2].metric(
+                "검증한 거래",
+                f"{signal_count}회",
+            )
+            st.caption(f"표본 신뢰도: {reliability}")
+            with st.expander("판정 기준과 나머지 숫자 보기"):
+                for check in inverse_validation["checks"]:
+                    icon = "✅" if check["passed"] else "❌"
+                    st.markdown(
+                        f"- {icon} **{check['label']} {check['value']}** — {check['rule']}"
+                    )
+                st.markdown(
+                    f"- 가장 나빴던 한 번: **{holdout_metrics['worst_trade_return']:.2f}%**\n"
+                    f"- 적용 기준: 하락방어 {optimized_entry_threshold:.0f}점 · "
+                    f"줄이기 {optimized_exit_threshold:.0f}점 · 최대 {optimized_max_days}거래일\n"
+                    f"- 검증 방식: 과거 앞 70%에서 기준을 선택하고 최근 30%"
+                    f"({hedge_optimization['holdout_start']} 이후)는 따로 확인"
                 )
         else:
-            st.warning(
-                "과거 검증에 필요한 데이터나 신호 횟수가 부족합니다. "
-                "검증되지 않은 인버스 신규 매수는 실행하지 않습니다."
+            st.error(
+                "⛔ 사용 중지: 과거 검증 자료가 부족합니다. 오늘 인버스 신규 주문은 0원입니다."
             )
 
     # 사전 계산: 볼린저 밴드 폭 (Strategy E용)
