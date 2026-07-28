@@ -90,6 +90,10 @@ def evaluate_hedge_state(
     foreign_futures: float | None,
     holding_days: int = 0,
     data_quality: str = "live",
+    entry_threshold: float | None = None,
+    exit_threshold: float | None = None,
+    max_holding_days: int | None = None,
+    validation_passed: bool = True,
 ) -> HedgeDecision:
     """Return a position-aware hedge decision.
 
@@ -99,6 +103,17 @@ def evaluate_hedge_state(
     """
 
     policy = get_horizon_policy(horizon_key)
+    entry_gate = (
+        float(policy.entry_threshold)
+        if entry_threshold is None
+        else float(entry_threshold)
+    )
+    exit_gate = 35.0 if exit_threshold is None else float(exit_threshold)
+    max_days = (
+        policy.max_days
+        if max_holding_days is None
+        else max(1, int(max_holding_days))
+    )
     if position_status not in {"none", "inverse1x", "inverse2x"}:
         raise ValueError(f"Unknown position status: {position_status}")
 
@@ -117,32 +132,32 @@ def evaluate_hedge_state(
                 headline="2배 인버스 축소·청산",
                 reason="선택한 기간은 2배 인버스의 일간 재설정 위험과 맞지 않습니다. 1배 인버스 또는 현금 방어로 전환하십시오.",
                 product=policy.product,
-                max_holding_days=policy.max_days,
+                max_holding_days=max_days,
                 allow_new_entry=False,
                 urgency="high",
             )
-        if holding_days >= policy.max_days:
+        if holding_days >= max_days:
             return HedgeDecision(
                 action="EXIT_TIME",
                 headline="보유기간 만료 — 청산",
-                reason=f"선택한 전략의 최대 보유기간 {policy.max_days}거래일에 도달했습니다. 재진입은 새 신호로 다시 판단해야 합니다.",
+                reason=f"선택한 전략의 최대 보유기간 {max_days}거래일에 도달했습니다. 재진입은 새 신호로 다시 판단해야 합니다.",
                 product=policy.product,
-                max_holding_days=policy.max_days,
+                max_holding_days=max_days,
                 allow_new_entry=False,
                 urgency="high",
             )
-        if exit_score >= 60:
+        if exit_score >= min(exit_gate + 25, 70):
             return HedgeDecision(
                 action="EXIT",
                 headline="인버스 전량 청산 검토",
                 reason=f"청산 점수 {exit_score:.0f}점으로 반등·공포 피크아웃 조건이 강하게 겹쳤습니다.",
                 product=policy.product,
-                max_holding_days=policy.max_days,
+                max_holding_days=max_days,
                 allow_new_entry=False,
                 urgency="high",
             )
         if (
-            exit_score >= 35
+            exit_score >= exit_gate
             or (rsi_value is not None and rsi_value <= 32)
             or (futures_value is not None and futures_value > 0)
         ):
@@ -151,16 +166,16 @@ def evaluate_hedge_state(
                 headline="인버스 50% 축소",
                 reason="과매도 또는 외국인 선물 매수 전환이 확인돼 급반등 위험이 커졌습니다. 남은 물량은 시간 제한을 적용합니다.",
                 product=policy.product,
-                max_holding_days=policy.max_days,
+                max_holding_days=max_days,
                 allow_new_entry=False,
                 urgency="medium",
             )
         return HedgeDecision(
             action="HOLD",
             headline="기존 헷지 유지",
-            reason=f"청산 조건은 아직 부족합니다. 단, 최대 {policy.max_days}거래일까지만 유지합니다.",
+            reason=f"청산 조건은 아직 부족합니다. 단, 최대 {max_days}거래일까지만 유지합니다.",
             product=policy.product,
-            max_holding_days=policy.max_days,
+            max_holding_days=max_days,
             allow_new_entry=False,
             urgency="low",
         )
@@ -171,7 +186,7 @@ def evaluate_hedge_state(
             headline="신규 헷지 금지 — 데이터 확인 필요",
             reason="핵심 변동성 또는 가격 데이터가 없어 레버리지 신호를 계산할 수 없습니다.",
             product=policy.product,
-            max_holding_days=policy.max_days,
+            max_holding_days=max_days,
             allow_new_entry=False,
             urgency="high",
         )
@@ -181,7 +196,7 @@ def evaluate_hedge_state(
             headline="2배 인버스 금지 — VKOSPI 프록시 사용 중",
             reason="실제 옵션 내재변동성이 아닌 후행 실현변동성 프록시로는 초단기 2배 진입을 허용하지 않습니다.",
             product=policy.product,
-            max_holding_days=policy.max_days,
+            max_holding_days=max_days,
             allow_new_entry=False,
             urgency="high",
         )
@@ -196,18 +211,18 @@ def evaluate_hedge_state(
             headline="신규 인버스 보류 — 급반등 위험",
             reason="극단적 과매도 또는 외국인 선물 순매수 전환이 나타났습니다. 폭락 후 추격 숏보다 다음 거래일 확인이 우선입니다.",
             product=policy.product,
-            max_holding_days=policy.max_days,
+            max_holding_days=max_days,
             allow_new_entry=False,
             urgency="medium",
         )
 
-    if entry_score < policy.entry_threshold:
+    if entry_score < entry_gate:
         return HedgeDecision(
             action="WAIT",
             headline="신규 헷지 대기",
-            reason=f"진입 점수 {entry_score:.0f}점이 {policy.entry_threshold}점 기준에 미달합니다.",
+            reason=f"진입 점수 {entry_score:.0f}점이 {entry_gate:.0f}점 기준에 미달합니다.",
             product=policy.product,
-            max_holding_days=policy.max_days,
+            max_holding_days=max_days,
             allow_new_entry=False,
             urgency="low",
         )
@@ -218,8 +233,19 @@ def evaluate_hedge_state(
             headline="중단기 위험자산 베타 축소",
             reason="중단기 방어에서는 2배 인버스 대신 현금 확대와 1배 인버스를 조합합니다.",
             product=policy.product,
-            max_holding_days=policy.max_days,
+            max_holding_days=max_days,
             allow_new_entry=True,
+            urgency="medium",
+        )
+
+    if not validation_passed:
+        return HedgeDecision(
+            action="BLOCK_VALIDATION",
+            headline="신규 인버스 보류 — 과거 검증 부족",
+            reason="최근 구간을 따로 떼어 확인했을 때 수익성과 손실 방어가 함께 확인되지 않았습니다.",
+            product=policy.product,
+            max_holding_days=max_days,
+            allow_new_entry=False,
             urgency="medium",
         )
 
@@ -228,7 +254,7 @@ def evaluate_hedge_state(
         headline="보호성 헷지 1차 진입",
         reason=f"{policy.label} 기준을 충족했습니다. 정책 상한의 50%만 먼저 진입하고 다음 거래일에 재평가합니다.",
         product=policy.product,
-        max_holding_days=policy.max_days,
+        max_holding_days=max_days,
         allow_new_entry=True,
         urgency="medium",
     )
@@ -270,6 +296,106 @@ def calculate_beta_hedge_size(
         "achieved_coverage": achieved_coverage,
         "max_allocation_pct": policy.max_allocation,
         "leverage": policy.leverage,
+    }
+
+
+def build_plain_action_plan(
+    *,
+    decision: HedgeDecision,
+    position_status: str,
+    holding_amount: float,
+    recommended_allocation: float,
+    policy_cap: float,
+    entry_score: float,
+    entry_threshold: float,
+    exit_score: float,
+    exit_threshold: float,
+) -> dict[str, Any]:
+    """Translate an engine decision into an amount-first user checklist."""
+
+    holding_amount = max(float(holding_amount), 0.0)
+    recommended_allocation = max(float(recommended_allocation), 0.0)
+    policy_cap = max(float(policy_cap), 0.0)
+    reserve_amount = min(recommended_allocation, policy_cap)
+    remaining_days = max(decision.max_holding_days, 1)
+
+    if decision.action == "ENTER_PARTIAL":
+        first_order = reserve_amount * 0.5
+        title = f"오늘은 {decision.product}을 {first_order:,.0f}만원만 1차 매수하세요"
+        amount_label = "오늘 주문 상한"
+        amount_value = f"{first_order:,.0f}만원"
+        steps = [
+            f"한 번에 전부 사지 말고 계산된 한도 {reserve_amount:,.0f}만원의 절반만 매수합니다.",
+            "다음 거래일 종가 후 신호가 유지될 때만 나머지 절반을 검토합니다.",
+            f"어떤 경우에도 {decision.max_holding_days}거래일을 넘겨 보유하지 않습니다.",
+        ]
+    elif decision.action == "REDUCE_BETA" and position_status == "none":
+        title = f"오늘은 국내 주식을 최대 {reserve_amount:,.0f}만원 줄여 현금으로 옮기세요"
+        amount_label = "현금 전환 상한"
+        amount_value = f"{reserve_amount:,.0f}만원"
+        steps = [
+            "수익이 많이 난 종목과 시장 민감도가 높은 종목부터 나눠서 줄입니다.",
+            "2배 인버스는 사용하지 않습니다.",
+            "하루에 전부 바꾸지 말고 2~3회로 나눠 실행합니다.",
+        ]
+    elif decision.action == "REDUCE":
+        reduce_amount = holding_amount * 0.5
+        title = (
+            f"오늘은 보유 인버스 {reduce_amount:,.0f}만원을 매도하세요"
+            if holding_amount > 0
+            else "오늘은 보유 인버스의 50%를 매도하세요"
+        )
+        amount_label = "오늘 줄일 비중"
+        amount_value = f"{reduce_amount:,.0f}만원" if holding_amount > 0 else "보유량의 50%"
+        steps = [
+            "장 시작 직후 추격 주문보다 가격이 안정된 뒤 분할 매도합니다.",
+            "남은 물량도 최대 보유기간을 넘기지 않습니다.",
+            "신규 인버스 추가매수는 하지 않습니다.",
+        ]
+    elif decision.action in {"EXIT", "EXIT_TIME", "EXIT_2X_HORIZON"}:
+        title = (
+            f"오늘은 보유 인버스 {holding_amount:,.0f}만원을 전부 정리하세요"
+            if holding_amount > 0
+            else "오늘은 보유 인버스를 전부 정리하세요"
+        )
+        amount_label = "오늘 정리할 금액"
+        amount_value = f"{holding_amount:,.0f}만원" if holding_amount > 0 else "보유량 전부"
+        steps = [
+            "새 인버스로 바로 갈아타지 않습니다.",
+            "매도 후 현금으로 두고 다음 거래일 종가에 다시 판단합니다.",
+            "손실 만회를 위한 비중 확대는 하지 않습니다.",
+        ]
+    elif decision.action == "HOLD":
+        title = "오늘은 기존 인버스를 추가매수 없이 그대로 유지하세요"
+        amount_label = "오늘 추가 주문"
+        amount_value = "0원"
+        steps = [
+            "보유 수량은 늘리지 않습니다.",
+            f"최대 {remaining_days}거래일 제한을 지킵니다.",
+            f"청산 점수가 {exit_threshold:.0f}점 이상이면 절반을 줄입니다.",
+        ]
+    else:
+        title = "오늘은 인버스를 새로 사지 마세요"
+        amount_label = "오늘 신규 주문"
+        amount_value = "0원"
+        steps = [
+            "인버스·곱버스 신규 주문은 넣지 않습니다.",
+            f"방어 예산 {policy_cap:,.0f}만원은 현금으로 남겨 둡니다.",
+            "다음 거래일 종가 후 조건을 다시 확인합니다.",
+        ]
+
+    return {
+        "title": title,
+        "amount_label": amount_label,
+        "amount_value": amount_value,
+        "steps": steps,
+        "next_check": "다음 거래일 종가 후",
+        "entry_progress": (
+            min(max(float(entry_score), 0.0) / max(float(entry_threshold), 1.0), 1.0)
+        ),
+        "exit_progress": (
+            min(max(float(exit_score), 0.0) / max(float(exit_threshold), 1.0), 1.0)
+        ),
     }
 
 
@@ -376,6 +502,11 @@ def run_hedge_backtest(
     inverse2x_hist: pd.DataFrame,
     horizon_key: str,
     transaction_cost_bps: float = 15.0,
+    entry_threshold: float | None = None,
+    exit_threshold: float = 35.0,
+    max_holding_days: int | None = None,
+    evaluation_start: pd.Timestamp | str | None = None,
+    evaluation_end: pd.Timestamp | str | None = None,
 ) -> dict[str, Any]:
     """Backtest a hedge overlay using next-session open-to-open returns.
 
@@ -386,6 +517,17 @@ def run_hedge_backtest(
     """
 
     policy = get_horizon_policy(horizon_key)
+    entry_gate = (
+        float(policy.entry_threshold)
+        if entry_threshold is None
+        else float(entry_threshold)
+    )
+    exit_gate = float(exit_threshold)
+    max_days = (
+        policy.max_days
+        if max_holding_days is None
+        else max(1, int(max_holding_days))
+    )
     features = build_daily_hedge_features(kospi_hist, vkospi_hist, usdkrw_hist)
     etf_hist = inverse2x_hist if horizon_key == "tactical" else inverse1x_hist
     etf_open = _open_series(etf_hist, "ETF_OPEN")
@@ -404,6 +546,16 @@ def run_hedge_backtest(
         df["KOSPI_OPEN"].shift(-2) / df["KOSPI_OPEN"].shift(-1) - 1
     )
     df = df.dropna(subset=["ETF_FWD_RET", "KOSPI_FWD_RET"])
+    if evaluation_start is not None:
+        df = df.loc[df.index >= pd.Timestamp(evaluation_start)]
+    if evaluation_end is not None:
+        df = df.loc[df.index <= pd.Timestamp(evaluation_end)]
+    if len(df) < 20:
+        return {
+            "status": "insufficient_data",
+            "message": "선택한 검증 구간의 거래일 데이터가 부족합니다.",
+            "policy": asdict(policy),
+        }
 
     cost = max(float(transaction_cost_bps), 0.0) / 10_000
     allocation = policy.max_allocation
@@ -423,8 +575,8 @@ def run_hedge_backtest(
 
         if position:
             should_exit = (
-                row["ExitScore"] >= 35
-                or holding_days >= policy.max_days
+                row["ExitScore"] >= exit_gate
+                or holding_days >= max_days
             )
             if should_exit:
                 exit_cost = cost
@@ -445,7 +597,7 @@ def run_hedge_backtest(
 
         if not position and not exited_this_signal:
             panic_reversal = row["RSI"] <= 32
-            if row["EntryScore"] >= policy.entry_threshold and not panic_reversal:
+            if row["EntryScore"] >= entry_gate and not panic_reversal:
                 position = True
                 holding_days = 0
                 trade_start = date
@@ -513,6 +665,11 @@ def run_hedge_backtest(
         "hedged_return": float((curve["헷지 적용"].iloc[-1] - 1) * 100),
         "unhedged_mdd": _max_drawdown(curve["무헷지"]),
         "hedged_mdd": _max_drawdown(curve["헷지 적용"]),
+        "entry_threshold": entry_gate,
+        "exit_threshold": exit_gate,
+        "max_holding_days": max_days,
+        "evaluation_start": curve.index.min().strftime("%Y-%m-%d"),
+        "evaluation_end": curve.index.max().strftime("%Y-%m-%d"),
     }
     metrics["mdd_improvement"] = (
         abs(metrics["unhedged_mdd"]) - abs(metrics["hedged_mdd"])
@@ -524,4 +681,214 @@ def run_hedge_backtest(
         "metrics": metrics,
         "equity_curve": curve,
         "trades": trades_df,
+    }
+
+
+def optimize_hedge_parameters(
+    *,
+    kospi_hist: pd.DataFrame,
+    vkospi_hist: pd.DataFrame,
+    usdkrw_hist: pd.DataFrame,
+    inverse1x_hist: pd.DataFrame,
+    inverse2x_hist: pd.DataFrame,
+    horizon_key: str,
+    transaction_cost_bps: float = 15.0,
+    train_ratio: float = 0.70,
+) -> dict[str, Any]:
+    """Select parameters on an older segment and report untouched holdout results.
+
+    The newest observations are never used to select the parameters.  A
+    strategy is marked ``passed`` only when the holdout has positive average
+    trade return, profit factor above one, and drawdown improvement.
+    """
+
+    policy = get_horizon_policy(horizon_key)
+    features = build_daily_hedge_features(kospi_hist, vkospi_hist, usdkrw_hist)
+    etf_hist = inverse2x_hist if horizon_key == "tactical" else inverse1x_hist
+    common_index = (
+        features.index
+        .intersection(_open_series(etf_hist, "ETF_OPEN").index)
+        .intersection(_open_series(kospi_hist, "KOSPI_OPEN").index)
+        .sort_values()
+    )
+    if len(common_index) < 500:
+        return {
+            "status": "insufficient_data",
+            "message": "시간 순서 검증에 필요한 데이터가 부족합니다.",
+            "policy": asdict(policy),
+        }
+
+    split_position = int(len(common_index) * float(np.clip(train_ratio, 0.60, 0.85)))
+    split_position = min(max(split_position, 300), len(common_index) - 120)
+    train_end = common_index[split_position - 1]
+    holdout_start = common_index[split_position]
+
+    grids = {
+        "tactical": {
+            "entry": (65, 70, 75, 80, 85),
+            "exit": (25, 35, 45, 55),
+            "days": (1, 2, 3),
+        },
+        "short": {
+            "entry": (60, 65, 70, 75, 80),
+            "exit": (25, 35, 45, 55),
+            "days": (4, 6, 8, 10),
+        },
+        "defensive": {
+            "entry": (60, 65, 70, 75, 80),
+            "exit": (25, 35, 45, 55),
+            "days": (10, 15, 20, 30),
+        },
+    }
+
+    candidates: list[dict[str, Any]] = []
+    grid = grids[horizon_key]
+    for entry_gate in grid["entry"]:
+        for exit_gate in grid["exit"]:
+            for max_days in grid["days"]:
+                result = run_hedge_backtest(
+                    kospi_hist=kospi_hist,
+                    vkospi_hist=vkospi_hist,
+                    usdkrw_hist=usdkrw_hist,
+                    inverse1x_hist=inverse1x_hist,
+                    inverse2x_hist=inverse2x_hist,
+                    horizon_key=horizon_key,
+                    transaction_cost_bps=transaction_cost_bps,
+                    entry_threshold=entry_gate,
+                    exit_threshold=exit_gate,
+                    max_holding_days=max_days,
+                    evaluation_end=train_end,
+                )
+                if result.get("status") != "ok":
+                    continue
+                metrics = result["metrics"]
+                if (
+                    metrics["trades"] < 6
+                    or metrics["avg_trade_return"] <= 0
+                    or metrics["profit_factor"] <= 1
+                    or metrics["mdd_improvement"] <= 0
+                ):
+                    continue
+                robustness_score = (
+                    metrics["mdd_improvement"]
+                    + 0.40 * metrics["avg_trade_return"]
+                    + 0.02 * (metrics["win_rate"] - 50)
+                    + 0.15 * min(metrics["profit_factor"] - 1, 2)
+                    - 0.02 * abs(metrics["worst_trade_return"])
+                )
+                candidates.append(
+                    {
+                        "entry_threshold": entry_gate,
+                        "exit_threshold": exit_gate,
+                        "max_holding_days": max_days,
+                        "score": float(robustness_score),
+                        "train_metrics": metrics,
+                    }
+                )
+
+    if not candidates:
+        fallback_parameters = {
+            "entry_threshold": policy.entry_threshold,
+            "exit_threshold": 35,
+            "max_holding_days": policy.max_days,
+        }
+        fallback_train = run_hedge_backtest(
+            kospi_hist=kospi_hist,
+            vkospi_hist=vkospi_hist,
+            usdkrw_hist=usdkrw_hist,
+            inverse1x_hist=inverse1x_hist,
+            inverse2x_hist=inverse2x_hist,
+            horizon_key=horizon_key,
+            transaction_cost_bps=transaction_cost_bps,
+            evaluation_end=train_end,
+            **fallback_parameters,
+        )
+        fallback_holdout = run_hedge_backtest(
+            kospi_hist=kospi_hist,
+            vkospi_hist=vkospi_hist,
+            usdkrw_hist=usdkrw_hist,
+            inverse1x_hist=inverse1x_hist,
+            inverse2x_hist=inverse2x_hist,
+            horizon_key=horizon_key,
+            transaction_cost_bps=transaction_cost_bps,
+            evaluation_start=holdout_start,
+            **fallback_parameters,
+        )
+        if (
+            fallback_train.get("status") == "ok"
+            and fallback_holdout.get("status") == "ok"
+        ):
+            return {
+                "status": "ok",
+                "passed": False,
+                "selection_status": "no_training_candidate",
+                "message": "과거 앞구간에서도 수익성과 손실방어를 함께 통과한 조합이 없었습니다.",
+                "best_parameters": fallback_parameters,
+                "train_metrics": fallback_train["metrics"],
+                "holdout_metrics": fallback_holdout["metrics"],
+                "holdout_equity_curve": fallback_holdout["equity_curve"],
+                "holdout_trades": fallback_holdout["trades"],
+                "train_end": train_end.strftime("%Y-%m-%d"),
+                "holdout_start": holdout_start.strftime("%Y-%m-%d"),
+                "candidate_count": 0,
+            }
+        return {
+            "status": "insufficient_signals",
+            "message": "학습 구간에서 비교할 만큼 신호가 발생하지 않았습니다.",
+            "policy": asdict(policy),
+            "train_end": train_end.strftime("%Y-%m-%d"),
+            "holdout_start": holdout_start.strftime("%Y-%m-%d"),
+        }
+
+    best = max(candidates, key=lambda item: item["score"])
+    holdout_result = run_hedge_backtest(
+        kospi_hist=kospi_hist,
+        vkospi_hist=vkospi_hist,
+        usdkrw_hist=usdkrw_hist,
+        inverse1x_hist=inverse1x_hist,
+        inverse2x_hist=inverse2x_hist,
+        horizon_key=horizon_key,
+        transaction_cost_bps=transaction_cost_bps,
+        entry_threshold=best["entry_threshold"],
+        exit_threshold=best["exit_threshold"],
+        max_holding_days=best["max_holding_days"],
+        evaluation_start=holdout_start,
+    )
+    if holdout_result.get("status") != "ok":
+        return {
+            "status": "insufficient_holdout",
+            "message": holdout_result.get("message", "검증 구간 데이터 부족"),
+            "best_parameters": {
+                "entry_threshold": best["entry_threshold"],
+                "exit_threshold": best["exit_threshold"],
+                "max_holding_days": best["max_holding_days"],
+            },
+            "train_metrics": best["train_metrics"],
+            "train_end": train_end.strftime("%Y-%m-%d"),
+            "holdout_start": holdout_start.strftime("%Y-%m-%d"),
+        }
+
+    holdout_metrics = holdout_result["metrics"]
+    passed = (
+        holdout_metrics["trades"] >= 3
+        and holdout_metrics["avg_trade_return"] > 0
+        and holdout_metrics["profit_factor"] > 1
+        and holdout_metrics["mdd_improvement"] > 0
+    )
+    return {
+        "status": "ok",
+        "passed": passed,
+        "selection_status": "optimized",
+        "best_parameters": {
+            "entry_threshold": best["entry_threshold"],
+            "exit_threshold": best["exit_threshold"],
+            "max_holding_days": best["max_holding_days"],
+        },
+        "train_metrics": best["train_metrics"],
+        "holdout_metrics": holdout_metrics,
+        "holdout_equity_curve": holdout_result["equity_curve"],
+        "holdout_trades": holdout_result["trades"],
+        "train_end": train_end.strftime("%Y-%m-%d"),
+        "holdout_start": holdout_start.strftime("%Y-%m-%d"),
+        "candidate_count": len(candidates),
     }
