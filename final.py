@@ -29,6 +29,7 @@ from regime_playbook import (
     REGIME_POLICIES,
     build_holding_action,
     build_regime_action_plan,
+    calculate_entry_strategy_scenarios,
     classify_market_regime,
     run_regime_backtest,
 )
@@ -2170,6 +2171,87 @@ with tab_calendar:
                 edited_df.at[i, 'Date'] = row['Date'].strftime('%Y-%m-%d')
         calendar_manager.save_calendar(edited_df)
         st.success("캘린더가 저장되었습니다. 마스터 리포트 프롬프트에 즉시 반영됩니다.")
+
+    st.markdown("---")
+    st.subheader("🧮 바닥 일괄매수 · 혼합형 · 추세확인 비교")
+    st.caption(
+        "모든 시장 경로의 최종 가격을 동일하게 고정해 매수 시점만 비교합니다. "
+        "표의 수익률과 최대손실은 개별 종목이 아니라 총자산 기준 %p입니다."
+    )
+
+    scenario_col1, scenario_col2, scenario_col3, scenario_col4 = st.columns(4)
+    scenario_current = scenario_col1.number_input(
+        "현재 가격 (정규화)", min_value=1.0, value=100.0, step=1.0,
+        key="entry_scenario_current",
+    )
+    scenario_terminal = scenario_col2.number_input(
+        "동일한 최종 가격", min_value=1.0, value=130.0, step=5.0,
+        key="entry_scenario_terminal",
+    )
+    scenario_allocation = scenario_col3.number_input(
+        "목표 투자비중 (%)", min_value=5.0, max_value=100.0,
+        value=50.0, step=5.0, key="entry_scenario_allocation",
+    )
+    scenario_confirmation = scenario_col4.number_input(
+        "저점 대비 추세확인 반등률 (%)", min_value=0.0, max_value=100.0,
+        value=20.0, step=5.0, key="entry_scenario_confirmation",
+    )
+
+    low_col1, low_col2, low_col3 = st.columns(3)
+    scenario_low_1 = low_col1.number_input(
+        "시나리오 1 저점", min_value=1.0, value=100.0, step=5.0,
+        key="entry_scenario_low_1",
+    )
+    scenario_low_2 = low_col2.number_input(
+        "시나리오 2 저점", min_value=1.0, value=85.0, step=5.0,
+        key="entry_scenario_low_2",
+    )
+    scenario_low_3 = low_col3.number_input(
+        "시나리오 3 저점", min_value=1.0, value=70.0, step=5.0,
+        key="entry_scenario_low_3",
+    )
+
+    try:
+        scenario_table = calculate_entry_strategy_scenarios(
+            current_price=scenario_current,
+            terminal_price=scenario_terminal,
+            target_allocation_pct=scenario_allocation,
+            confirmation_rebound_pct=scenario_confirmation,
+            scenario_lows=(scenario_low_1, scenario_low_2, scenario_low_3),
+            hybrid_tranche_pct=min(10.0, scenario_allocation / 3),
+            hybrid_entry_prices=(
+                scenario_current,
+                scenario_current * 0.90,
+                scenario_current * 0.80,
+            ),
+        )
+        display_scenario_table = scenario_table.copy()
+        numeric_columns = [
+            column
+            for column in display_scenario_table.columns
+            if column != "시장 경로"
+        ]
+        display_scenario_table[numeric_columns] = display_scenario_table[numeric_columns].round(1)
+        st.dataframe(
+            display_scenario_table,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "가정 저점": st.column_config.NumberColumn(format="%.1f"),
+                "추세 확인 가격": st.column_config.NumberColumn(format="%.1f"),
+                "일괄투자 수익률": st.column_config.NumberColumn(format="%+.1f%%p"),
+                "혼합형 수익률": st.column_config.NumberColumn(format="%+.1f%%p"),
+                "추세확인 수익률": st.column_config.NumberColumn(format="%+.1f%%p"),
+                "일괄투자 최대손실": st.column_config.NumberColumn(format="%+.1f%%p"),
+                "혼합형 최대손실": st.column_config.NumberColumn(format="%+.1f%%p"),
+            },
+        )
+        st.info(
+            "ORION 본체는 20일선과 수급을 기다리는 추세확인형입니다. "
+            "혼합형은 본체 신호를 바꾸지 않고 별도 가치축적 예산만 소액으로 집행합니다."
+        )
+    except ValueError as exc:
+        st.warning(str(exc))
 
 
 with tab_hedging:

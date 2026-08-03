@@ -53,6 +53,90 @@ REGIME_POLICIES = {
 }
 
 
+def calculate_entry_strategy_scenarios(
+    current_price: float = 100.0,
+    terminal_price: float = 130.0,
+    target_allocation_pct: float = 50.0,
+    confirmation_rebound_pct: float = 20.0,
+    scenario_lows: tuple[float, ...] = (100.0, 85.0, 70.0),
+    hybrid_tranche_pct: float = 10.0,
+    hybrid_entry_prices: tuple[float, ...] = (100.0, 90.0, 80.0),
+) -> pd.DataFrame:
+    """Compare entry styles while holding the terminal price constant.
+
+    Returns are percentage points of the whole portfolio. The hybrid strategy
+    buys fixed tranches during a decline and invests the remaining target
+    allocation after the scenario low rebounds by the confirmation threshold.
+    """
+    current = _safe_float(current_price)
+    terminal = _safe_float(terminal_price)
+    allocation = _safe_float(target_allocation_pct)
+    rebound = _safe_float(confirmation_rebound_pct)
+    tranche = _safe_float(hybrid_tranche_pct)
+    lows = tuple(_safe_float(value) for value in scenario_lows)
+    entries = tuple(_safe_float(value) for value in hybrid_entry_prices)
+
+    if not all(np.isfinite(value) and value > 0 for value in (current, terminal)):
+        raise ValueError("현재 가격과 최종 가격은 0보다 커야 합니다.")
+    if not np.isfinite(allocation) or not 0 < allocation <= 100:
+        raise ValueError("목표 투자비중은 0% 초과 100% 이하여야 합니다.")
+    if not np.isfinite(rebound) or rebound < 0:
+        raise ValueError("추세 확인 반등률은 0% 이상이어야 합니다.")
+    if not np.isfinite(tranche) or tranche <= 0:
+        raise ValueError("혼합형 1회 매수비중은 0%보다 커야 합니다.")
+    if not lows or not entries:
+        raise ValueError("시나리오 저점과 혼합형 매수 가격이 필요합니다.")
+    if any(not np.isfinite(value) or value <= 0 or value > current for value in lows):
+        raise ValueError("시나리오 저점은 0보다 크고 현재 가격 이하여야 합니다.")
+    if any(not np.isfinite(value) or value <= 0 for value in entries):
+        raise ValueError("혼합형 매수 가격은 0보다 커야 합니다.")
+
+    rows: list[dict[str, float | str]] = []
+    lump_return = allocation * (terminal / current - 1)
+    for low in lows:
+        confirmation_price = low * (1 + rebound / 100)
+        if confirmation_price > terminal:
+            raise ValueError(
+                "최종 가격은 모든 시나리오의 추세 확인 가격 이상이어야 합니다."
+            )
+
+        triggered_entries = [price for price in entries if low <= price <= current]
+        scheduled_total = tranche * len(triggered_entries)
+        if scheduled_total > allocation:
+            raise ValueError("혼합형 분할매수 합계가 목표 투자비중을 초과합니다.")
+        remaining = allocation - scheduled_total
+
+        hybrid_return = sum(
+            tranche * (terminal / entry_price - 1)
+            for entry_price in triggered_entries
+        )
+        hybrid_return += remaining * (terminal / confirmation_price - 1)
+        trend_return = allocation * (terminal / confirmation_price - 1)
+        lump_drawdown = allocation * (low / current - 1)
+        hybrid_drawdown = sum(
+            tranche * (low / entry_price - 1)
+            for entry_price in triggered_entries
+        )
+        path = (
+            f"{current:g} → {terminal:g}"
+            if low == current
+            else f"{current:g} → {low:g} → {terminal:g}"
+        )
+        rows.append(
+            {
+                "시장 경로": path,
+                "가정 저점": low,
+                "추세 확인 가격": confirmation_price,
+                "일괄투자 수익률": lump_return,
+                "혼합형 수익률": hybrid_return,
+                "추세확인 수익률": trend_return,
+                "일괄투자 최대손실": lump_drawdown,
+                "혼합형 최대손실": hybrid_drawdown,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _safe_float(value: Any, default: float = np.nan) -> float:
     try:
         number = float(value)

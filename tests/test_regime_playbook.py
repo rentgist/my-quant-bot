@@ -7,6 +7,7 @@ from regime_playbook import (
     build_holding_action,
     build_market_features,
     build_regime_action_plan,
+    calculate_entry_strategy_scenarios,
     classify_market_regime,
     run_regime_backtest,
 )
@@ -51,6 +52,36 @@ class RegimeClassificationTests(unittest.TestCase):
         same_date = build_market_features(extended).loc[original.index[-1]]
         self.assertAlmostEqual(before["HV20"], same_date["HV20"])
         self.assertAlmostEqual(before["MA120"], same_date["MA120"])
+
+
+class EntryStrategyScenarioTests(unittest.TestCase):
+    def test_all_paths_use_one_terminal_price(self):
+        result = calculate_entry_strategy_scenarios()
+        self.assertEqual(
+            result["시장 경로"].tolist(),
+            ["100 → 130", "100 → 85 → 130", "100 → 70 → 130"],
+        )
+        np.testing.assert_allclose(result["일괄투자 수익률"], [15.0, 15.0, 15.0])
+
+    def test_default_returns_match_fixed_terminal_examples(self):
+        result = calculate_entry_strategy_scenarios()
+        np.testing.assert_allclose(
+            result["혼합형 수익률"],
+            [6.333333, 15.679739, 24.646825],
+            rtol=1e-6,
+        )
+        np.testing.assert_allclose(
+            result["추세확인 수익률"],
+            [4.166667, 13.725490, 27.380952],
+            rtol=1e-6,
+        )
+        np.testing.assert_allclose(
+            result["일괄투자 최대손실"], [0.0, -7.5, -15.0]
+        )
+
+    def test_terminal_below_confirmation_is_rejected(self):
+        with self.assertRaises(ValueError):
+            calculate_entry_strategy_scenarios(terminal_price=110)
 
 
 class AccountActionTests(unittest.TestCase):
