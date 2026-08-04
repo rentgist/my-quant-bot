@@ -73,7 +73,7 @@ def _fetch_naver_investor_flow(code: str, days: int = 5) -> dict:
     except:
         return None
 
-def _analyze_stealth_accumulation(code: str) -> dict | None:
+def _analyze_stealth_accumulation(code: str) -> Optional[dict]:
     try:
         end   = datetime.now(KST).strftime("%Y-%m-%d")
         start = (datetime.now(KST) - timedelta(days=40)).strftime("%Y-%m-%d")
@@ -123,7 +123,7 @@ def _analyze_stealth_accumulation(code: str) -> dict | None:
     except:
         return None
 
-def calculate_speculative_score(price_data: dict, flow_data: dict | None) -> float:
+def calculate_speculative_score(price_data: dict, flow_data: Optional[dict]) -> float:
     change_5d = price_data.get("등락률_5일", 0)
     has_spike = price_data.get("매집봉발생", False)
     has_wick  = price_data.get("윗꼬리발생", False)

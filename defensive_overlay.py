@@ -8,7 +8,7 @@ leverage, options, or synthetic short positions.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Union, Optional
 
 import numpy as np
 import pandas as pd
@@ -191,8 +191,8 @@ def run_defensive_backtest(
     minimum_equity: float = 0.20,
     max_rebalance_step: float = 0.10,
     transaction_cost_bps: float = 15.0,
-    evaluation_start: Any | None = None,
-    evaluation_end: Any | None = None,
+    evaluation_start: Optional[Any] = None,
+    evaluation_end: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Backtest a cash/equity defensive overlay against 100% KOSPI."""
 
@@ -402,7 +402,7 @@ def optimize_defensive_parameters(
 
 def current_defensive_state(
     kospi_hist: pd.DataFrame,
-    parameters: dict[str, Any] | None = None,
+    parameters: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Describe today's risk target and the four-step re-entry stage."""
 

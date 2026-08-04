@@ -7,7 +7,7 @@ the trading rules can be unit-tested without loading network data or UI state.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Union, Optional
 
 import numpy as np
 import pandas as pd
@@ -86,13 +86,13 @@ def evaluate_hedge_state(
     position_status: str,
     entry_score: float,
     exit_score: float,
-    rsi: float | None,
-    foreign_futures: float | None,
+    rsi: Optional[float],
+    foreign_futures: Optional[float],
     holding_days: int = 0,
     data_quality: str = "live",
-    entry_threshold: float | None = None,
-    exit_threshold: float | None = None,
-    max_holding_days: int | None = None,
+    entry_threshold: Optional[float] = None,
+    exit_threshold: Optional[float] = None,
+    max_holding_days: Optional[int] = None,
     validation_passed: bool = True,
 ) -> HedgeDecision:
     """Return a position-aware hedge decision.
@@ -500,7 +500,7 @@ def build_inverse_validation_summary(
     }
 
 
-def _close_series(df: pd.DataFrame | None, name: str) -> pd.Series:
+def _close_series(df: Optional[pd.DataFrame], name: str) -> pd.Series:
     if df is None or df.empty or "Close" not in df.columns:
         return pd.Series(dtype=float, name=name)
     series = pd.to_numeric(df["Close"], errors="coerce").dropna().copy()
@@ -510,7 +510,7 @@ def _close_series(df: pd.DataFrame | None, name: str) -> pd.Series:
     return series
 
 
-def _open_series(df: pd.DataFrame | None, name: str) -> pd.Series:
+def _open_series(df: Optional[pd.DataFrame], name: str) -> pd.Series:
     if df is None or df.empty:
         return pd.Series(dtype=float, name=name)
     column = "Open" if "Open" in df.columns else "Close"
@@ -603,11 +603,11 @@ def run_hedge_backtest(
     inverse2x_hist: pd.DataFrame,
     horizon_key: str,
     transaction_cost_bps: float = 15.0,
-    entry_threshold: float | None = None,
+    entry_threshold: Optional[float] = None,
     exit_threshold: float = 35.0,
-    max_holding_days: int | None = None,
-    evaluation_start: pd.Timestamp | str | None = None,
-    evaluation_end: pd.Timestamp | str | None = None,
+    max_holding_days: Optional[int] = None,
+    evaluation_start: Union[pd.Timestamp, str, None] = None,
+    evaluation_end: Union[pd.Timestamp, str, None] = None,
 ) -> dict[str, Any]:
     """Backtest a hedge overlay using next-session open-to-open returns.
 
@@ -663,7 +663,7 @@ def run_hedge_backtest(
     position = False
     holding_days = 0
     trade_growth = 1.0
-    trade_start: pd.Timestamp | None = None
+    trade_start: Optional[pd.Timestamp] = None
     trades: list[dict[str, Any]] = []
     hedged_equity = 1.0
     unhedged_equity = 1.0

@@ -7,7 +7,7 @@ allocation change is intended for the next trading session.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Union, Optional
 
 import numpy as np
 import pandas as pd
@@ -91,7 +91,7 @@ def calculate_entry_strategy_scenarios(
     if any(not np.isfinite(value) or value <= 0 for value in entries):
         raise ValueError("혼합형 매수 가격은 0보다 커야 합니다.")
 
-    rows: list[dict[str, float | str]] = []
+    rows: list[dict[str, Union[float, str]]] = []
     lump_return = allocation * (terminal / current - 1)
     for low in lows:
         confirmation_price = low * (1 + rebound / 100)
@@ -436,9 +436,9 @@ def build_regime_action_plan(
 def build_holding_action(
     stock_data: dict[str, Any],
     regime: dict[str, Any],
-    holding_value: float | None = None,
-    fundamental_score: int | None = None,
-    pnl_pct: float | None = None,
+    holding_value: Optional[float] = None,
+    fundamental_score: Optional[int] = None,
+    pnl_pct: Optional[float] = None,
 ) -> dict[str, Any]:
     """Give a conservative, close-confirmed action for one existing holding."""
     price = _safe_float(stock_data.get("Price"))
