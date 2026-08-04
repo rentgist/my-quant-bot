@@ -739,23 +739,107 @@ def calculate_cashflow_signal(foreign_futures, oi_trend, rsp_change_pct, kospi_h
     return flow_score, status, details
 
 
+def load_state_from_github(tracker_file):
+    import os, json, base64
+    import streamlit as st
+    
+    state = {"last_date": "", "warning_days": 0}
+    token = None
+    try:
+        token = st.secrets.get("GITHUB_TOKEN")
+    except Exception:
+        pass
+        
+    if not token:
+        if os.path.exists(tracker_file):
+            try:
+                with open(tracker_file, "r") as f:
+                    return json.load(f)
+            except:
+                pass
+        return state
+        
+    repo = "rentgist/my-quant-bot"
+    url = f"https://api.github.com/repos/{repo}/contents/{tracker_file}"
+    headers = {"Authorization": f"token {token}"}
+    
+    try:
+        import requests
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            content = base64.b64decode(r.json()["content"]).decode("utf-8")
+            state = json.loads(content)
+            with open(tracker_file, "w") as f:
+                json.dump(state, f)
+            return state
+    except Exception:
+        pass
+        
+    if os.path.exists(tracker_file):
+        try:
+            with open(tracker_file, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return state
+
+def save_state_to_github(tracker_file, state):
+    import os, json, base64
+    import streamlit as st
+    
+    with open(tracker_file, "w") as f:
+        json.dump(state, f)
+        
+    token = None
+    try:
+        token = st.secrets.get("GITHUB_TOKEN")
+    except Exception:
+        pass
+        
+    if not token:
+        return
+        
+    repo = "rentgist/my-quant-bot"
+    url = f"https://api.github.com/repos/{repo}/contents/{tracker_file}"
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    
+    sha = None
+    try:
+        import requests
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            sha = r.json().get("sha")
+    except:
+        pass
+        
+    content_b64 = base64.b64encode(json.dumps(state, indent=4).encode("utf-8")).decode("utf-8")
+    data = {
+        "message": f"Update {tracker_file} by Bot",
+        "content": content_b64,
+        "branch": "main"
+    }
+    if sha:
+        data["sha"] = sha
+        
+    try:
+        import requests
+        requests.put(url, headers=headers, json=data, timeout=5)
+    except:
+        pass
+
+
 def calculate_regime_classification(
     macro_score,
     flow_score,
     kospi_above_ma20,
     warning_days_override=None,
+    save_state=False,
 ):
-    import os, json, datetime
+    import datetime
     tracker_file = "regime_state.json"
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     
-    state = {"last_date": "", "warning_days": 0}
-    if os.path.exists(tracker_file):
-        try:
-            with open(tracker_file, "r") as f:
-                state = json.load(f)
-        except Exception:
-            pass
+    state = load_state_from_github(tracker_file)
             
     # GO는 합산 점수만으로 확정하지 않는다.
     # 환율 안정만으로 macro_score 50점이 만들어질 수 있으므로,
@@ -770,14 +854,14 @@ def calculate_regime_classification(
             warning_days += 1
             state["warning_days"] = warning_days
             state["last_date"] = today_str
-            with open(tracker_file, "w") as f:
-                json.dump(state, f)
+            if save_state:
+                save_state_to_github(tracker_file, state)
     else:
         if warning_days != 0 or last_date != today_str:
             state["warning_days"] = 0
             state["last_date"] = today_str
-            with open(tracker_file, "w") as f:
-                json.dump(state, f)
+            if save_state:
+                save_state_to_github(tracker_file, state)
         warning_days = 0
         
     warning_days = warning_days_override if warning_days_override is not None else max(1, min(5, warning_days)) if is_warning else 0
