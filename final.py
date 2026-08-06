@@ -497,7 +497,7 @@ if not mu_2y.empty and not soxx_2y.empty:
 ai_vkospi_val = f"{float(vkospi_10y['Close'].iloc[-1]):.2f}" if not vkospi_10y.empty else "N/A"
 
 # 탭 구성
-tab_orion_kr, tab_orion_us, tab_radar, tab_hedging, tab_port, tab_calendar = st.tabs(["🇰🇷 ORION Signal(국장)", "🇺🇸 ORION Signal(미장)", "🔍 종목 발굴 & 타이밍 (리포트)", "🧭 국면별 운용", "💼 포트폴리오 & 맞춤 가이드", "📅 마켓 캘린더"])
+tab_orion_kr, tab_orion_us, tab_radar, tab_hedging, tab_port, tab_calendar = st.tabs(["🐯 ORION Signal(국장)", "🦅 ORION Signal(미장)", "🔍 종목 발굴 & 타이밍 (리포트)", "🧭 국면별 운용", "💼 포트폴리오 & 맞춤 가이드", "📅 마켓 캘린더"])
 
 with tab_orion_kr:
     st.subheader("🛰 ORION Signal")
@@ -534,11 +534,11 @@ with tab_orion_kr:
     
     # 3x2 Grid 레이아웃 (매크로 3개, 수급 3개)
     m_col1, m_col2, m_col3 = st.columns(3)
-    m_col1.metric("🇺🇸 국채 10년물 금리", summary_dict['TNX_10Y'].split(' (')[0], summary_dict['TNX_10Y'].split(' (')[1].replace(')','').replace('p',''), delta_color="inverse")
+    m_col1.metric("🦅 국채 10년물 금리", summary_dict['TNX_10Y'].split(' (')[0], summary_dict['TNX_10Y'].split(' (')[1].replace(')','').replace('p',''), delta_color="inverse")
     m_col2.metric("🛢️ WTI 원유", summary_dict['WTI_Crude'].split(' (')[0], summary_dict['WTI_Crude'].split(' (')[1].replace(')',''), delta_color="inverse")
     m_col3.metric("💵 원/달러 환율", summary_dict['USD_KRW'].split(' (')[0], summary_dict['USD_KRW'].split(' (')[1].replace(')',''), delta_color="inverse")
     
-    # 🇰🇷 코스피 실시간 가격 및 5일선 현황 표시
+    # 🐯 코스피 실시간 가격 및 5일선 현황 표시
     k_col1, k_col2, k_col3 = st.columns(3)
     if not kospi_10y.empty:
         current_kospi_val = round(float(kospi_10y['Close'].iloc[-1]), 2)
@@ -556,7 +556,7 @@ with tab_orion_kr:
             kospi_delta_str = "0.00% (0.00p)"
         
         fetched_at = macro_charts.get("fetched_at", "알 수 없음")
-        k_col1.metric(f"🇰🇷 KOSPI 현재가 (⏰ {fetched_at})", f"{current_kospi_val:,.2f}", delta=kospi_delta_str)
+        k_col1.metric(f"🐯 KOSPI 현재가 (⏰ {fetched_at})", f"{current_kospi_val:,.2f}", delta=kospi_delta_str)
         k_col2.metric("📈 KOSPI 5일 이평선", f"{kospi_5d_sma:,.2f}")
         k_col3.metric(
             "🎯 5일선 안착 여부", 
@@ -565,7 +565,7 @@ with tab_orion_kr:
             delta_color="normal" if is_above else "off"
         )
     else:
-        k_col1.metric("🇰🇷 KOSPI 현재가", "데이터 없음")
+        k_col1.metric("🐯 KOSPI 현재가", "데이터 없음")
         k_col2.metric("📈 KOSPI 5일 이평선", "데이터 없음")
         k_col3.metric("🎯 5일선 안착 여부", "확인 불가")
         
@@ -831,18 +831,18 @@ with tab_orion_kr:
 - 통합 국면: {regime}
 
 [시장 거시 지표 및 수급 (글로벌 펀더멘털 & 로컬 수급)]
-- 🇺🇸 미국 장단기 금리차 (10Y-3M): {ai_yield_spread} (경기침체/유동성 선행지표)
-- 🇺🇸 미국 반도체 업황 강도 (MU vs SOXX 20일 수익률 격차): {ai_mu_vs_soxx} (DRAM 사이클 프록시)
-- 🇺🇸 미국 TNX 10Y 금리: {summary_dict.get('TNX_10Y', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 🇺🇸 WTI 크루드 유가: {summary_dict.get('WTI_Crude', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 🇺🇸 미국 동일가중 S&P500 (RSP) 전일 등락률: {rsp_val_str} (미국 시장 온기 확인용)
-- 🇰🇷 USD/KRW 환율: {summary_dict.get('USD_KRW', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 🇰🇷 한국 VKOSPI 현재: {ai_vkospi_val} (한국 기관/외인 파생 하락 헷지 팽창도)
-- 🇰🇷 외국인 KOSPI 현물 순매수: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 🇰🇷 기관 KOSPI 현물 순매수: {summary_dict.get('Institutional', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 🇰🇷 외국인 KOSPI 선물 순매수: {foreign_futures}계약 (방향성 선행지표)
-- 🇰🇷 KOSPI 현재가: {kospi_str}
-- 🇰🇷 KOSPI 5일 이평선 안착 상태: {kospi_status_str}
+- 🦅 미국 장단기 금리차 (10Y-3M): {ai_yield_spread} (경기침체/유동성 선행지표)
+- 🦅 미국 반도체 업황 강도 (MU vs SOXX 20일 수익률 격차): {ai_mu_vs_soxx} (DRAM 사이클 프록시)
+- 🦅 미국 TNX 10Y 금리: {summary_dict.get('TNX_10Y', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🦅 WTI 크루드 유가: {summary_dict.get('WTI_Crude', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🦅 미국 동일가중 S&P500 (RSP) 전일 등락률: {rsp_val_str} (미국 시장 온기 확인용)
+- 🐯 USD/KRW 환율: {summary_dict.get('USD_KRW', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🐯 한국 VKOSPI 현재: {ai_vkospi_val} (한국 기관/외인 파생 하락 헷지 팽창도)
+- 🐯 외국인 KOSPI 현물 순매수: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🐯 기관 KOSPI 현물 순매수: {summary_dict.get('Institutional', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🐯 외국인 KOSPI 선물 순매수: {foreign_futures}계약 (방향성 선행지표)
+- 🐯 KOSPI 현재가: {kospi_str}
+- 🐯 KOSPI 5일 이평선 안착 상태: {kospi_status_str}
 
 [최근 글로벌 속보 요약 (중요도 2 이상)]
 {web_news_text}
@@ -883,11 +883,11 @@ with tab_orion_kr:
 
     # 지표 요약 (쓰레드용 간결 버전)
     thread_indicators = f"""- ORION 신호: {adv_head}
-- 🇺🇸 미국: {us_phase} | 위험도 {us_danger}점 | 금리차(10Y-3M) {ai_yield_spread}
-- 🇰🇷 한국: {kr_phase} | 위험도 {kr_danger}점 | VKOSPI {ai_vkospi_val}
-- 🇰🇷 KOSPI: {kospi_str} | 5일선 안착: {kospi_status_str}
-- 🇰🇷 외국인 현물: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'} | 환율: {summary_dict.get('USD_KRW', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 🇺🇸 반도체 업황(MU vs SOX): {ai_mu_vs_soxx} | RSP 등락: {rsp_val_str}"""
+- 🦅 미국: {us_phase} | 위험도 {us_danger}점 | 금리차(10Y-3M) {ai_yield_spread}
+- 🐯 한국: {kr_phase} | 위험도 {kr_danger}점 | VKOSPI {ai_vkospi_val}
+- 🐯 KOSPI: {kospi_str} | 5일선 안착: {kospi_status_str}
+- 🐯 외국인 현물: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'} | 환율: {summary_dict.get('USD_KRW', 'N/A') if 'summary_dict' in locals() else 'N/A'}
+- 🦅 반도체 업황(MU vs SOX): {ai_mu_vs_soxx} | RSP 등락: {rsp_val_str}"""
 
     # ── 글감 ① 뉴스 기반 ──
     with st.expander("📰 글감 ① — 오늘의 핵심 뉴스 1편 (복사해서 AI에 붙여넣기)", expanded=False):
@@ -971,6 +971,41 @@ AI 투자, 빅테크 실적, 반도체 수출 같은 핵심 테마와 연결해�
         st.code(thread_prompt_events, language="markdown")
 
 
+# --- US Orion Signal ---
+with tab_orion_us:
+    st.subheader("🦅 ORION Signal (미장)")
+    st.caption("미국 증시 특화 매크로, 유동성, 심리 통합 스코어링 시스템")
+    
+    # Calculate score
+    if "calculate_us_orion_score" in globals():
+        try:
+            total_score, us_phase, components = calculate_us_orion_score(raw_data)
+            
+            # Determine color
+            if us_phase == "CLEAR":
+                color = "#00C853"
+            elif us_phase == "CAUTION":
+                color = "#FFD600"
+            else:
+                color = "#D50000"
+                
+            st.markdown(
+                f"<div style='background:{color}22; border-left: 8px solid {color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
+                f"<h2 style='margin-top:0; color:{color};'>{us_phase} (스코어: {total_score:.1f}점)</h2>"
+                f"<ul>"
+                f"<li>매크로 유동성 (35%): {components['macro']:.1f} / 35.0</li>"
+                f"<li>신용 및 심리 (35%): {components['credit']:.1f} / 35.0</li>"
+                f"<li>시장 체력 (20%): {components['strength']:.1f} / 20.0</li>"
+                f"<li>보조 지표 (10%): {components['aux']:.1f} / 10.0</li>"
+                f"</ul>"
+                f"</div>", unsafe_allow_html=True
+            )
+        except Exception as e:
+            st.error(f"미국 시그널 로딩 중 오류: {e}")
+    else:
+        st.info("US Macro logic not loaded yet.")
+
+
 with tab_radar:
     st.subheader("🔍 타점 선택 (Entry Point Selection) - 포트폴리오 종목 타점")
     st.caption("스나이퍼 탭에서 'GO' 신호가 떨어졌을 때, 어떤 종목을 살지 재무 및 수급을 점검하는 레이더입니다.")
@@ -986,8 +1021,8 @@ with tab_radar:
     """, unsafe_allow_html=True)
     
     c1, c2 = st.columns(2)
-    us_input = c1.text_input("🇺🇸 미국 주식", "TSMC, 브로드컴, 버티브")
-    kr_input = c2.text_input("🇰🇷 한국 주식", "LS ELECTRIC")
+    us_input = c1.text_input("🦅 미국 주식", "TSMC, 브로드컴, 버티브")
+    kr_input = c2.text_input("🐯 한국 주식", "LS ELECTRIC")
 
     queries = (
         [("미국", q.strip()) for q in us_input.split(",") if q.strip()] +
@@ -1237,13 +1272,13 @@ with tab_radar: # Merged AI Report
     )
 #     kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_radar(vkospi_10y, usd_krw, kospi_10y)
 
-    st.markdown(f"<div style='background:{us_risk_color}22; border-left: 6px solid {us_risk_color}; padding:15px; border-radius:8px; font-weight:bold; font-size:1.1em; margin-bottom:10px;'>🇺🇸 [글로벌 마스터] {us_risk_grade}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='background:{us_risk_color}22; border-left: 6px solid {us_risk_color}; padding:15px; border-radius:8px; font-weight:bold; font-size:1.1em; margin-bottom:10px;'>🦅 [글로벌 마스터] {us_risk_grade}</div>", unsafe_allow_html=True)
     for icon, msg in us_risk_alerts:
         st.markdown(f"<div style='font-size:0.95em; margin-left:15px; margin-bottom:5px;'>{icon} {msg}</div>", unsafe_allow_html=True)
         
     st.markdown("<br>", unsafe_allow_html=True)
     
-    st.markdown(f"<div style='background:{kr_risk_color}22; border-left: 4px solid {kr_risk_color}; padding:10px; border-radius:6px; font-weight:bold; margin-bottom:10px;'>🇰🇷 [로컬 종속 레이어] {kr_risk_grade}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='background:{kr_risk_color}22; border-left: 4px solid {kr_risk_color}; padding:10px; border-radius:6px; font-weight:bold; margin-bottom:10px;'>🐯 [로컬 종속 레이어] {kr_risk_grade}</div>", unsafe_allow_html=True)
     for icon, msg in kr_risk_alerts:
         st.markdown(f"<div style='font-size:0.9em; margin-left:15px; margin-bottom:3px;'>{icon} {msg}</div>", unsafe_allow_html=True)
 
@@ -1273,7 +1308,7 @@ with tab_radar: # Merged AI Report
 
     b_col1, b_col2 = st.columns(2)
     with b_col1:
-        st.markdown(f"**🇺🇸 미국 진바닥 확률 (US Market)**")
+        st.markdown(f"**🦅 미국 진바닥 확률 (US Market)**")
         st.markdown(
             f"<div style='text-align:center; padding:20px; border-radius:10px; border:2px solid {us_color}; margin-bottom: 10px;'>"
             f"<h1 style='margin:0; font-size:3em; color:{us_color};'>{us_score}%</h1>"
@@ -1285,7 +1320,7 @@ with tab_radar: # Merged AI Report
             for detail in us_details: st.markdown(f"- {detail}")
 
     with b_col2:
-        st.markdown(f"**🇰🇷 한국 진바닥 확률 (KOSPI)**")
+        st.markdown(f"**🐯 한국 진바닥 확률 (KOSPI)**")
         st.markdown(
             f"<div style='text-align:center; padding:20px; border-radius:10px; border:2px solid {kr_color}; margin-bottom: 10px;'>"
             f"<h1 style='margin:0; font-size:3em; color:{kr_color};'>{kr_score}%</h1>"
@@ -1304,7 +1339,7 @@ with tab_radar: # Merged AI Report
     
     r_col1, r_col2 = st.columns(2)
     with r_col1:
-        st.markdown(f"**🇺🇸 미국 반등 신뢰도**")
+        st.markdown(f"**🦅 미국 반등 신뢰도**")
         us_rec_verdict, us_rec_signals, us_rec_score = calculate_recovery_confirmation(
             rsp_10y, spy_10y, hyg_10y, ief_10y
         )
@@ -1313,7 +1348,7 @@ with tab_radar: # Merged AI Report
             st.markdown(f"- {icon} {msg}")
 
     with r_col2:
-        st.markdown(f"**🇰🇷 한국 매크로 안전도**")
+        st.markdown(f"**🐯 한국 매크로 안전도**")
         # tab_sniper에서 계산한 kr_macro_score 등 재활용
         st.markdown(f"**{kr_macro_status}**")
         for icon, msg in kr_macro_details:
@@ -1340,7 +1375,7 @@ with tab_radar: # Merged AI Report
         st.markdown(
             f"<div style='background:{us_adv_color}22; border-left: 6px solid {us_adv_color}; "
             f"padding:15px; border-radius:8px; font-weight:bold; font-size:1.05em; margin-bottom:10px;'>"
-            f"🇺🇸 {us_adv_head}</div>", unsafe_allow_html=True
+            f"🦅 {us_adv_head}</div>", unsafe_allow_html=True
         )
         st.caption(f"판단 근거: 위험 {us_danger}점 · 바닥 {us_score}% · 반등 신뢰도 {us_rec_score} · {us_phase}")
         for act in us_adv_actions:
@@ -1350,7 +1385,7 @@ with tab_radar: # Merged AI Report
         st.markdown(
             f"<div style='background:{kr_adv_color}22; border-left: 6px solid {kr_adv_color}; "
             f"padding:15px; border-radius:8px; font-weight:bold; font-size:1.05em; margin-bottom:10px;'>"
-            f"🇰🇷 {kr_adv_head}</div>", unsafe_allow_html=True
+            f"🐯 {kr_adv_head}</div>", unsafe_allow_html=True
         )
         st.caption(f"판단 근거: 위험 {kr_danger}점 · 바닥 {kr_score}% · 매크로 안전도 {kr_macro_score} · {kr_phase}")
         for act in kr_adv_actions:
@@ -1376,7 +1411,7 @@ with tab_radar: # Merged AI Report
             "과거 10년에 매일 적용한 결과입니다. **주요 이벤트에서 얼마나 점수가 나왔는지 확인**해보세요 — 모델 신뢰도 검증에 핵심입니다. "
         )
         
-        tab_us_bt, tab_kr_bt = st.tabs(["🇺🇸 미국장 (S&P 500)", "🇰🇷 한국장 (KOSPI)"])
+        tab_us_bt, tab_kr_bt = st.tabs(["🦅 미국장 (S&P 500)", "🐯 한국장 (KOSPI)"])
         
         with tab_us_bt:
             bt_us = run_historical_backtest(spy_10y, vix_10y, vix3m_10y)
@@ -1592,12 +1627,12 @@ with tab_radar: # Merged AI Report
 with tab_radar:  # 🚀 오늘의 텐배거 레이더
     st.subheader("🚀 섹터별 텐배거 마스터 레이더 (미래 지표 및 트렌드 필터)")
     UNIVERSE = {
-        "🇺🇸 미국 AI & 클라우드":              ["PLTR","CRWD","SNOW","DDOG","NET","SOUN","MDB","ZS","MNDY"],
-        "🇺🇸 미국 혁신성장 (우주/바이오/핀테크)": ["IONQ","SOFI","RIVN","CELH","RKLB","ASTS","CRSP","LUNR","SYM","HOOD"],
-        "🇰🇷 한국 반도체 소부장 (HBM/AI)":        ["피에스케이홀딩스", "한미반도체", "테크윙", "HPSP", "이수페타시스", "에이직랜드", "디아이", "원익IPS", "동진쎄미켐", "주성엔지니어링", "리노공업", "하나마이크론"],
-        "🇰🇷 한국 K-뷰티 & K-푸드":            ["실리콘투","클래시스","파마리서치","삼양식품","브이티","에이피알","휴젤"],
-        "🇰🇷 한국 바이오텍 & 헬스케어":          ["알테오젠","HLB","리가켐바이오","루닛","뷰노","제이엘케이"],
-        "🇰🇷 한국 전력기기 & 로봇":             ["HD현대일렉트릭","레인보우로보틱스","두산로보틱스","LS ELECTRIC"],
+        "🦅 미국 AI & 클라우드":              ["PLTR","CRWD","SNOW","DDOG","NET","SOUN","MDB","ZS","MNDY"],
+        "🦅 미국 혁신성장 (우주/바이오/핀테크)": ["IONQ","SOFI","RIVN","CELH","RKLB","ASTS","CRSP","LUNR","SYM","HOOD"],
+        "🐯 한국 반도체 소부장 (HBM/AI)":        ["피에스케이홀딩스", "한미반도체", "테크윙", "HPSP", "이수페타시스", "에이직랜드", "디아이", "원익IPS", "동진쎄미켐", "주성엔지니어링", "리노공업", "하나마이크론"],
+        "🐯 한국 K-뷰티 & K-푸드":            ["실리콘투","클래시스","파마리서치","삼양식품","브이티","에이피알","휴젤"],
+        "🐯 한국 바이오텍 & 헬스케어":          ["알테오젠","HLB","리가켐바이오","루닛","뷰노","제이엘케이"],
+        "🐯 한국 전력기기 & 로봇":             ["HD현대일렉트릭","레인보우로보틱스","두산로보틱스","LS ELECTRIC"],
     }
     selected_theme = st.selectbox("스캔할 섹터:", list(UNIVERSE.keys()))
     if st.button("해당 섹터 레이더 가동"):
@@ -1684,9 +1719,9 @@ with tab_radar: # Merged AI Report  # 🤖 AI 참모 리포트
         f"- 한국 VKOSPI (파생 헷지): {ai_vkospi_val}",
         "",
         "【시장 국면 & 시스템 전략 제언】",
-        f"- 🇺🇸 미국: {us_phase} | 위험 탐지 {us_danger}점 | 진바닥 확률 {us_score}% | 반등 신뢰도 {us_rec_score}/100",
+        f"- 🦅 미국: {us_phase} | 위험 탐지 {us_danger}점 | 진바닥 확률 {us_score}% | 반등 신뢰도 {us_rec_score}/100",
         f"  → 시스템 제언: {us_adv_head}",
-        f"- 🇰🇷 한국: {kr_phase} | 위험 탐지 {kr_danger}점 | 진바닥 확률 {kr_score}% | 매크로 안전도 {kr_macro_score}/100",
+        f"- 🐯 한국: {kr_phase} | 위험 탐지 {kr_danger}점 | 진바닥 확률 {kr_score}% | 매크로 안전도 {kr_macro_score}/100",
         f"  → 시스템 제언: {kr_adv_head}",
         "",
         "【스캔 종목 데이터】"
@@ -1754,14 +1789,14 @@ with tab_port:
     st.markdown("#### 📝 보유 종목 입력")
     st.info(
         "**입력 형식:** `종목명:매수가:현재평가액(만원)` (평가액은 생략 가능)\n\n"
-        "🇺🇸 미국: `브로드컴:320.5:800, 버티브:250:500`\n\n"
-        "🇰🇷 한국: `LS ELECTRIC:185000:1000, 피에스케이홀딩스:120000:700`\n\n"
+        "🦅 미국: `브로드컴:320.5:800, 버티브:250:500`\n\n"
+        "🐯 한국: `LS ELECTRIC:185000:1000, 피에스케이홀딩스:120000:700`\n\n"
         "현재평가액까지 쓰면 부분 매도 금액을 만원 단위로 계산합니다."
     )
 
     col_us, col_kr = st.columns(2)
-    port_us_raw = col_us.text_input("🇺🇸 미국 보유 종목", "브로드컴:320.5, 버티브:250, TSMC:180")
-    port_kr_raw = col_kr.text_input("🇰🇷 한국 보유 종목", "LS ELECTRIC:185000")
+    port_us_raw = col_us.text_input("🦅 미국 보유 종목", "브로드컴:320.5, 버티브:250, TSMC:180")
+    port_kr_raw = col_kr.text_input("🐯 한국 보유 종목", "LS ELECTRIC:185000")
 
     def parse_portfolio_input(raw: str, region: str):
         items = []
@@ -1852,7 +1887,7 @@ with tab_port:
 
                     pnl_rows.append({
                         "종목":        d["Name"],
-                        "지역":        "🇺🇸" if region == "미국" else "🇰🇷",
+                        "지역":        "🦅" if region == "미국" else "🐯",
                         "매수가":      f"${buy_p:,.2f}" if region == "미국" else f"{int(buy_p):,}원",
                         "현재가":      fmt_price(cur_p, region),
                         "평가액":      f"{d['HoldingValue']:,.0f}만원" if d.get("HoldingValue") is not None else "미입력",
@@ -2016,7 +2051,7 @@ with tab_port:
                         verdict_color = "#ffdddd"
 
                     with st.expander(
-                        f"{'🇺🇸' if region=='미국' else '🇰🇷'} **{d['Name']}** | "
+                        f"{'🦅' if region=='미국' else '🐯'} **{d['Name']}** | "
                         f"매수 {f'${buy_p:,.2f}' if region=='미국' else f'{int(buy_p):,}원'} → "
                         f"현재 {fmt_price(cur_p, region)} | "
                         f"수익률 {'+' if pnl_pct>=0 else ''}{pnl_pct:.2f}% | {lt_verdict}",
@@ -2141,6 +2176,30 @@ with tab_port:
         )
 
 
+
+
+# --- Custom Portfolio Advice ---
+with tab_port:
+    st.divider()
+    st.subheader("🤖 AI 참모의 맞춤형 코어 전략 가이드")
+    
+    try:
+        from portfolio_manager import parse_portfolio_log
+        holdings = parse_portfolio_log()
+        us_holdings = holdings.get('us', [])
+        
+        from ai_reporter import get_custom_portfolio_advice
+        if "calculate_us_orion_score" in globals():
+            total_score, us_phase, _ = calculate_us_orion_score(raw_data)
+        else:
+            us_phase = "CAUTION"
+            total_score = 50.0
+            
+        advice = get_custom_portfolio_advice(us_holdings, us_phase, total_score)
+        
+        st.markdown(f"<div style='background:#f1f8ff; padding:20px; border-radius:10px; border-left:5px solid #0366d6;'>{advice}</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"맞춤형 가이드 로딩 중 오류 발생: {e}")
 
 
 with tab_calendar:
@@ -3510,61 +3569,4 @@ with tab_hedging:
 
 
 
-
-# --- US Orion Signal ---
-with tab_orion_us:
-    st.subheader("🇺🇸 ORION Signal (미장)")
-    st.caption("미국 증시 특화 매크로, 유동성, 심리 통합 스코어링 시스템")
-    
-    # Calculate score
-    if "calculate_us_orion_score" in globals():
-        try:
-            total_score, us_phase, components = calculate_us_orion_score(raw_data)
-            
-            # Determine color
-            if us_phase == "CLEAR":
-                color = "#00C853"
-            elif us_phase == "CAUTION":
-                color = "#FFD600"
-            else:
-                color = "#D50000"
-                
-            st.markdown(
-                f"<div style='background:{color}22; border-left: 8px solid {color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
-                f"<h2 style='margin-top:0; color:{color};'>{us_phase} (스코어: {total_score:.1f}점)</h2>"
-                f"<ul>"
-                f"<li>매크로 유동성 (35%): {components['macro']:.1f} / 35.0</li>"
-                f"<li>신용 및 심리 (35%): {components['credit']:.1f} / 35.0</li>"
-                f"<li>시장 체력 (20%): {components['strength']:.1f} / 20.0</li>"
-                f"<li>보조 지표 (10%): {components['aux']:.1f} / 10.0</li>"
-                f"</ul>"
-                f"</div>", unsafe_allow_html=True
-            )
-        except Exception as e:
-            st.error(f"미국 시그널 로딩 중 오류: {e}")
-    else:
-        st.info("US Macro logic not loaded yet.")
-
-# --- Custom Portfolio Advice ---
-with tab_port:
-    st.divider()
-    st.subheader("🤖 AI 참모의 맞춤형 코어 전략 가이드")
-    
-    try:
-        from portfolio_manager import parse_portfolio_log
-        holdings = parse_portfolio_log()
-        us_holdings = holdings.get('us', [])
-        
-        from ai_reporter import get_custom_portfolio_advice
-        if "calculate_us_orion_score" in globals():
-            total_score, us_phase, _ = calculate_us_orion_score(raw_data)
-        else:
-            us_phase = "CAUTION"
-            total_score = 50.0
-            
-        advice = get_custom_portfolio_advice(us_holdings, us_phase, total_score)
-        
-        st.markdown(f"<div style='background:#f1f8ff; padding:20px; border-radius:10px; border-left:5px solid #0366d6;'>{advice}</div>", unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"맞춤형 가이드 로딩 중 오류 발생: {e}")
 
