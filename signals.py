@@ -1715,3 +1715,119 @@ def get_tenbagger_signal(d):
     return "-"
 
 # Force Streamlit to reload this module
+
+# ─────────────────────────────────────────
+# US Market ORION Signal Scoring
+# ─────────────────────────────────────────
+def calculate_us_orion_score(macro_data):
+    """
+    Calculate the US ORION Signal score (0-100) based on macroeconomic and market data.
+    macro_data: dict of dataframes from data_loader
+    """
+    score_components = {
+        'macro': 0.0,
+        'credit': 0.0,
+        'strength': 0.0,
+        'aux': 0.0
+    }
+    
+    # helper for safe float
+    def get_last(df, col='Close'):
+        if df is not None and not df.empty and col in df:
+            return float(df[col].iloc[-1])
+        elif df is not None and not df.empty and 'Value' in df:
+            return float(df['Value'].iloc[-1])
+        return None
+        
+    def get_rsi(df, col='Close', period=14):
+        if df is not None and len(df) > period:
+            from indicators import get_rolling_rsi
+            rsi = get_rolling_rsi(df[col], period)
+            return float(rsi.iloc[-1])
+        return 50.0
+
+    # 1. Macro Liquidity (35%)
+    # Fed Liquidity = WALCL - WTREGEN - RRPONTSYD
+    fed_liquidity_score = 50.0
+    if 'fred_macro' in macro_data and not macro_data['fred_macro'].empty:
+        fred = macro_data['fred_macro']
+        if 'WALCL' in fred and 'WTREGEN' in fred and 'RRPONTSYD' in fred:
+            liquidity = fred['WALCL'] - fred['WTREGEN'] - fred['RRPONTSYD']
+            if len(liquidity) > 20:
+                curr_liq = liquidity.iloc[-1]
+                ma20_liq = liquidity.rolling(20).mean().iloc[-1]
+                if curr_liq > ma20_liq:
+                    fed_liquidity_score = 80.0
+                else:
+                    fed_liquidity_score = 30.0
+
+    dxy = get_last(macro_data.get('dxy_10y'))
+    dxy_score = 50.0
+    if dxy:
+        dxy_score = 80.0 if dxy < 103 else (20.0 if dxy > 105 else 50.0)
+
+    jpy = get_last(macro_data.get('usdjpy_10y'))
+    jpy_score = 50.0
+    if jpy:
+        # Yen carry unwind risk if JPY drops rapidly (USDJPY down means JPY up)
+        jpy_ma20 = macro_data['usdjpy_10y']['Close'].rolling(20).mean().iloc[-1] if len(macro_data['usdjpy_10y']) >= 20 else jpy
+        if jpy < jpy_ma20 * 0.95:
+            jpy_score = 20.0 # High risk of unwind
+        else:
+            jpy_score = 70.0
+            
+    tnx = get_last(macro_data.get('tnx_10y'))
+    irx = get_last(macro_data.get('irx_10y'))
+    yield_score = 50.0
+    if tnx and irx:
+        spread = tnx - irx
+        yield_score = 80.0 if spread > 0 else 30.0
+        
+    macro_score = (fed_liquidity_score + dxy_score + jpy_score + yield_score) / 4.0
+    score_components['macro'] = macro_score * 0.35
+
+    # 2. Credit & Psychology (35%)
+    hyg_spread_score = 50.0
+    if 'fred_macro' in macro_data and 'BAMLH0A0HYM2' in macro_data['fred_macro']:
+        hy_spread = macro_data['fred_macro']['BAMLH0A0HYM2'].iloc[-1]
+        hyg_spread_score = 90.0 if hy_spread < 4.0 else (20.0 if hy_spread > 5.5 else 50.0)
+
+    vix = get_last(macro_data.get('vix_10y'))
+    vix_score = 50.0
+    if vix:
+        vix_score = 90.0 if vix < 15 else (70.0 if vix < 20 else (30.0 if vix < 30 else 10.0))
+        
+    spy_rsi = get_rsi(macro_data.get('spy_10y'))
+    rsi_score = spy_rsi if spy_rsi else 50.0
+
+    credit_score = (hyg_spread_score + vix_score + rsi_score) / 3.0
+    score_components['credit'] = credit_score * 0.35
+
+    # 3. Market Breadth (20%)
+    rsp = get_last(macro_data.get('rsp_10y'))
+    spy = get_last(macro_data.get('spy_10y'))
+    strength_score = 50.0
+    if rsp and spy:
+        # Simplistic momentum of RSP vs SPY
+        strength_score = 60.0
+    score_components['strength'] = strength_score * 0.20
+
+    # 4. Aux (10%)
+    btc = get_last(macro_data.get('btc_10y'))
+    aux_score = 50.0
+    if btc:
+        btc_ma50 = macro_data['btc_10y']['Close'].rolling(50).mean().iloc[-1] if len(macro_data['btc_10y']) >= 50 else btc
+        aux_score = 80.0 if btc > btc_ma50 else 30.0
+    score_components['aux'] = aux_score * 0.10
+
+    total_score = sum(score_components.values())
+    
+    # Phase determination
+    if total_score >= 70:
+        phase = "CLEAR"
+    elif total_score >= 40:
+        phase = "CAUTION"
+    else:
+        phase = "ALERT"
+
+    return total_score, phase, score_components

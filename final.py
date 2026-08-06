@@ -497,9 +497,9 @@ if not mu_2y.empty and not soxx_2y.empty:
 ai_vkospi_val = f"{float(vkospi_10y['Close'].iloc[-1]):.2f}" if not vkospi_10y.empty else "N/A"
 
 # 탭 구성
-tab_sniper, tab_radar, tab_report, tab_hedging, tab_port, tab_calendar = st.tabs(["🚦 ORION Signal", "🔍 종목 발굴 & 타이밍", "📊 마스터 리포트", "🧭 국면별 운용", "💼 포트폴리오", "📅 마켓 캘린더"])
+tab_orion_kr, tab_orion_us, tab_radar, tab_hedging, tab_port, tab_calendar = st.tabs(["🇰🇷 ORION Signal(국장)", "🇺🇸 ORION Signal(미장)", "🔍 종목 발굴 & 타이밍 (리포트)", "🧭 국면별 운용", "💼 포트폴리오 & 맞춤 가이드", "📅 마켓 캘린더"])
 
-with tab_sniper:
+with tab_orion_kr:
     st.subheader("🛰 ORION Signal")
     st.caption("ORION은 기다릴 때와 움직일 때를 구별합니다.")
 
@@ -1151,7 +1151,7 @@ with tab_radar:
             interpretation = get_cashflow_interpretation(d)
             st.info(f"**{d['Name']}** : {interpretation}")
 
-with tab_report:
+with tab_radar: # Merged AI Report
     st.subheader("🌐 글로벌 매크로 및 시장 심리 (진바닥 & 반등 신뢰도 점수)")
 
     vix_10y = macro_charts.get("vix_10y", pd.DataFrame())
@@ -1667,7 +1667,7 @@ with tab_radar:  # 🚀 오늘의 텐배거 레이더
             else:
                 st.warning("⚠️ 현재 조건(지하실 역추세 및 실적/마진 기준)을 통과한 진성 우량주가 이 섹터에 존재하지 않습니다.")
 
-with tab_report:  # 🤖 AI 참모 리포트
+with tab_radar: # Merged AI Report  # 🤖 AI 참모 리포트
     st.subheader("🤖 AI 참모 전용 구조화 리포트 v23.0 (진바닥 판독기 연동)")
     st.caption("아래 텍스트를 복사하여 ChatGPT, Claude, Gemini 등에 붙여넣고 심층 분석을 받아보세요.")
 
@@ -3507,3 +3507,64 @@ with tab_hedging:
     - **페어·마켓뉴트럴:** 공매도 실행과 상관관계 붕괴 위험 때문에 제외
     - **원/달러 분산:** 최근 상관과 추세가 확인될 때만 총자산 5% 이내의 후보로 표시
     """)
+
+
+
+
+# --- US Orion Signal ---
+with tab_orion_us:
+    st.subheader("🇺🇸 ORION Signal (미장)")
+    st.caption("미국 증시 특화 매크로, 유동성, 심리 통합 스코어링 시스템")
+    
+    # Calculate score
+    if "calculate_us_orion_score" in globals():
+        try:
+            total_score, us_phase, components = calculate_us_orion_score(raw_data)
+            
+            # Determine color
+            if us_phase == "CLEAR":
+                color = "#00C853"
+            elif us_phase == "CAUTION":
+                color = "#FFD600"
+            else:
+                color = "#D50000"
+                
+            st.markdown(
+                f"<div style='background:{color}22; border-left: 8px solid {color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
+                f"<h2 style='margin-top:0; color:{color};'>{us_phase} (스코어: {total_score:.1f}점)</h2>"
+                f"<ul>"
+                f"<li>매크로 유동성 (35%): {components['macro']:.1f} / 35.0</li>"
+                f"<li>신용 및 심리 (35%): {components['credit']:.1f} / 35.0</li>"
+                f"<li>시장 체력 (20%): {components['strength']:.1f} / 20.0</li>"
+                f"<li>보조 지표 (10%): {components['aux']:.1f} / 10.0</li>"
+                f"</ul>"
+                f"</div>", unsafe_allow_html=True
+            )
+        except Exception as e:
+            st.error(f"미국 시그널 로딩 중 오류: {e}")
+    else:
+        st.info("US Macro logic not loaded yet.")
+
+# --- Custom Portfolio Advice ---
+with tab_port:
+    st.divider()
+    st.subheader("🤖 AI 참모의 맞춤형 코어 전략 가이드")
+    
+    try:
+        from portfolio_manager import parse_portfolio_log
+        holdings = parse_portfolio_log()
+        us_holdings = holdings.get('us', [])
+        
+        from ai_reporter import get_custom_portfolio_advice
+        if "calculate_us_orion_score" in globals():
+            total_score, us_phase, _ = calculate_us_orion_score(raw_data)
+        else:
+            us_phase = "CAUTION"
+            total_score = 50.0
+            
+        advice = get_custom_portfolio_advice(us_holdings, us_phase, total_score)
+        
+        st.markdown(f"<div style='background:#f1f8ff; padding:20px; border-radius:10px; border-left:5px solid #0366d6;'>{advice}</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"맞춤형 가이드 로딩 중 오류 발생: {e}")
+

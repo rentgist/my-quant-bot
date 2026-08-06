@@ -172,3 +172,36 @@ def generate_smart_control_room_report(market_context: str) -> str:
         
     except Exception as e:
         return f"🚨 AI 리포트 생성 중 예외 발생: {e}"
+
+
+def get_custom_portfolio_advice(holdings, phase, macro_score):
+    advice = "### 💼 퀀트 펀드매니저의 맞춤형 코어 전략 가이드\n\n"
+    if phase == "CLEAR":
+        advice += "✅ **매크로 환경 (CLEAR)**: 안정적인 유동성과 양호한 시장 체력이 확인됩니다. **VOO 50%, QQQ 30%, SCHD 20%**의 공격적 자산 배분을 추천합니다.\n"
+    elif phase == "CAUTION":
+        advice += "⚠️ **매크로 환경 (CAUTION)**: 변동성 확대 징후가 있습니다. 현금 비중을 20% 이상 확보하고 **VOO 40%, SCHD 40%, 현금 20%**로 방어력을 높이세요.\n"
+    else:
+        advice += "🚨 **매크로 환경 (ALERT)**: 위험 회피 심리가 강합니다. **SCHD 30%, 단기채(SHV/SGOV) 50%, 현금 20%** 등 최우선적으로 리스크 관리가 필요합니다.\n"
+        
+    advice += "\n#### 🎯 보유 종목 (AI/Tech 코어) 집중 진단\n"
+    tech_stocks = ["NVDA", "AVGO", "TSM", "MSFT", "GOOGL", "MRVL", "VRT"]
+    user_tech = [t for t in holdings if t in tech_stocks]
+    
+    if user_tech:
+        advice += f"투자자님의 포트폴리오 내 주요 기술주({', '.join(user_tech)})는 현재 AI 랠리의 핵심입니다.\n"
+        if phase == "CLEAR":
+            advice += "💡 **필립 피셔(성장주 대가)의 관점**: 펀더멘털(실적, 해자)이 훼손되지 않았다면 작은 가격 변동에 팔지 마십시오. 강세장에서는 주도주를 끝까지 들고 가는 것이 승률을 극대화합니다.\n"
+            if "TSM" in user_tech:
+                advice += " - **TSM**: 최근 412.0에 체결된 TSM은 파운드리 독점력을 감안할 때 훌륭한 장기 코어 자산입니다. Hold 전략을 유지하세요.\n"
+            if "NVDA" in user_tech:
+                advice += " - **NVDA**: AI 인프라 대장주입니다. 단기 이격도가 벌어질 때만 일부 익절(Trimming)하되, 핵심 물량은 매도하지 마십시오.\n"
+        elif phase == "CAUTION":
+            advice += "💡 **스탠리 드러켄밀러(매크로 대가)의 관점**: 유동성이 축소되거나 시장 주도력이 약화될 때 기술주는 가장 먼저 타격을 받을 수 있습니다.\n"
+            advice += " - **액션 플랜**: RSI(14) 70 이상의 과매수 구간에 진입한 종목은 비중을 10~20% 축소하여 현금을 확보(리밸런싱)하세요.\n"
+        else:
+            advice += "💡 **워런 버핏(안전마진 대가)의 관점**: 썰물이 빠지면 누가 벌거벗고 헤엄쳤는지 알 수 있습니다. 위험 회피(Risk-off) 구간에서는 높은 밸류에이션이 독이 됩니다.\n"
+            advice += " - **액션 플랜**: 거래량을 동반한 추세선(50일선) 붕괴 시 기계적인 비중 축소(Stop-loss)를 권장합니다. 낙폭 과대 시 200일선 부근에서 재진입을 노리세요.\n"
+    else:
+        advice += "현재 포트폴리오에 AI/Tech 핵심 주도주가 없습니다. 시장 조정 시 NVDA, TSM, MSFT 등을 분할 매수하는 전략을 추천합니다.\n"
+        
+    return advice

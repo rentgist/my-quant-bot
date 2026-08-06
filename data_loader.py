@@ -22,6 +22,8 @@ from signals import parse_insider, short_interest_label, get_comprehensive_risk_
 # ─────────────────────────────────────────
 # KRX 맵핑
 # ─────────────────────────────────────────
+import pandas_datareader.data as web
+
 @st.cache_data(ttl=86400)
 def get_krx_mapping_v2():
     mapping = {
@@ -229,17 +231,21 @@ def get_macro_charts():
         "vix_10y": "^VIX",
         "vix3m_10y": "^VIX3M",
         "spy_10y": "SPY",
+        "qqq_10y": "QQQ",
         "hyg_10y": "HYG",
         "ief_10y": "IEF",
         "rsp_10y": "RSP",
         "vkospi_10y": "^VKOSPI",
         "tnx_10y": "^TNX",
         "wti_10y": "CL=F",
-        "irx_10y": "^IRX",     # 🆕 미국 단기금리(3개월물) — 장단기 스프레드 계산용
-        "mu_2y": "MU",         # 🆕 마이크론(DRAM 업황 프록시) — 반도체 선행 지표
-        "soxx_2y": "SOXX",     # 🆕 반도체 ETF (SOX 지수) — MU 상대 강도 비교 기준
-        "inverse1x_10y": "114800.KS",  # KODEX 인버스 — 단기/중단기 헷지 백테스트
-        "inverse2x_10y": "252670.KS",  # KODEX 200선물인버스2X — 초단기 헷지 백테스트
+        "irx_10y": "^IRX",
+        "mu_2y": "MU",
+        "soxx_2y": "SOXX",
+        "dxy_10y": "DX-Y.NYB",
+        "usdjpy_10y": "JPY=X",
+        "btc_10y": "BTC-USD",
+        "inverse1x_10y": "114800.KS",
+        "inverse2x_10y": "252670.KS",
     }
     def fetch_macro(k, v):
         try:
@@ -290,6 +296,14 @@ def get_macro_charts():
             vkospi_source = "없음 (전체 소스 실패)"
     result["vkospi_source"] = vkospi_source
     result["fetched_at"] = get_kst_now().strftime("%m-%d %H:%M:%S")
+
+    try:
+        fred_df = web.DataReader(['WALCL', 'WTREGEN', 'RRPONTSYD', 'BAMLH0A0HYM2'], 'fred', start_10y)
+        fred_df = fred_df.ffill().dropna()
+        result['fred_macro'] = fred_df
+    except Exception as e:
+        print("FRED Data Error:", e)
+        result['fred_macro'] = pd.DataFrame()
 
     return result
 
