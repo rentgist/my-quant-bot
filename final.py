@@ -54,6 +54,7 @@ try:
     from signals import (
         calculate_us_risk_radar,
         calculate_kr_risk_radar,
+        calculate_us_orion_score,
         calculate_us_bottom_finder,
         calculate_kr_bottom_finder,
         calculate_recovery_confirmation,
