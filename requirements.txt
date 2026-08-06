@@ -14,3 +14,4 @@ pykrx
 statsmodels
 
 python-dotenv
+pandas-datareader
