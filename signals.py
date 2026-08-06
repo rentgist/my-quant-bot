@@ -1901,6 +1901,19 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
     else:
         actions.append("💡 주요 매크로 지표들이 중립적인 수준을 유지하고 있습니다.")
         
+    # Add top news action point if we can fetch it
+    try:
+        from data_loader import get_market_news
+        us_news = get_market_news("US", limit=5)
+        top_news = [n for n in us_news if n.get("importance", 0) >= 4]
+        if top_news:
+            latest_important = top_news[0]
+            action = latest_important.get("action_point")
+            if action:
+                actions.append(f"📰 **최신 주요 뉴스 기반 대응**: {action}")
+    except Exception as e:
+        pass
+        
     if us_phase == "CLEAR":
         actions.append("🚀 **투자 전략**: 위험 자산 비중을 확대하고 AI/Tech 주도주의 추세를 추종하십시오.")
     elif us_phase == "CAUTION":
