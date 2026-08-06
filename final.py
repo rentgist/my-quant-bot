@@ -980,7 +980,7 @@ with tab_orion_us:
     # Calculate score
     if "calculate_us_orion_score" in globals():
         try:
-            total_score, us_phase, components = calculate_us_orion_score(raw_data)
+            total_score, us_phase, components = calculate_us_orion_score(macro_charts)
             
             # Determine color
             if us_phase == "CLEAR":
@@ -2191,7 +2191,7 @@ with tab_port:
         
         from ai_reporter import get_custom_portfolio_advice
         if "calculate_us_orion_score" in globals():
-            total_score, us_phase, _ = calculate_us_orion_score(raw_data)
+            total_score, us_phase, _ = calculate_us_orion_score(macro_charts)
         else:
             us_phase = "CAUTION"
             total_score = 50.0
