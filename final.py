@@ -990,7 +990,7 @@ with tab_orion_us:
                 
             liq_val = metrics.get('net_liquidity')
             if liq_val:
-                u_col4.metric("연준 순유동성", f"B")
+                u_col4.metric("연준 순유동성", f"${liq_val:.1f}B")
             else:
                 u_col4.metric("연준 순유동성", "N/A")
                 
