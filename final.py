@@ -1041,6 +1041,20 @@ with tab_orion_us:
         st.markdown(us_flow)
     else:
         st.write("미장 수급 동향 리포트를 불러올 수 없습니다.")
+        
+    st.divider()
+    st.markdown("### 📋 웹 버전 Gemini Pro 복사용 프롬프트 (미장 전용)")
+    us_news_lines = [f"- [{n.get('sentiment', '중립')}/중요도:{n.get('importance', 0)}] {n.get('title_ko', '')} (대응: {n.get('action_point', '')})" for n in us_news[:40]] if us_news else ["수집된 뉴스가 없습니다."]
+    us_web_prompt = f"""너는 월스트리트 최고 수준의 매크로 애널리스트다.
+[ORION 미장 판정] {adv_head} | 종합점수 {total_score:.1f} | 국면 {us_phase}
+[핵심 지표] TNX {metrics.get('tnx')}% | DXY {metrics.get('dxy')} | HY스프레드 {metrics.get('hy_spread')}% | 순유동성 ${metrics.get('net_liquidity', 0):.1f}B
+[최근 미국 뉴스]
+{chr(10).join(us_news_lines)}
+[미국 ETF 자금흐름 프록시]
+{us_flow if us_flow else "데이터 없음"}
+---
+위 데이터를 바탕으로 미국 시장 국면 진단, 섹터별 전망, 이번 주 구체적 행동 지침(진입/관망/축소)을 작성하라."""
+    st.code(us_web_prompt, language="markdown")
 
 with tab_radar:
     st.subheader("🔍 타점 선택 (Entry Point Selection) - 포트폴리오 종목 타점")
