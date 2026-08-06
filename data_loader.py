@@ -92,7 +92,7 @@ def get_upcoming_events():
 # ─────────────────────────────────────────
 # 매크로 지표
 # ─────────────────────────────────────────
-@st.cache_data(ttl=600)  # 기존 1800초에서 600초로 축소
+@st.cache_data(ttl=599)  # 기존 1800초에서 600초로 축소
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=1))
 def get_real_cnn_fg():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
@@ -307,7 +307,7 @@ def get_macro_charts():
 
     return result
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=599)
 def get_investor_flow():
     """
     네이버 금융을 이용하여 최근 거래일 코스피 투자자별 순매수(단위: 억원)를 반환.
@@ -423,7 +423,7 @@ def fetch_ticker_info(tk):
 # ─────────────────────────────────────────
 # 개별 종목 데이터 (yfinance 병목 해결을 위한 retry 적용)
 # ─────────────────────────────────────────
-@st.cache_data(ttl=600) 
+@st.cache_data(ttl=599) 
 def get_stock_data(query, is_kr=False, fast_mode=False):
     base = {"Name": query, "error": None}
     try:
@@ -739,7 +739,7 @@ import requests
 import datetime
 import streamlit as st
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=599)
 def get_market_news(market="KR", limit=20):
     news_data = []
     remote_url = "https://raw.githubusercontent.com/rentgist/quant-alpha-engine/main/data/news_archive.json"
@@ -781,7 +781,7 @@ def get_market_news(market="KR", limit=20):
         return sorted_news[:limit]
     return []
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=599)
 def get_us_flow_report():
     remote_url = "https://raw.githubusercontent.com/rentgist/quant-alpha-engine/main/data/us_flow_report.md"
     try:
