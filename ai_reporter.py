@@ -90,7 +90,7 @@ def generate_smart_control_room_report(market_context: str, target_market: str =
             "gemini-2.5-pro",          # 1순위: 2.5 Pro (최상급 브레인)
             "gemini-3.5-flash",        # 2순위: 3.5 Flash (강력한 신형 Flash)
             "gemini-3.1-flash-lite",   # 3순위: 3.1 Flash Lite (확인된 안정 모델)
-            "gemini-2.5-flash-lite",   # 4순위: 2.5 Flash Lite
+            "gemini-1.5-flash-lite",   # 4순위: 2.5 Flash Lite
             "gemini-pro-latest",
             "gemini-flash-latest"
         ]
@@ -124,7 +124,7 @@ def generate_smart_control_room_report(market_context: str, target_market: str =
                 genai_old.configure(api_key=api_key)
                 
                 # 구형 SDK에서 검증된 안정 모델 6개 순차 시도
-                for old_model in ["gemini-2.5-pro", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-pro-latest", "gemini-flash-latest"]:
+                for old_model in ["gemini-2.5-pro", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-1.5-flash-lite", "gemini-pro-latest", "gemini-flash-latest"]:
                     try:
                         model = genai_old.GenerativeModel(old_model)
                         # 안전 설정 무력화 (에러 방지)

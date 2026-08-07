@@ -1486,7 +1486,7 @@ def generate_economic_commentary(summary_dict, phase):
             "gemini-2.5-pro",          # 1순위: 2.5 Pro (최상급 브레인)
             "gemini-3.5-flash",        # 2순위: 3.5 Flash (강력한 신형 Flash)
             "gemini-3.1-flash-lite",   # 3순위: 3.1 Flash Lite (확인된 안정 모델)
-            "gemini-2.5-flash-lite",   # 4순위: 2.5 Flash Lite
+            "gemini-1.5-flash-lite",   # 4순위: 2.5 Flash Lite
             "gemini-pro-latest",
             "gemini-flash-latest"
         ]
@@ -1518,7 +1518,7 @@ def generate_economic_commentary(summary_dict, phase):
         
         response = None
         successful_model = None
-        for old_model in ["gemini-2.5-pro", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-pro-latest"]:
+        for old_model in ["gemini-2.5-pro", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-1.5-flash-lite", "gemini-flash-latest", "gemini-pro-latest"]:
             try:
                 model = genai_old.GenerativeModel(old_model)
                 safety_settings = [
@@ -1910,7 +1910,14 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
             latest_important = top_news[0]
             action = latest_important.get("action_point")
             if action:
-                actions.append(f"📰 **최신 주요 뉴스 기반 대응**: {action}")
+                # Resolve contradiction
+                sentiment = latest_important.get("sentiment", "")
+                prefix = "📰 **최신 주요 뉴스 기반 대응**"
+                if sentiment == "악재" and us_phase == "CLEAR":
+                    prefix = "📰 **단기 노이즈 주의(단기 악재 뉴스 포착)**"
+                elif sentiment == "호재" and us_phase == "ALERT":
+                    prefix = "📰 **단기 반등 재료(호재 뉴스 포착)**"
+                actions.append(f"{prefix}: {action}")
     except Exception as e:
         pass
         
@@ -1958,7 +1965,7 @@ def generate_us_economic_commentary(summary_dict, phase):
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
