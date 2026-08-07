@@ -1213,7 +1213,7 @@ with tab_orion_us:
     
     # 통합 점수에 flow score 반영 (가중치 조절)
     final_us_score = total_score + (us_flow_score * 0.2)
-    final_us_phase = "CLEAR" if final_us_score >= 60 else "CAUTION" if final_us_score >= 40 else "ALERT"
+    final_us_phase = "CLEAR" if final_us_score >= 65 else "CAUTION" if final_us_score >= 40 else "ALERT"
     final_adv_head, final_adv_color, final_adv_actions = get_us_strategic_advice(final_us_phase, final_us_score, triggers)
     
     st.markdown(

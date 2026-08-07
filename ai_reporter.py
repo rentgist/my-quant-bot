@@ -39,7 +39,14 @@ def generate_smart_control_room_report(market_context: str, target_market: str =
         news_text = "최근 수집된 뉴스가 없습니다. (백그라운드 뉴스 수집 파이프라인 대기 중)"
         
         if news_data:
-            top_news = news_data[:60]
+            filtered_news = []
+            for n in news_data:
+                m = n.get("market", "GLOBAL")
+                if target_market == "KR" and m not in ("KR", "GLOBAL"): continue
+                if target_market == "US" and m not in ("US", "GLOBAL"): continue
+                filtered_news.append(n)
+                
+            top_news = filtered_news[:60]
             if top_news:
                 news_lines = []
                 for n in top_news:
@@ -50,7 +57,8 @@ def generate_smart_control_room_report(market_context: str, target_market: str =
                     news_lines.append(f"- [{sentiment}/중요도:{importance}] {title} (대응: {action})")
                 news_text = "\n".join(news_lines)
                 
-        prompt = f"""너는 대한민국 상위 1% 자산가를 위한 월스트리트 최고 수준의 매크로 애널리스트이자 11원칙 장기 투자(Value Accumulation)의 대가다.
+        persona = "대한민국 상위 1% 자산가를 위한" if target_market == "KR" else "미국 주식(S&P500/나스닥) 투자를 전문으로 하는 월스트리트 최고 수준의"
+        prompt = f"""너는 {persona} 매크로 애널리스트이자 11원칙 장기 투자(Value Accumulation)의 대가다.
 다음 주어진 '알고리즘 시스템의 현재 판독 결과'와 '최근 글로벌 뉴스'를 바탕으로, 대시보드 상황판에 어울리는 브리핑을 Markdown 포맷으로 작성하라.
 
 [알고리즘 시스템 판독 결과]

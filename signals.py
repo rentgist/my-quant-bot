@@ -1846,11 +1846,34 @@ def calculate_us_orion_score(macro_data):
     score_components['credit'] = credit_score * 0.35
 
     # 3. Market Breadth (20%)
-    rsp = get_last(macro_data.get('rsp_10y'))
-    spy = get_last(macro_data.get('spy_10y'))
+    rsp_df = macro_data.get('rsp_10y')
+    spy_df = macro_data.get('spy_10y')
+    soxx_df = macro_data.get('soxx_10y')
+    
     strength_score = 50.0
-    if rsp and spy:
-        strength_score = 60.0
+    if rsp_df is not None and not rsp_df.empty and spy_df is not None and not spy_df.empty:
+        if len(rsp_df) > 20 and len(spy_df) > 20:
+            rsp_20d = (rsp_df['Close'].iloc[-1] / rsp_df['Close'].iloc[-21]) - 1
+            spy_20d = (spy_df['Close'].iloc[-1] / spy_df['Close'].iloc[-21]) - 1
+            if rsp_20d > spy_20d:
+                strength_score += 20.0
+                triggers.append(f"RSP가 SPY를 아웃퍼폼하며 시장 온기 확산 (RSP {rsp_20d*100:.1f}% > SPY {spy_20d*100:.1f}%)")
+            else:
+                strength_score -= 10.0
+                triggers.append(f"SPY가 RSP를 아웃퍼폼하며 대형주 집중 심화 (SPY {spy_20d*100:.1f}% > RSP {rsp_20d*100:.1f}%)")
+                
+    if soxx_df is not None and not soxx_df.empty and spy_df is not None and not spy_df.empty:
+        if len(soxx_df) > 20 and len(spy_df) > 20:
+            soxx_20d = (soxx_df['Close'].iloc[-1] / soxx_df['Close'].iloc[-21]) - 1
+            spy_20d = (spy_df['Close'].iloc[-1] / spy_df['Close'].iloc[-21]) - 1
+            if soxx_20d > spy_20d:
+                strength_score += 20.0
+                triggers.append(f"반도체(SOXX)가 시장을 아웃퍼폼하며 기술주 주도력 유지 (SOXX {soxx_20d*100:.1f}% > SPY {spy_20d*100:.1f}%)")
+            else:
+                strength_score -= 10.0
+                triggers.append(f"반도체(SOXX) 단기 약세로 주도력 둔화 경계 (SOXX {soxx_20d*100:.1f}% < SPY {spy_20d*100:.1f}%)")
+                
+    strength_score = max(0.0, min(100.0, strength_score))
     score_components['strength'] = strength_score * 0.20
 
     # 4. Aux (10%)
@@ -1896,7 +1919,7 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
     actions = []
     
     if triggers:
-        for t in list(set(triggers)):
+        for t in list(dict.fromkeys(triggers)):
             actions.append(f"💡 {t}")
     else:
         actions.append("💡 주요 매크로 지표들이 중립적인 수준을 유지하고 있습니다.")
@@ -1912,7 +1935,7 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
             if action:
                 # Resolve contradiction
                 sentiment = latest_important.get("sentiment", "")
-                prefix = "📰 **최신 주요 뉴스 기반 대응**"
+                prefix = "📰 **최고 중요도 뉴스 기반 대응**"
                 if sentiment == "악재" and us_phase == "CLEAR":
                     prefix = "📰 **단기 노이즈 주의(단기 악재 뉴스 포착)**"
                 elif sentiment == "호재" and us_phase == "ALERT":
