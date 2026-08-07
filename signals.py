@@ -1923,3 +1923,80 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
         
     return head, color, actions
 
+
+
+
+def generate_us_economic_commentary(summary_dict, phase):
+    import os
+    
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return "⚠️ 환경 변수에 GEMINI_API_KEY가 설정되지 않아 AI 브리핑을 제공할 수 없습니다."
+    
+    prompt = f"""너는 월스트리트 출신의 매크로 전략가이자 퀀트 펀드 매니저다.
+아래 전달받은 미국 증시 핵심 데이터와 시스템이 판정한 시장 국면을 바탕으로 가장 날카롭고 입체적인 브리핑을 작성하라.
+단순히 숫자를 나열하지 말고, [매크로/유동성의 구조적 변화 ➔ 미국 증시 반영 여부 ➔ 섹터 수급(SPY, QQQ, SOXX) 괴리 포착 ➔ 유리한 섹터/테마 암시 ➔ 최종 행동 강령] 순으로 인과관계에 맞게 해설해라.
+
+[미국 매크로 및 유동성 핵심 지표]
+    - 미국 10년물 국채 금리: {summary_dict.get('TNX_10Y', 'N/A')}
+    - 달러 인덱스 (DXY): {summary_dict.get('DXY', 'N/A')}
+    - 하이일드 스프레드: {summary_dict.get('HY_Spread', 'N/A')}
+    - 연준 순유동성: {summary_dict.get('Net_Liquidity', 'N/A')}
+    - VIX 공포지수: {summary_dict.get('VIX', 'N/A')}
+
+[미국 주요 ETF 당일 수급 프록시 강도 (양수=매수우위, 음수=매도우위)]
+    - SPY (S&P 500): {summary_dict.get('SPY_Flow', 'N/A')}
+    - QQQ (나스닥): {summary_dict.get('QQQ_Flow', 'N/A')}
+    - SOXX (반도체): {summary_dict.get('SOXX_Flow', 'N/A')}
+
+[시스템 판정 국면]
+    - 현재 국면: {phase}
+
+출력 형식은 마크다운을 사용하며, 너무 길지 않게 핵심만 3~4개의 글머리 기호(Bullet point)로 나누어 전달하라. 마지막엔 한 줄 요약(Action Point)을 덧붙여라.
+"""
+    
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"⚠️ 브리핑 생성 중 오류가 발생했습니다: {e}"
+
+
+
+
+def calculate_us_flow_signal(spy_flow, qqq_flow, soxx_flow):
+    """
+    US ETF 자금흐름 점수를 기반으로 수급 강도를 판정합니다.
+    """
+    score = 0
+    details = []
+    
+    avg_flow = (spy_flow + qqq_flow) / 2
+    
+    if avg_flow > 0.5:
+        score += 40
+        status = "🟢 강한 수급 유입 (Strong Inflow)"
+    elif avg_flow > 0:
+        score += 20
+        status = "🟡 약한 매수 우위 (Mild Inflow)"
+    elif avg_flow > -0.5:
+        score -= 20
+        status = "🟠 약한 매도 우위 (Mild Outflow)"
+    else:
+        score -= 40
+        status = "🔴 강한 수급 유출 (Strong Outflow)"
+        
+    details.append(("🏢", f"SPY 수급 프록시: {spy_flow:+.2f}"))
+    details.append(("🚀", f"QQQ 수급 프록시: {qqq_flow:+.2f}"))
+    details.append(("💻", f"SOXX 수급 프록시: {soxx_flow:+.2f}"))
+    
+    if soxx_flow < -1.0:
+        details.append(("⚠️", "반도체(SOXX) 섹터의 강한 자금 유출 경고"))
+    elif soxx_flow > 1.0:
+        details.append(("🔥", "반도체(SOXX) 섹터의 강한 자금 유입 포착"))
+        
+    return score, status, details
+

@@ -994,6 +994,38 @@ with tab_orion_us:
             else:
                 u_col4.metric("연준 순유동성", "N/A")
                 
+            # 2.5 🦅 SPY 실시간 가격 및 5일선 현황 표시
+            sk_col1, sk_col2, sk_col3 = st.columns(3)
+            spy_10y = macro_charts.get("spy_10y", pd.DataFrame())
+            if not spy_10y.empty and 'Close' in spy_10y:
+                current_spy_val = round(float(spy_10y['Close'].iloc[-1]), 2)
+                spy_5d_sma = round(float(spy_10y['Close'].rolling(5).mean().iloc[-1]), 2)
+                spy_gap = current_spy_val - spy_5d_sma
+                spy_is_above = current_spy_val >= spy_5d_sma
+                
+                # SPY 등락률 연산
+                if len(spy_10y['Close']) >= 2:
+                    prev_spy = float(spy_10y['Close'].iloc[-2])
+                    spy_change_pts = current_spy_val - prev_spy
+                    spy_change_pct = (spy_change_pts / prev_spy) * 100.0
+                    spy_delta_str = f"{spy_change_pct:+.2f}% (${spy_change_pts:+.2f})"
+                else:
+                    spy_delta_str = "0.00% ($0.00)"
+                
+                fetched_at = macro_charts.get("fetched_at", "알 수 없음")
+                sk_col1.metric(f"🦅 SPY 현재가 (⏰ {fetched_at})", f"${current_spy_val:,.2f}", delta=spy_delta_str)
+                sk_col2.metric("📈 SPY 5일 이평선", f"${spy_5d_sma:,.2f}")
+                sk_col3.metric(
+                    "🎯 5일선 안착 여부", 
+                    "안착 완료" if spy_is_above else "미안착", 
+                    f"이격: ${spy_gap:+,.2f}", 
+                    delta_color="normal" if spy_is_above else "off"
+                )
+            else:
+                sk_col1.metric("🦅 SPY 현재가", "데이터 없음")
+                sk_col2.metric("📈 SPY 5일 이평선", "데이터 없음")
+                sk_col3.metric("🎯 5일선 안착 여부", "확인 불가")
+                
             # 3. Score Details and BTC Caveat
             st.markdown("---")
             st.markdown("#### 📊 세부 스코어보드 및 보조 지표")
@@ -1036,17 +1068,174 @@ with tab_orion_us:
         st.write("수집된 미장 뉴스가 없습니다.")
         
     st.markdown("---")
+    st.markdown("### 🦅 미국 주요 ETF 수급 동향 프록시 리포트")
     us_flow = get_us_flow_report()
+    
+    sf_col1, sf_col2, sf_col3 = st.columns(3)
+    
+    def parse_us_flow(md_text):
+        res = {}
+        if not md_text: return res
+        for line in md_text.split('\n'):
+            if '|' in line and '**' in line:
+                parts = [p.strip() for p in line.split('|')]
+                if len(parts) >= 6:
+                    ticker = parts[1].replace('**', '').strip()
+                    score_str = parts[5].replace('**', '').strip()
+                    try:
+                        res[ticker] = float(score_str)
+                    except:
+                        pass
+        return res
+
+    flow_dict = parse_us_flow(us_flow)
+    
+    def render_us_flow(col, label, ticker):
+        score = flow_dict.get(ticker, 0.0)
+        state = "순매수" if score > 0 else "순매도" if score < 0 else "중립"
+        col.metric(f"{label} 수급 프록시", f"{score:+.2f}", f"{state}")
+
+    if flow_dict:
+        render_us_flow(sf_col1, "🏢 SPY (S&P 500)", "SPY")
+        render_us_flow(sf_col2, "🚀 QQQ (Nasdaq)", "QQQ")
+        render_us_flow(sf_col3, "💻 SOXX (반도체)", "SOXX")
+    else:
+        sf_col1.metric("🏢 SPY 수급", "데이터 없음", delta_color="off")
+        sf_col2.metric("🚀 QQQ 수급", "데이터 없음", delta_color="off")
+        sf_col3.metric("💻 SOXX 수급", "데이터 없음", delta_color="off")
+        
     if us_flow:
-        st.markdown(us_flow)
+        with st.expander("📊 수급 프록시 원본 데이터 확인"):
+            st.markdown(us_flow)
     else:
         st.write("미장 수급 동향 리포트를 불러올 수 없습니다.")
         
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 3. AI 브리핑 버튼 이식 (CFO & 스마트 컨트롤룸)
+    us_summary_dict = {
+        'TNX_10Y': f"{metrics.get('tnx', 0):.2f}%" if metrics.get('tnx') else "N/A",
+        'DXY': f"{metrics.get('dxy', 0):.2f}" if metrics.get('dxy') else "N/A",
+        'HY_Spread': f"{metrics.get('hy_spread', 0):.2f}%" if metrics.get('hy_spread') else "N/A",
+        'Net_Liquidity': f"${metrics.get('net_liquidity', 0):.1f}B" if metrics.get('net_liquidity') else "N/A",
+        'VIX': "N/A",  # VIX is fetched below if needed, else N/A
+        'SPY_Flow': flow_dict.get("SPY", "N/A"),
+        'QQQ_Flow': flow_dict.get("QQQ", "N/A"),
+        'SOXX_Flow': flow_dict.get("SOXX", "N/A")
+    }
+
+    if "us_cfo_report_cache" not in st.session_state:
+        st.session_state["us_cfo_report_cache"] = ""
+ 
+    if st.button("🔄 CFO AI 미장 브리핑 생성", key="us_cfo_report_btn"):
+        with st.spinner("거시경제 CFO AI가 미장 흐름을 분석하고 있습니다..."):
+            from signals import generate_us_economic_commentary
+            st.session_state["us_cfo_report_cache"] = generate_us_economic_commentary(us_summary_dict, us_phase)
+            
+    if st.session_state["us_cfo_report_cache"]:
+        ai_commentary = st.session_state["us_cfo_report_cache"]
+        if "⚠️" in ai_commentary:
+            st.error(ai_commentary)
+        else:
+            st.info(f"**[미장 CFO 통합 브리핑] {us_phase}**\n\n{ai_commentary}")
+    else:
+        st.info("👈 버튼을 눌러 CFO AI 미장 분석 브리핑을 생성하세요.")
+
+    st.divider()
+    st.markdown("### 🤖 실시간 AI 종합 브리핑 (미장)")
+    
+    if st.button("🔄 AI 미장 관제 리포트 생성 (뉴스 + 매크로 종합)", type="primary", key="us_ai_reporter_btn"):
+        with st.spinner("Gemini 2.5 Flash가 미장 속보와 매크로 수치를 종합하여 리포트를 작성 중입니다..."):
+            market_ctx = f"판정결과: {adv_head}\n종합점수: {total_score:.1f}점\n현재국면: {us_phase}"
+            
+            try:
+                import sys
+                import importlib
+                import ai_reporter
+                importlib.reload(ai_reporter)
+                # We can reuse the smart control room report function, it relies on market_ctx
+                from ai_reporter import generate_smart_control_room_report
+                report = generate_smart_control_room_report(market_ctx, target_market="US")
+                st.session_state["us_ai_report_cache"] = report
+            except Exception as e:
+                st.error(f"리포트 생성 모듈 로드 실패: {e}")
+
+    if "us_ai_report_cache" in st.session_state:
+        st.markdown("<div class='ai-report-container'>", unsafe_allow_html=True)
+        st.markdown(st.session_state["us_ai_report_cache"])
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.info("👈 상단의 버튼을 눌러 최신 미장 시황 리포트를 생성하세요.")
+
+    st.divider()
+
+    # ── [NEW] ORION 미국 매크로 & 자금흐름 통합 국면 판별기 ──
+    st.markdown("### 🚦 ORION 통합 국면 판별기 (US Regime Classifier)")
+    
+    uc_macro, uc_flow = st.columns(2)
+    
+    with uc_macro:
+        st.markdown("#### Step 1: 📊 매크로 위험도 (Risk Gauge)")
+        us_macro_status = "🟢 양호" if components['macro'] + components['credit'] > 45 else "🔴 위험"
+        st.markdown(f"**상태:** {us_macro_status}")
+        for trig in triggers:
+            st.write(f"⚠️ {trig}")
+            
+    with uc_flow:
+        st.markdown("#### Step 2: 💸 자금흐름 강도 (Flow Signal)")
+        
+        # 수동 입력 폼
+        uf_col1, uf_col2 = st.columns(2)
+        with uf_col1:
+            spy_manual = st.number_input("① SPY 수급 프록시 (수동보정)", value=flow_dict.get("SPY", 0.0), step=0.1)
+        with uf_col2:
+            qqq_manual = st.number_input("② QQQ 수급 프록시 (수동보정)", value=flow_dict.get("QQQ", 0.0), step=0.1)
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        usave_col1, usave_col2 = st.columns([2, 1])
+        with usave_col1:
+            st.info("💡 장 마감 후 최종 확정 시에만 체크하세요.")
+            save_us_regime = st.checkbox("✅ 오늘 장마감 결과로 확정 (미장)", value=False)
+        with usave_col2:
+            with st.expander("⚙️ 강제 오버라이드"):
+                uwdo = st.number_input("미장 경고일수 (-1: 자동)", min_value=-1, max_value=5, value=-1, step=1)
+
+        from signals import calculate_us_flow_signal
+        us_flow_score, us_flow_status, us_flow_details = calculate_us_flow_signal(spy_manual, qqq_manual, flow_dict.get("SOXX", 0.0))
+        
+        st.markdown(f"**상태:** {us_flow_status}")
+        for icon, msg in us_flow_details:
+            st.write(f"{icon} {msg}")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("#### Step 3: 🎯 통합 판정 (Action Plan)")
+    
+    # 통합 점수에 flow score 반영 (가중치 조절)
+    final_us_score = total_score + (us_flow_score * 0.2)
+    final_us_phase = "🟢 STRONGBUY" if final_us_score >= 80 else "📈 BUY" if final_us_score >= 60 else "⚠️ CAUTION" if final_us_score >= 40 else "🚨 SELL"
+    final_adv_head, final_adv_color, final_adv_actions = get_us_strategic_advice(final_us_phase, final_us_score, triggers)
+    
+    st.markdown(
+        f"<div style='background:{final_adv_color}22; border-left: 8px solid {final_adv_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
+        f"<h2 style='margin-top:0; color:{final_adv_color};'>{final_adv_head} (Flow 반영)</h2>"
+        f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>최종 스코어 {final_us_score:.1f}점 · {final_us_phase}</p>"
+        f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in final_adv_actions]) + "</ul>"
+        f"</div>", unsafe_allow_html=True
+    )
+    
+    # ── [NEW] Phase별 비중 가이드 박스 ──
+    from regime_playbook import get_playbook
+    us_playbook = get_playbook(final_us_phase)
+    
+    st.markdown("##### 💼 권장 포트폴리오 비중 (US)")
+    st.info(f"**주식 비중:** {us_playbook.get('Equity', 'N/A')} | **현금 비중:** {us_playbook.get('Cash', 'N/A')} | **헷지 비중:** {us_playbook.get('Hedge', 'N/A')}")
+    st.markdown(f"**핵심 전략:** {us_playbook.get('Strategy', 'N/A')}")
+    
     st.divider()
     st.markdown("### 📋 웹 버전 Gemini Pro 복사용 프롬프트 (미장 전용)")
     us_news_lines = [f"- [{n.get('sentiment', '중립')}/중요도:{n.get('importance', 0)}] {n.get('title_ko', '')} (대응: {n.get('action_point', '')})" for n in us_news[:40]] if us_news else ["수집된 뉴스가 없습니다."]
     us_web_prompt = f"""너는 월스트리트 최고 수준의 매크로 애널리스트다.
-[ORION 미장 판정] {adv_head} | 종합점수 {total_score:.1f} | 국면 {us_phase}
+[ORION 미장 판정] {final_adv_head} | 최종점수 {final_us_score:.1f} | 국면 {final_us_phase}
 [핵심 지표] TNX {metrics.get('tnx')}% | DXY {metrics.get('dxy')} | HY스프레드 {metrics.get('hy_spread')}% | 순유동성 ${metrics.get('net_liquidity', 0):.1f}B
 [최근 미국 뉴스]
 {chr(10).join(us_news_lines)}
@@ -1055,6 +1244,82 @@ with tab_orion_us:
 ---
 위 데이터를 바탕으로 미국 시장 국면 진단, 섹터별 전망, 이번 주 구체적 행동 지침(진입/관망/축소)을 작성하라."""
     st.code(us_web_prompt, language="markdown")
+    
+    st.divider()
+    st.caption("👇 아래 3개 쓰레드용 글감은 AI(Claude, Gemini 등)에 붙여넣어 쓰레드 포스트를 자동 생성할 수 있습니다.")
+
+    top_us_news_lines = []
+    if us_news:
+        top_us_news = [n for n in us_news if n.get("importance", 0) >= 3][:10]
+        for n in top_us_news:
+            t  = n.get("title_ko", n.get("title", ""))
+            s  = n.get("sentiment", "중립")
+            a  = n.get("action_point", "")
+            top_us_news_lines.append(f"- [{s}] {t}\n  → 대응: {a}")
+    top_us_news_text = "\n".join(top_us_news_lines) if top_us_news_lines else "주요 뉴스 없음"
+
+    us_thread_indicators = f"""- ORION 미장 신호: {final_adv_head}
+- 🦅 미국 국면: {final_us_phase} | 스코어 {final_us_score:.1f}점
+- 🦅 핵심 지표: TNX {metrics.get('tnx')}% | DXY {metrics.get('dxy')} | HY {metrics.get('hy_spread')}% | 순유동성 ${metrics.get('net_liquidity', 0):.1f}B
+- 🦅 ETF 수급 프록시: SPY {flow_dict.get('SPY', 0):.2f} | QQQ {flow_dict.get('QQQ', 0):.2f} | SOXX {flow_dict.get('SOXX', 0):.2f}"""
+
+    import calendar_manager
+    upcoming_events_str = calendar_manager.get_upcoming_events_string()
+
+    with st.expander("📰 글감 ① — 오늘의 미장 핵심 뉴스 1편 (복사해서 AI에 붙여넣기)", expanded=False):
+        thread_prompt_us_news = f"""너는 'ORION 트레이더'라는 쓰레드(Threads) SNS 계정을 운영하는 개인 투자자야. 주로 미국 주식(미장)을 다뤄.
+아래 오늘의 주요 뉴스들을 분석해서, 쓰레드에 올릴 글을 써줘.
+
+[작성 규칙 — 반드시 지켜줘]
+- 말투: 정중한 존댓말이 아니라, 분석적이면서도 시크하고 단호한 '반말'(~다, ~지, ~한다)로 작성해줘.
+- 첫 포스트 (Hook) 어그로 극대화: 첫 1~2줄에 스크롤을 멈추게 만드는 강렬한 질문이나 모순을 던져줘.
+- 전체 구성: 메인 포스트 1개 + 댓글 4~5개로 나눠서 작성
+- 문장은 짧게 (한 문장 최대 2줄), 줄바꿈 자주 사용 (모바일 가독성)
+- 마지막 댓글은 반드시 "내일/이번 주 미국장 주목할 것:" 으로 마무리
+
+[오늘의 미국 주요 뉴스]
+{top_us_news_text}
+
+[오늘 미장 ORION 시스템 판정]
+{us_thread_indicators}
+
+위 뉴스 중 가장 임팩트가 큰 1~2개 뉴스를 골라서 주식 시장에 미칠 영향을 풀어써줘."""
+        st.code(thread_prompt_us_news, language="markdown")
+
+    with st.expander("📊 글감 ② — 오늘 미장 장세와 지표 분석 1편 (복사해서 AI에 붙여넣기)", expanded=False):
+        thread_prompt_us_market = f"""너는 'ORION 트레이더'라는 쓰레드(Threads) SNS 계정을 운영하는 개인 투자자야. 미국 주식 시장을 주로 분석해.
+오늘 미국 시장 지표와 수급 데이터를 분석해서 쓰레드에 올릴 글을 써줘.
+
+[작성 규칙 — 반드시 지켜줘]
+- 말투: 시크하고 단호한 '반말'(~다, ~지, ~한다).
+- 첫 포스트 (Hook) 어그로 극대화. (예: "엔비디아 3% 빠졌는데 나스닥 수급 프록시는 오히려 강세? 뭐지?")
+- 전체 구성: 메인 포스트 1개 + 댓글 4~5개로 나눠서 작성
+- 데이터를 그냥 나열하지 말고, "이게 왜 중요한지" 의미 해석에 집중 (예: 하이일드 스프레드, 순유동성)
+- 마지막 댓글은 "ORION 시스템 미장 신호:" 로 마무리
+
+[오늘 ORION 시스템 미장 지표 데이터]
+{us_thread_indicators}
+
+위 데이터를 바탕으로, 오늘 미국 시장에서 가장 주목해야 할 지표 1~2개를 골라 의미를 풀어써줘."""
+        st.code(thread_prompt_us_market, language="markdown")
+
+    with st.expander("📅 글감 ③ — 이번 주 실적/이벤트 주목 포인트 1편 (복사해서 AI에 붙여넣기)", expanded=False):
+        thread_prompt_us_events = f"""너는 'ORION 트레이더'라는 쓰레드(Threads) SNS 계정을 운영하는 개인 투자자야.
+이번 주/다음 주 예정된 글로벌 매크로 이벤트와 실적 발표를 기반으로 쓰레드 글을 써줘.
+
+[작성 규칙 — 반드시 지켜줘]
+- 말투: 시크하고 단호한 '반말'(~다, ~지, ~한다).
+- 첫 포스트 (Hook) 어그로 극대화.
+- 전체 구성: 메인 포스트 1개 + 댓글 4~5개로 나눠서 작성
+- 이벤트가 미장(S&P 500, 나스닥)에 미칠 영향 위주로 서술
+- 마지막 댓글은 "이번 주 미장 관전 포인트:" 로 마무리
+
+[이번 주~다음 주 주요 일정]
+{upcoming_events_str}
+
+[현재 미국 시장 맥락]
+{us_thread_indicators}"""
+        st.code(thread_prompt_us_events, language="markdown")
 
 with tab_radar:
     st.subheader("🔍 타점 선택 (Entry Point Selection) - 포트폴리오 종목 타점")

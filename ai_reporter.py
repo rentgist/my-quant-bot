@@ -2,7 +2,7 @@ import os
 import json
 from datetime import datetime
 
-def generate_smart_control_room_report(market_context: str) -> str:
+def generate_smart_control_room_report(market_context: str, target_market: str = "KR") -> str:
     """
     Reads data/news_archive.json and asks Gemini to synthesize a market report.
     market_context is a string containing the current algorithm's verdict and scores.
