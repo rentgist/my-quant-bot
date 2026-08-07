@@ -1986,13 +1986,65 @@ def generate_us_economic_commentary(summary_dict, phase):
 """
     
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
-        return response.text
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        
+        models_to_try = [
+            "gemini-2.5-pro",
+            "gemini-3.5-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-1.5-flash-lite",
+            "gemini-pro-latest",
+            "gemini-flash-latest"
+        ]
+        
+        response = None
+        successful_model = None
+        errors = []
+        
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                successful_model = model_name
+                break
+            except Exception as e:
+                errors.append(f"- 신규 SDK {model_name} 실패: {str(e)}")
+                continue
+                
+        if response:
+            return f"*(적용된 AI 모델: {successful_model})*\n\n" + response.text.strip()
+        else:
+            try:
+                import google.generativeai as genai_old
+                genai_old.configure(api_key=api_key)
+                for old_model in models_to_try:
+                    try:
+                        model = genai_old.GenerativeModel(old_model)
+                        safety_settings = [
+                            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                        ]
+                        old_response = model.generate_content(prompt, safety_settings=safety_settings)
+                        if old_response and old_response.text:
+                            return f"*(구형 SDK 모델: {old_model} 우회 성공)*\n\n" + old_response.text.strip()
+                    except Exception as e_old:
+                        errors.append(f"- 구형 SDK {old_model} 실패: {str(e_old)}")
+            except Exception as e_import:
+                errors.append(f"- 구형 SDK 로드 실패: {str(e_import)}")
+                
+            error_details = "\n".join(errors)
+            return (
+                f"⚠️ **AI 모델 호출에 모두 실패했습니다.**\n\n"
+                f"**[상세 에러 로그]**\n{error_details}"
+            )
+            
     except Exception as e:
-        return f"⚠️ 브리핑 생성 중 오류가 발생했습니다: {e}"
+        return f"⚠️ 브리핑 생성 중 예외 발생: {e}"
 
 
 
