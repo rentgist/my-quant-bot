@@ -1984,7 +1984,9 @@ def evaluate_us_entry_permission(macro_data, us_phase, metrics, flow_score=0, fl
         pair = pd.concat([rsp['Close'], spy['Close']], axis=1).dropna()
         if len(pair) > 5:
             ratio = pair.iloc[:, 0] / pair.iloc[:, 1]
-            checks['breadth_not_worsening'] = bool(ratio.iloc[-1] >= ratio.iloc[-6])
+            breadth_5d_change = float(ratio.iloc[-1] / ratio.iloc[-6] - 1.0)
+            metrics['rsp_spy_5d_change'] = breadth_5d_change
+            checks['breadth_not_worsening'] = bool(breadth_5d_change >= 0)
 
     checks['credit_not_deteriorating'] = False
     if all(df is not None and not df.empty and 'Close' in df and len(df) > 5 for df in (hyg, ief)):
@@ -1994,14 +1996,14 @@ def evaluate_us_entry_permission(macro_data, us_phase, metrics, flow_score=0, fl
             checks['credit_not_deteriorating'] = bool(ratio.iloc[-1] >= ratio.iloc[-6] * 0.99)
 
     labels = {
-        'data_quality': '필수 데이터 정상',
-        'regime_clear': 'ORION 위험선호 환경',
-        'flow_fresh': '수급 프록시 최신',
-        'flow_not_strong_outflow': '강한 가격·거래량 유출 없음',
-        'spy_two_day_ma20_hold': 'SPY 20일선 2거래일 안착',
-        'falling_knife_released': '낙하 칼날 해제',
-        'breadth_not_worsening': 'RSP/SPY 시장 폭 악화 없음',
-        'credit_not_deteriorating': 'HYG/IEF 신용 악화 없음',
+        'data_quality': '필수 데이터가 정상 확인되지 않음',
+        'regime_clear': 'ORION 기초 환경이 CLEAR에 미달',
+        'flow_fresh': '가격·거래량 프록시 최신성 미확인',
+        'flow_not_strong_outflow': '강한 하락 압력이 남아 있음',
+        'spy_two_day_ma20_hold': 'SPY가 20일선 위에서 2거래일 안착하지 못함',
+        'falling_knife_released': '낙하 칼날 안전장치가 해제되지 않음',
+        'breadth_not_worsening': 'RSP/SPY 최근 5일 시장 폭이 개선되지 않음',
+        'credit_not_deteriorating': 'HYG/IEF 신용 흐름이 안정되지 않음',
     }
     reasons = [labels[key] for key, passed in checks.items() if not passed]
     if not checks['data_quality']:
@@ -2089,12 +2091,6 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
         color = "#424242"
         
     actions = []
-    
-    if triggers:
-        for t in list(dict.fromkeys(triggers)):
-            actions.append(f"💡 {t}")
-    else:
-        actions.append("💡 주요 매크로 지표들이 중립적인 수준을 유지하고 있습니다.")
         
     # Add top news action point if we can fetch it
     try:
@@ -2128,6 +2124,30 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
     return head, color, actions
 
 
+def get_us_trigger_display(trigger):
+    """미국 진단 근거의 의미와 아이콘을 일치시킨다."""
+    import re
+
+    text = str(trigger)
+    if "데이터 품질 차단" in text:
+        return "⚫", text
+    if "4주 변화" in text or "상대수익률" in text:
+        match = re.search(r"([+-]\d+(?:\.\d+)?)", text)
+        if match:
+            value = float(match.group(1))
+            return ("🟢" if value >= 0 else "🔴"), text
+    red_words = (
+        "부담", "급등", "경색", "악화", "위험", "과열", "백워데이션",
+        "청산", "축소", "하회", "스트레스",
+    )
+    green_words = ("확대", "완화", "회복", "안정", "상회", "양호")
+    if any(word in text for word in red_words):
+        return "🔴", text
+    if any(word in text for word in green_words):
+        return "🟢", text
+    return "🟡", text
+
+
 
 
 def generate_us_economic_commentary(summary_dict, phase):
@@ -2148,7 +2168,7 @@ def generate_us_economic_commentary(summary_dict, phase):
     - 연준 순유동성: {summary_dict.get('Net_Liquidity', 'N/A')}
     - VIX 공포지수: {summary_dict.get('VIX', 'N/A')}
 
-[미국 주요 ETF 당일 수급 프록시 강도 (양수=매수우위, 음수=매도우위)]
+[미국 주요 ETF 당일 가격·거래량 프록시 (양수=상승 압력, 음수=하락 압력)]
     - SPY (S&P 500): {summary_dict.get('SPY_Flow', 'N/A')}
     - QQQ (나스닥): {summary_dict.get('QQQ_Flow', 'N/A')}
     - SOXX (반도체): {summary_dict.get('SOXX_Flow', 'N/A')}
@@ -2225,7 +2245,7 @@ def generate_us_economic_commentary(summary_dict, phase):
 
 def calculate_us_flow_signal(spy_flow, qqq_flow, soxx_flow):
     """
-    US ETF 자금흐름 점수를 기반으로 수급 강도를 판정합니다.
+    US ETF 종가와 거래량 기반 프록시로 단기 가격 압력을 판정합니다.
     """
     score = 0
     details = []
@@ -2234,16 +2254,16 @@ def calculate_us_flow_signal(spy_flow, qqq_flow, soxx_flow):
     
     if avg_flow > 0.5:
         score += 40
-        status = "🟢 강한 수급 유입 (Strong Inflow)"
+        status = "🟢 강한 상승 압력 (Strong Upward Pressure)"
     elif avg_flow > 0:
         score += 20
-        status = "🟡 약한 매수 우위 (Mild Inflow)"
+        status = "🟡 약한 상승 압력 (Weak Upward Pressure)"
     elif avg_flow > -0.5:
         score -= 20
-        status = "🟠 약한 매도 우위 (Mild Outflow)"
+        status = "🟠 약한 하락 압력 (Weak Downward Pressure)"
     else:
         score -= 40
-        status = "🔴 강한 수급 유출 (Strong Outflow)"
+        status = "🔴 강한 하락 압력 (Strong Downward Pressure)"
 
     # 반도체는 경고 문구만 띄우지 않고 제한된 범위에서 실제 점수에도 반영한다.
     if soxx_flow > 1.0:
@@ -2252,14 +2272,14 @@ def calculate_us_flow_signal(spy_flow, qqq_flow, soxx_flow):
         score -= 10
     score = max(-40, min(40, score))
         
-    details.append(("🏢", f"SPY 수급 프록시: {spy_flow:+.2f}"))
-    details.append(("🚀", f"QQQ 수급 프록시: {qqq_flow:+.2f}"))
-    details.append(("💻", f"SOXX 수급 프록시: {soxx_flow:+.2f}"))
+    details.append(("🏢", f"SPY 가격·거래량 프록시: {spy_flow:+.2f}"))
+    details.append(("🚀", f"QQQ 가격·거래량 프록시: {qqq_flow:+.2f}"))
+    details.append(("💻", f"SOXX 가격·거래량 프록시: {soxx_flow:+.2f}"))
     
     if soxx_flow < -1.0:
-        details.append(("⚠️", "반도체(SOXX) 섹터의 강한 자금 유출 경고"))
+        details.append(("⚠️", "반도체(SOXX) 섹터에 강한 하락 압력"))
     elif soxx_flow > 1.0:
-        details.append(("🔥", "반도체(SOXX) 섹터의 강한 자금 유입 포착"))
+        details.append(("🔥", "반도체(SOXX) 섹터에 강한 상승 압력"))
         
     return score, status, details
 

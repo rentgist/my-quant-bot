@@ -57,6 +57,8 @@ try:
         calculate_kr_risk_radar,
         calculate_us_orion_score,
         evaluate_us_entry_permission,
+        calculate_us_flow_signal,
+        get_us_trigger_display,
         get_us_strategic_advice,
         calculate_us_bottom_finder,
         calculate_kr_bottom_finder,
@@ -956,12 +958,130 @@ with tab_orion_us:
         try:
             total_score, us_phase, components, triggers, metrics = calculate_us_orion_score(macro_charts)
             adv_head, adv_color, adv_actions = get_us_strategic_advice(us_phase, total_score, triggers)
-            
+
+            # ── 첫 화면에서 환경 → 시장 확인 → 주문 허가까지 한 번에 끝낸다. ──
+            decision_flow_snapshot = get_us_flow_snapshot()
+            decision_flow_dict = {
+                ticker: float(item.get("flow_proxy", 0.0))
+                for ticker, item in decision_flow_snapshot.get("records", {}).items()
+            }
+            decision_raw_flow_score, decision_flow_status, _ = calculate_us_flow_signal(
+                decision_flow_dict.get("SPY", 0.0),
+                decision_flow_dict.get("QQQ", 0.0),
+                decision_flow_dict.get("SOXX", 0.0),
+            )
+            decision_flow_stale = decision_flow_snapshot.get("is_stale", True)
+            decision_flow_score = 0 if decision_flow_stale else decision_raw_flow_score
+            decision_score = max(0.0, min(100.0, total_score + decision_flow_score * 0.2))
+            if us_phase == "DATA_ERROR":
+                decision_phase = "DATA_ERROR"
+            else:
+                decision_phase = "CLEAR" if decision_score >= 65 else "CAUTION" if decision_score >= 40 else "ALERT"
+            decision_entry, decision_checks, decision_reasons = evaluate_us_entry_permission(
+                macro_charts,
+                decision_phase,
+                metrics,
+                flow_score=decision_flow_score,
+                flow_is_stale=decision_flow_stale,
+            )
+
+            phase_view = {
+                "CLEAR": ("🟢", "시장 환경 통과", "신규 매수를 검토할 수 있는 환경입니다."),
+                "CAUTION": ("🟡", "시장 환경 주의", "상승 재료는 있지만 할인율·시장 폭 확인이 더 필요합니다."),
+                "ALERT": ("🔴", "시장 환경 위험", "위험자산 신규 노출을 늘리지 않는 구간입니다."),
+                "DATA_ERROR": ("⚫", "데이터 확인 필요", "필수 데이터가 정상화될 때까지 판단을 보류합니다."),
+            }
+            phase_icon, phase_label, phase_note = phase_view[us_phase]
+            if decision_flow_stale:
+                flow_icon, flow_label, flow_note = "⚫", "시장 확인 불가", "가격·거래량 자료가 오래되어 점수에서 제외했습니다."
+            elif decision_flow_score > 0:
+                flow_icon, flow_label, flow_note = "🟢", "매수 압력 우위", "SPY·QQQ의 당일 가격과 거래량이 시장 환경을 지지합니다."
+            elif decision_flow_score < 0:
+                flow_icon, flow_label, flow_note = "🔴", "매도 압력 우위", "당일 가격·거래량이 시장 환경을 지지하지 않습니다."
+            else:
+                flow_icon, flow_label, flow_note = "🟡", "시장 확인 중립", "당일 가격·거래량에서 뚜렷한 방향이 없습니다."
+
+            entry_view = {
+                "STARTER_GO": ("✅", "선발대 진입 허가", "예정금의 5~10%만 분할 진입합니다."),
+                "ENTRY_WAIT": ("⏳", "진입 대기", "확인되지 않은 조건이 남아 있습니다."),
+                "FALLING_KNIFE_VETO": ("⛔", "급락 중 진입 금지", "낙하 칼날 안전장치가 해제되지 않았습니다."),
+                "DATA_VETO": ("⛔", "데이터 오류로 진입 금지", "최신 데이터 확인 전에는 주문하지 않습니다."),
+            }
+            entry_icon, entry_label, entry_note = entry_view[decision_entry]
+
+            st.markdown("### 🚦 오늘의 미장 의사결정")
+            d_col1, d_col2, d_col3 = st.columns(3)
+            with d_col1:
+                st.markdown(f"#### Step 1　{phase_icon} {phase_label}")
+                st.metric("ORION 기초 환경", f"{total_score:.1f} / 100", us_phase)
+                st.caption(phase_note)
+            with d_col2:
+                st.markdown(f"#### Step 2　{flow_icon} {flow_label}")
+                flow_value = "반영 중지" if decision_flow_stale else f"{decision_flow_score*0.2:+.1f}점"
+                st.metric("환경점수 보정", flow_value)
+                st.caption(flow_note)
+            with d_col3:
+                st.markdown(f"#### Step 3　{entry_icon} {entry_label}")
+                st.metric("최종 주문 판정", decision_entry)
+                st.caption(entry_note)
+
+            if decision_entry == "STARTER_GO":
+                st.success("미국 투자 예정금의 5~10%만 허용합니다. 당일 갭 상승 3% 초과 종목은 추격하지 않습니다.")
+            else:
+                reason_text = " · ".join(decision_reasons) if decision_reasons else "추가 확인 필요"
+                st.warning(f"현재 주문을 기다리는 이유: {reason_text}")
+
+            st.markdown("#### 판단 근거 — 숫자가 무엇을 말하는가")
+            reason_col1, reason_col2 = st.columns(2)
+            liq_change = metrics.get("net_liquidity_4w_change")
+            liq_icon = "🟢" if liq_change is not None and liq_change >= 0 else "🔴" if liq_change is not None else "⚫"
+            liq_text = f"4주간 {liq_change:+.1f}B" if liq_change is not None else "자료 없음"
+            reason_col1.write(f"{liq_icon} **연준 유동성:** {liq_text} — {'확대되어 위험자산에 우호적입니다.' if liq_icon == '🟢' else '축소되어 위험자산에 부담입니다.' if liq_icon == '🔴' else '판단할 수 없습니다.'}")
+
+            tnx_val, tyx_val = metrics.get("tnx"), metrics.get("tyx")
+            rate_ok = tnx_val is not None and tyx_val is not None and tnx_val <= 4.65 and tyx_val < 5.20
+            rate_icon = "🟢" if rate_ok else "🔴" if tnx_val is not None and tyx_val is not None else "⚫"
+            reason_col1.write(f"{rate_icon} **장기금리:** 10년 {tnx_val:.2f}% / 30년 {tyx_val:.2f}% — {'허용 범위입니다.' if rate_ok else '기술주 할인율 부담 구간입니다.'}" if tnx_val is not None and tyx_val is not None else "⚫ **장기금리:** 자료 없음")
+
+            hy_val, hy_delta = metrics.get("hy_spread"), metrics.get("hy_spread_5d_change")
+            credit_ok = hy_val is not None and hy_val < 4.0 and (hy_delta is None or hy_delta <= 0.15)
+            credit_icon = "🟢" if credit_ok else "🔴" if hy_val is not None else "⚫"
+            reason_col2.write(f"{credit_icon} **신용시장:** HY {hy_val:.2f}% / 5일 {hy_delta:+.2f}%p — {'신용 경색 징후가 없습니다.' if credit_ok else '스프레드 확대를 경계합니다.'}" if hy_val is not None and hy_delta is not None else "⚫ **신용시장:** 자료 없음")
+
+            breadth_gap = metrics.get("rsp_spy_20d_gap")
+            breadth_5d = metrics.get("rsp_spy_5d_change")
+            breadth_long_ok = breadth_gap is not None and breadth_gap >= 0
+            breadth_short_ok = breadth_5d is not None and breadth_5d >= 0
+            breadth_icon = "🟢" if breadth_long_ok and breadth_short_ok else "🟡" if breadth_long_ok else "🔴" if breadth_gap is not None else "⚫"
+            if breadth_gap is not None and breadth_5d is not None:
+                breadth_note = "구조와 단기 방향이 모두 개선 중입니다." if breadth_icon == "🟢" else "20일 구조는 양호하지만 최근 5일은 약해졌습니다." if breadth_icon == "🟡" else "대형주 편중이 이어지고 있습니다."
+                reason_col2.write(f"{breadth_icon} **시장 폭:** 20일 {breadth_gap*100:+.1f}%p / 최근 5일 {breadth_5d*100:+.1f}% — {breadth_note}")
+            else:
+                reason_col2.write("⚫ **시장 폭:** 자료 없음")
+
+            with st.expander("세부 점수와 전체 체크리스트 보기", expanded=False):
+                score_table = pd.DataFrame({
+                    "영역": ["유동성·금리", "신용·변동성", "시장 폭·추세", "보조 위험선호"],
+                    "점수": [components['macro'], components['credit'], components['strength'], components['aux']],
+                    "배점": [35, 35, 25, 5],
+                })
+                score_table["판독"] = score_table.apply(lambda row: f"{row['점수']:.1f} / {row['배점']}", axis=1)
+                st.dataframe(score_table[["영역", "판독"]], hide_index=True, use_container_width=True)
+                for key, passed in decision_checks.items():
+                    st.write(f"{'✅' if passed else '❌'} {key}")
+                for trigger in dict.fromkeys(triggers):
+                    detail_icon, detail_text = get_us_trigger_display(trigger)
+                    st.write(f"{detail_icon} {detail_text}")
+
+            st.caption("※ 가격·거래량 점수는 실제 ETF 설정·환매나 기관 순매수가 아닌 단기 시장 확인용 프록시입니다.")
+            st.divider()
+            st.markdown("### 🔎 상세 지표·뉴스·AI 해설")
+
             # 1. AI Strategic Advice Box
             st.markdown(
                 f"<div style='background:{adv_color}22; border-left: 8px solid {adv_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
                 f"<h2 style='margin-top:0; color:{adv_color};'>{adv_head}</h2>"
-                f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>종합 스코어 {total_score:.1f}점 · {us_phase}</p>"
+                f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>가격·거래량 확인 전 기초 환경 점수 {total_score:.1f}점 · {us_phase}</p>"
                 f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in adv_actions]) + "</ul>"
                 f"</div>", unsafe_allow_html=True
             )
@@ -1036,8 +1156,8 @@ with tab_orion_us:
                 st.progress(components['macro'] / 35.0, text=f"매크로 유동성 (35점 만점): {components['macro']:.1f}점")
                 st.progress(components['credit'] / 35.0, text=f"신용 및 심리 (35점 만점): {components['credit']:.1f}점")
             with score_col2:
-                st.progress(components['strength'] / 20.0, text=f"시장 체력 (20점 만점): {components['strength']:.1f}점")
-                st.progress(components['aux'] / 10.0, text=f"비트코인 등 보조지표 (10점 만점): {components['aux']:.1f}점")
+                st.progress(components['strength'] / 25.0, text=f"시장 폭·추세 (25점 만점): {components['strength']:.1f}점")
+                st.progress(components['aux'] / 5.0, text=f"보조 위험선호 (5점 만점): {components['aux']:.1f}점")
                 
             st.info("⚠️ **비트코인(BTC) 해석 주의**: 비트코인은 글로벌 유동성의 선행 지표 성격을 띠지만, 가상자산 시장 고유의 이슈(거래소 리스크 등)로 인해 매크로 흐름과 무관하게 가격이 왜곡될 수 있으므로 절대적인 지표로 맹신하지 마십시오.")
 
@@ -1070,8 +1190,8 @@ with tab_orion_us:
         st.write("수집된 미장 뉴스가 없습니다.")
         
     st.markdown("---")
-    st.markdown("### 🦅 미국 주요 ETF 수급 동향 프록시 리포트")
-    st.caption("💡 팁: API 제약으로 인해 미국 ETF 거래량과 종가 등락을 결합해 추산한 **가상 수급 점수(Proxy Score)**입니다. 양수일수록 매수 우위, 음수일수록 매도 우위를 나타냅니다.")
+    st.markdown("### 📈 미국 주요 ETF 가격·거래량 프록시")
+    st.caption("ETF 종가 등락과 거래량을 결합한 단기 시장 확인용 점수입니다. 실제 설정·환매나 기관 순매수 데이터는 아니며, 양수는 상승 압력, 음수는 하락 압력을 뜻합니다.")
     us_flow = get_us_flow_report()
     us_flow_snapshot = get_us_flow_snapshot()
     
@@ -1101,7 +1221,7 @@ with tab_orion_us:
     
     def render_us_flow(col, label, ticker):
         score = flow_dict.get(ticker, 0.0)
-        state = "순매수 우위" if score > 0 else "순매도 우위" if score < 0 else "중립"
+        state = "상승 압력" if score > 0 else "하락 압력" if score < 0 else "중립"
         col.metric(f"{label}", f"스코어: {score:+.2f}", f"{state}", delta_color="normal" if score > 0 else "inverse" if score < 0 else "off")
 
     if flow_dict:
@@ -1114,12 +1234,12 @@ with tab_orion_us:
         else:
             st.caption(f"시장 기준일: {flow_date} · 실제 펀드플로우가 아닌 가격·거래량 프록시")
     else:
-        sf_col1.metric("🏢 SPY 수급", "데이터 없음", delta_color="off")
-        sf_col2.metric("🚀 QQQ 수급", "데이터 없음", delta_color="off")
-        sf_col3.metric("💻 SOXX 수급", "데이터 없음", delta_color="off")
+        sf_col1.metric("🏢 SPY 프록시", "데이터 없음", delta_color="off")
+        sf_col2.metric("🚀 QQQ 프록시", "데이터 없음", delta_color="off")
+        sf_col3.metric("💻 SOXX 프록시", "데이터 없음", delta_color="off")
         
     if us_flow:
-        with st.expander("📊 수급 프록시 원본 데이터 확인"):
+        with st.expander("📊 가격·거래량 프록시 원본 데이터 확인"):
             st.markdown(us_flow)
     else:
         st.write("미장 수급 동향 리포트를 불러올 수 없습니다.")
@@ -1132,7 +1252,7 @@ with tab_orion_us:
         'DXY': f"{metrics.get('dxy', 0):.2f}" if metrics.get('dxy') else "N/A",
         'HY_Spread': f"{metrics.get('hy_spread', 0):.2f}%" if metrics.get('hy_spread') else "N/A",
         'Net_Liquidity': f"${metrics.get('net_liquidity', 0):.1f}B" if metrics.get('net_liquidity') else "N/A",
-        'VIX': "N/A",  # VIX is fetched below if needed, else N/A
+        'VIX': f"{metrics.get('vix', 0):.2f}" if metrics.get('vix') else "N/A",
         'SPY_Flow': flow_dict.get("SPY", "N/A"),
         'QQQ_Flow': flow_dict.get("QQQ", "N/A"),
         'SOXX_Flow': flow_dict.get("SOXX", "N/A")
@@ -1184,38 +1304,28 @@ with tab_orion_us:
     st.divider()
 
     # ── [NEW] ORION 미국 매크로 & 자금흐름 통합 국면 판별기 ──
-    st.markdown("### 🚦 ORION 통합 국면 판별기 (US Regime Classifier)")
+    st.markdown("### 🧮 ORION 상세 산식 재검산")
+    st.caption("위의 3단계 결론을 구성하는 내부 점수입니다. 실제 주문 판정은 상단의 '오늘의 미장 의사결정'을 따릅니다.")
     
     uc_macro, uc_flow = st.columns(2)
     
     with uc_macro:
         st.markdown("#### Step 1: 📊 매크로 위험도 (Risk Gauge)")
-        us_macro_status = "🟢 양호" if components['macro'] + components['credit'] > 45 else "🔴 위험"
+        us_macro_status = "🟢 우호적" if components['macro'] + components['credit'] > 45 else "🟡 확인 필요" if components['macro'] + components['credit'] >= 30 else "🔴 부담"
         st.markdown(f"**상태:** {us_macro_status}")
         for trig in triggers:
-            st.write(f"⚠️ {trig}")
+            detail_icon, detail_text = get_us_trigger_display(trig)
+            st.write(f"{detail_icon} {detail_text}")
             
     with uc_flow:
-        st.markdown("#### Step 2: 💸 자금흐름 강도 (Flow Signal)")
+        st.markdown("#### Step 2: 📈 가격·거래량 확인")
         
-        # 수동 입력 폼
-        uf_col1, uf_col2 = st.columns(2)
-        with uf_col1:
-            spy_manual = st.number_input("① SPY 수급 프록시 (수동보정)", value=flow_dict.get("SPY", 0.0), step=0.1)
-        with uf_col2:
-            qqq_manual = st.number_input("② QQQ 수급 프록시 (수동보정)", value=flow_dict.get("QQQ", 0.0), step=0.1)
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-        usave_col1, usave_col2 = st.columns([2, 1])
-        with usave_col1:
-            st.info("💡 장 마감 후 최종 확정 시에만 체크하세요.")
-            save_us_regime = st.checkbox("✅ 오늘 장마감 결과로 확정 (미장)", value=False)
-        with usave_col2:
-            with st.expander("⚙️ 강제 오버라이드"):
-                uwdo = st.number_input("미장 경고일수 (-1: 자동)", min_value=-1, max_value=5, value=-1, step=1)
-
-        from signals import calculate_us_flow_signal
-        raw_us_flow_score, us_flow_status, us_flow_details = calculate_us_flow_signal(spy_manual, qqq_manual, flow_dict.get("SOXX", 0.0))
+        st.caption("실제 자금 유출입이 아니라 당일 등락률×거래량 비율로 계산한 자동 프록시입니다. 임의 수동 보정은 사용하지 않습니다.")
+        raw_us_flow_score, us_flow_status, us_flow_details = calculate_us_flow_signal(
+            flow_dict.get("SPY", 0.0),
+            flow_dict.get("QQQ", 0.0),
+            flow_dict.get("SOXX", 0.0),
+        )
         us_flow_score = 0 if us_flow_snapshot.get("is_stale", True) else raw_us_flow_score
         if us_flow_snapshot.get("is_stale", True):
             us_flow_status = "⚫ 노후 데이터 — 점수 반영 중지"
@@ -1225,16 +1335,14 @@ with tab_orion_us:
             st.write(f"{icon} {msg}")
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("#### Step 3: 🎯 통합 판정 (Action Plan)")
-    
-    # 통합 점수에 flow score 반영 (가중치 조절)
+    st.markdown("#### Step 3: 🎯 환경 점수 재계산과 주문 허가")
+
+    # 미국 환경 점수에 가격·거래량 프록시를 제한적으로 반영한다.
     final_us_score = max(0.0, min(100.0, total_score + (us_flow_score * 0.2)))
     if us_phase == "DATA_ERROR":
         final_us_phase = "DATA_ERROR"
     else:
         final_us_phase = "CLEAR" if final_us_score >= 65 else "CAUTION" if final_us_score >= 40 else "ALERT"
-    final_adv_head, final_adv_color, final_adv_actions = get_us_strategic_advice(final_us_phase, final_us_score, triggers)
-
     entry_state, entry_checks, entry_reasons = evaluate_us_entry_permission(
         macro_charts,
         final_us_phase,
@@ -1242,12 +1350,25 @@ with tab_orion_us:
         flow_score=us_flow_score,
         flow_is_stale=us_flow_snapshot.get("is_stale", True),
     )
+
+    if entry_state == "STARTER_GO":
+        decision_head = "🟢 선발대 주문 허가 (STARTER_GO)"
+        decision_color = "#2E7D32"
+        decision_actions = ["환경점수와 안전장치가 모두 통과했습니다. 예정금의 5~10%만 분할 진입합니다."]
+    elif entry_state == "ENTRY_WAIT":
+        decision_head = f"🟡 환경점수 {final_us_phase} · 주문은 대기 (ENTRY_WAIT)"
+        decision_color = "#F9A825"
+        decision_actions = ["환경점수는 검토 가능 구간이지만 주문 조건이 모두 확인되지 않았습니다. 신규 자금은 투입하지 않습니다."]
+    else:
+        decision_head = f"🔴 신규 주문 거부 ({entry_state})"
+        decision_color = "#C62828"
+        decision_actions = ["데이터 또는 낙하 칼날 안전장치가 해제되기 전까지 신규 주문을 금지합니다."]
     
     st.markdown(
-        f"<div style='background:{final_adv_color}22; border-left: 8px solid {final_adv_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
-        f"<h2 style='margin-top:0; color:{final_adv_color};'>{final_adv_head} (Flow 반영)</h2>"
-        f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>최종 스코어 {final_us_score:.1f}점 · {final_us_phase}</p>"
-        f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in final_adv_actions]) + "</ul>"
+        f"<div style='background:{decision_color}22; border-left: 8px solid {decision_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
+        f"<h2 style='margin-top:0; color:{decision_color};'>{decision_head}</h2>"
+        f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>환경 스코어 {final_us_score:.1f}점 · {final_us_phase}</p>"
+        f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in decision_actions]) + "</ul>"
         f"</div>", unsafe_allow_html=True
     )
 
@@ -1262,36 +1383,35 @@ with tab_orion_us:
         for key, passed in entry_checks.items():
             st.write(f"{'✅' if passed else '❌'} {key}")
     
-    # ── [NEW] Phase별 비중 가이드 박스 ──
-    from regime_playbook import REGIME_POLICIES
-    if final_us_phase == "CLEAR":
-        us_playbook = REGIME_POLICIES.get("UPTREND", {})
-        playbook_strategy = "위험 자산 비중을 확대하고 AI/Tech 주도주의 추세를 추종하십시오."
-    elif final_us_phase == "CAUTION":
-        us_playbook = REGIME_POLICIES.get("SIDEWAYS", {})
-        playbook_strategy = "신규 매수를 자제하고 리밸런싱을 통해 현금을 확보하십시오."
+    st.markdown("##### 💼 이번 판정의 계좌 행동")
+    if entry_state == "STARTER_GO":
+        st.success("**신규 투자 허용:** 미국 투자 예정금의 5~10% · 나머지 현금 90~95% 대기")
+        st.markdown("**보유 종목:** 기존 핵심 포지션 유지. 종목별 갭 상승 3% 초과 시 그날은 주문하지 않습니다.")
+        st.markdown("**다음 단계:** SPY 20일선 유지와 RSP/SPY 개선이 이어질 때만 추가 분할을 검토합니다.")
+    elif entry_state == "ENTRY_WAIT":
+        st.warning("**신규 투자 허용:** 0% · 현재 예정금은 전액 대기")
+        st.markdown("**보유 종목:** 시장 신호만으로 매도하지 않고 기존 비중을 유지합니다.")
+        st.markdown(f"**재확인 조건:** {', '.join(entry_reasons)}")
     else:
-        us_playbook = REGIME_POLICIES.get("CRASH", {})
-        playbook_strategy = "하방 리스크가 큽니다. 단기채(SGOV 등) 및 현금 비중을 대폭 늘리십시오."
-
-    
-    st.markdown("##### 💼 권장 포트폴리오 비중 (US)")
-    band = us_playbook.get('equity_band', (0.0, 0.0))
-    st.info(f"**주식 권장 비중:** {int(band[0]*100)}% ~ {int(band[1]*100)}% | **현금/헷지 비중:** {100 - int(band[1]*100)}% ~ {100 - int(band[0]*100)}%")
-    st.markdown(f"**핵심 전략:** {playbook_strategy}")
-    st.markdown(f"**행동 지침:** {us_playbook.get('core_strategy', '')}")
-    st.markdown(f"**피해야 할 행동:** {us_playbook.get('avoid', '')}")
+        st.error("**신규 투자 허용:** 0% · 안전장치 해제 또는 데이터 정상화 전까지 주문 금지")
+        st.markdown("**보유 종목:** 패닉성 전량매도는 하지 않으며, 별도 보유종목 원칙으로 판단합니다.")
     
     st.divider()
     st.markdown("### 📋 웹 버전 Gemini Pro 복사용 프롬프트 (미장 전용)")
     us_news_lines = [f"- [{n.get('sentiment', '중립')}/중요도:{n.get('importance', 0)}] {n.get('title_ko', '')} (대응: {n.get('action_point', '')})" for n in us_news[:40]] if us_news else ["수집된 뉴스가 없습니다."]
+    us_flow_prompt_text = (
+        f"시장 기준일 {us_flow_snapshot.get('market_as_of', 'N/A')} | "
+        f"SPY {flow_dict.get('SPY', 0):+.2f} | QQQ {flow_dict.get('QQQ', 0):+.2f} | "
+        f"RSP {flow_dict.get('RSP', 0):+.2f} | SOXX {flow_dict.get('SOXX', 0):+.2f}\n"
+        "※ 실제 펀드플로우가 아닌 당일 가격·거래량 프록시"
+    )
     us_web_prompt = f"""너는 월스트리트 최고 수준의 매크로 애널리스트다.
-[ORION 미장 판정] {final_adv_head} | 최종점수 {final_us_score:.1f} | 국면 {final_us_phase}
+[ORION 미장 판정] 주문상태 {entry_state} | 환경점수 {final_us_score:.1f} | 환경국면 {final_us_phase} | 미충족 조건 {', '.join(entry_reasons) if entry_reasons else '없음'}
 [핵심 지표] TNX {metrics.get('tnx')}% | DXY {metrics.get('dxy')} | HY스프레드 {metrics.get('hy_spread')}% | 순유동성 ${metrics.get('net_liquidity', 0):.1f}B
 [최근 미국 뉴스]
 {chr(10).join(us_news_lines)}
-[미국 ETF 자금흐름 프록시]
-{us_flow if us_flow else "데이터 없음"}
+[미국 ETF 가격·거래량 확인 프록시]
+{us_flow_prompt_text}
 ---
 위 데이터를 바탕으로 미국 시장 국면 진단, 섹터별 전망, 이번 주 구체적 행동 지침(진입/관망/축소)을 작성하라."""
     st.code(us_web_prompt, language="markdown")

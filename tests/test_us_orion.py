@@ -6,6 +6,7 @@ import pandas as pd
 from signals import (
     calculate_us_orion_score,
     evaluate_us_entry_permission,
+    get_us_trigger_display,
     run_us_orion_walkforward_validation,
 )
 
@@ -94,7 +95,7 @@ class UsOrionTests(unittest.TestCase):
             macro, "CLEAR", metrics, flow_score=20, flow_is_stale=True
         )
         self.assertEqual(state, "ENTRY_WAIT")
-        self.assertIn("수급 프록시 최신", reasons)
+        self.assertIn("가격·거래량 프록시 최신성 미확인", reasons)
 
     def test_walkforward_uses_next_day_returns_and_costs(self):
         result = run_us_orion_walkforward_validation(
@@ -105,6 +106,11 @@ class UsOrionTests(unittest.TestCase):
         self.assertEqual(result["transaction_cost_bps"], 5.0)
         self.assertGreaterEqual(result["exposure"], 0.0)
         self.assertLessEqual(result["exposure"], 1.0)
+
+    def test_diagnostic_icons_match_direction(self):
+        self.assertEqual(get_us_trigger_display("연준 유동성 프록시 4주 변화 -25.0B")[0], "🔴")
+        self.assertEqual(get_us_trigger_display("RSP-SPY 20일 상대수익률 +1.2%p")[0], "🟢")
+        self.assertEqual(get_us_trigger_display("30년물 5.21%로 장기 할인율 부담")[0], "🔴")
 
 
 if __name__ == "__main__":
