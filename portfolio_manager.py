@@ -1,14 +1,18 @@
 ﻿import os
 import re
+from pathlib import Path
+
+
+PORTFOLIO_LOG_DIR = Path(__file__).resolve().parent / "data" / "portfolio-logs"
 
 def parse_portfolio_log():
-    # Find the latest portfolio_log file
-    log_files = [f for f in os.listdir('.') if f.startswith('portfolio_log_') and f.endswith('.md')]
+    """Read the newest dated portfolio snapshot from the managed log folder."""
+    log_files = sorted(PORTFOLIO_LOG_DIR.glob("portfolio_log_*.md"))
     if not log_files:
         return {'kr': [], 'us': []}
-    latest_log = sorted(log_files)[-1]
+    latest_log = log_files[-1]
     
-    with open(latest_log, 'r', encoding='utf-8') as f:
+    with latest_log.open('r', encoding='utf-8') as f:
         content = f.read()
         
     holdings = {'kr': [], 'us': []}
