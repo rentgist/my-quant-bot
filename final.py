@@ -1453,10 +1453,10 @@ with tab_orion_us:
             top_us_news_lines.append(f"- [{s}] {t}\n  → 대응: {a}")
     top_us_news_text = "\n".join(top_us_news_lines) if top_us_news_lines else "주요 뉴스 없음"
 
-    us_thread_indicators = f"""- ORION 미장 신호: {final_adv_head}
-- 🦅 미국 국면: {final_us_phase} | 스코어 {final_us_score:.1f}점
+    us_thread_indicators = f"""- ORION 미장 주문 신호: {decision_head} ({entry_state})
+- 🦅 미국 환경 국면: {final_us_phase} | 스코어 {final_us_score:.1f}점
 - 🦅 핵심 지표: TNX {metrics.get('tnx')}% | DXY {metrics.get('dxy')} | HY {metrics.get('hy_spread')}% | 순유동성 ${metrics.get('net_liquidity', 0):.1f}B
-- 🦅 ETF 수급 프록시: SPY {flow_dict.get('SPY', 0):.2f} | QQQ {flow_dict.get('QQQ', 0):.2f} | SOXX {flow_dict.get('SOXX', 0):.2f}"""
+- 🦅 ETF 가격·거래량 프록시: SPY {flow_dict.get('SPY', 0):.2f} | QQQ {flow_dict.get('QQQ', 0):.2f} | SOXX {flow_dict.get('SOXX', 0):.2f}"""
 
     import calendar_manager
     upcoming_events_str = calendar_manager.get_upcoming_events_string()
