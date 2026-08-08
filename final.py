@@ -983,7 +983,18 @@ with tab_orion_us:
                 metrics,
                 flow_score=decision_flow_score,
                 flow_is_stale=decision_flow_stale,
+                environment_score=decision_score,
             )
+            us_entry_check_labels = {
+                "data_quality": "필수 데이터 정상",
+                "environment_floor_60": "환경점수 60점 이상",
+                "environment_full_65": "10% 선발대 기준 65점 이상",
+                "trend_confirmed": "SPY 20일선 상회",
+                "breadth_confirmed": "RSP/SPY 최근 5일 개선",
+                "price_volume_confirmed": "가격·거래량 상승 확인",
+                "falling_knife_released": "낙하 칼날 안전장치 해제",
+                "credit_stress_absent": "명확한 신용 스트레스 없음",
+            }
 
             phase_view = {
                 "CLEAR": ("🟢", "시장 환경 통과", "신규 매수를 검토할 수 있는 환경입니다."),
@@ -995,16 +1006,18 @@ with tab_orion_us:
             if decision_flow_stale:
                 flow_icon, flow_label, flow_note = "⚫", "시장 확인 불가", "가격·거래량 자료가 오래되어 점수에서 제외했습니다."
             elif decision_flow_score > 0:
-                flow_icon, flow_label, flow_note = "🟢", "매수 압력 우위", "SPY·QQQ의 당일 가격과 거래량이 시장 환경을 지지합니다."
+                flow_icon, flow_label, flow_note = "🟢", "가격·거래량 상승 확인", "SPY·QQQ가 상승했고 거래량이 방향을 뒷받침했습니다. 실제 순매수 자료는 아닙니다."
             elif decision_flow_score < 0:
-                flow_icon, flow_label, flow_note = "🔴", "매도 압력 우위", "당일 가격·거래량이 시장 환경을 지지하지 않습니다."
+                flow_icon, flow_label, flow_note = "🔴", "가격·거래량 하락 확인", "당일 가격과 거래량이 시장 환경을 지지하지 않습니다. 실제 순매도 자료는 아닙니다."
             else:
                 flow_icon, flow_label, flow_note = "🟡", "시장 확인 중립", "당일 가격·거래량에서 뚜렷한 방향이 없습니다."
 
             entry_view = {
-                "STARTER_GO": ("✅", "선발대 진입 허가", "예정금의 5~10%만 분할 진입합니다."),
+                "STARTER_GO_10": ("✅", "10% 선발대 허가", "환경점수 65점 이상과 세 확인조건을 모두 통과했습니다."),
+                "STARTER_GO_5": ("🟢", "5% 선발대 허가", "핵심 안전장치와 확인조건 3개 중 2개 이상을 통과했습니다."),
                 "ENTRY_WAIT": ("⏳", "진입 대기", "확인되지 않은 조건이 남아 있습니다."),
                 "FALLING_KNIFE_VETO": ("⛔", "급락 중 진입 금지", "낙하 칼날 안전장치가 해제되지 않았습니다."),
+                "CREDIT_STRESS_VETO": ("⛔", "신용 스트레스로 진입 금지", "하이일드 시장이 명확한 위험 신호를 보입니다."),
                 "DATA_VETO": ("⛔", "데이터 오류로 진입 금지", "최신 데이터 확인 전에는 주문하지 않습니다."),
             }
             entry_icon, entry_label, entry_note = entry_view[decision_entry]
@@ -1025,8 +1038,11 @@ with tab_orion_us:
                 st.metric("최종 주문 판정", decision_entry)
                 st.caption(entry_note)
 
-            if decision_entry == "STARTER_GO":
-                st.success("미국 투자 예정금의 5~10%만 허용합니다. 당일 갭 상승 3% 초과 종목은 추격하지 않습니다.")
+            if decision_entry == "STARTER_GO_10":
+                st.success("미국 투자 예정금의 10% 선발대를 허용합니다. 당일 갭 상승 3% 초과 종목은 추격하지 않습니다.")
+            elif decision_entry == "STARTER_GO_5":
+                limit_text = " · ".join(decision_reasons) if decision_reasons else "소프트 확인조건 일부 미충족"
+                st.info(f"미국 투자 예정금의 5% 선발대만 허용합니다. 제한 이유: {limit_text}")
             else:
                 reason_text = " · ".join(decision_reasons) if decision_reasons else "추가 확인 필요"
                 st.warning(f"현재 주문을 기다리는 이유: {reason_text}")
@@ -1041,7 +1057,7 @@ with tab_orion_us:
             tnx_val, tyx_val = metrics.get("tnx"), metrics.get("tyx")
             rate_ok = tnx_val is not None and tyx_val is not None and tnx_val <= 4.65 and tyx_val < 5.20
             rate_icon = "🟢" if rate_ok else "🔴" if tnx_val is not None and tyx_val is not None else "⚫"
-            reason_col1.write(f"{rate_icon} **장기금리:** 10년 {tnx_val:.2f}% / 30년 {tyx_val:.2f}% — {'허용 범위입니다.' if rate_ok else '기술주 할인율 부담 구간입니다.'}" if tnx_val is not None and tyx_val is not None else "⚫ **장기금리:** 자료 없음")
+            reason_col1.write(f"{rate_icon} **장기금리:** 10년 {tnx_val:.2f}% / 30년 {tyx_val:.2f}% — {'허용 범위입니다.' if rate_ok else '높은 금리가 기술주 적정가치에 부담을 주는 구간입니다.'}" if tnx_val is not None and tyx_val is not None else "⚫ **장기금리:** 자료 없음")
 
             hy_val, hy_delta = metrics.get("hy_spread"), metrics.get("hy_spread_5d_change")
             credit_ok = hy_val is not None and hy_val < 4.0 and (hy_delta is None or hy_delta <= 0.15)
@@ -1068,7 +1084,7 @@ with tab_orion_us:
                 score_table["판독"] = score_table.apply(lambda row: f"{row['점수']:.1f} / {row['배점']}", axis=1)
                 st.dataframe(score_table[["영역", "판독"]], hide_index=True, use_container_width=True)
                 for key, passed in decision_checks.items():
-                    st.write(f"{'✅' if passed else '❌'} {key}")
+                    st.write(f"{'✅' if passed else '❌'} {us_entry_check_labels.get(key, key)}")
                 for trigger in dict.fromkeys(triggers):
                     detail_icon, detail_text = get_us_trigger_display(trigger)
                     st.write(f"{detail_icon} {detail_text}")
@@ -1191,7 +1207,7 @@ with tab_orion_us:
         
     st.markdown("---")
     st.markdown("### 📈 미국 주요 ETF 가격·거래량 프록시")
-    st.caption("ETF 종가 등락과 거래량을 결합한 단기 시장 확인용 점수입니다. 실제 설정·환매나 기관 순매수 데이터는 아니며, 양수는 상승 압력, 음수는 하락 압력을 뜻합니다.")
+    st.caption("ETF 종가 등락과 거래량을 결합한 단기 시장 확인용 점수입니다. 실제 설정·환매나 기관 순매수 데이터는 아니며, 양수는 상승 방향 확인, 음수는 하락 방향 확인을 뜻합니다.")
     us_flow = get_us_flow_report()
     us_flow_snapshot = get_us_flow_snapshot()
     
@@ -1221,7 +1237,7 @@ with tab_orion_us:
     
     def render_us_flow(col, label, ticker):
         score = flow_dict.get(ticker, 0.0)
-        state = "상승 압력" if score > 0 else "하락 압력" if score < 0 else "중립"
+        state = "상승 확인" if score > 0 else "하락 확인" if score < 0 else "중립"
         col.metric(f"{label}", f"스코어: {score:+.2f}", f"{state}", delta_color="normal" if score > 0 else "inverse" if score < 0 else "off")
 
     if flow_dict:
@@ -1310,7 +1326,7 @@ with tab_orion_us:
     uc_macro, uc_flow = st.columns(2)
     
     with uc_macro:
-        st.markdown("#### Step 1: 📊 매크로 위험도 (Risk Gauge)")
+        st.markdown("#### Step 1: 📊 매크로 환경 우호도 (Macro Environment)")
         us_macro_status = "🟢 우호적" if components['macro'] + components['credit'] > 45 else "🟡 확인 필요" if components['macro'] + components['credit'] >= 30 else "🔴 부담"
         st.markdown(f"**상태:** {us_macro_status}")
         for trig in triggers:
@@ -1349,12 +1365,17 @@ with tab_orion_us:
         metrics,
         flow_score=us_flow_score,
         flow_is_stale=us_flow_snapshot.get("is_stale", True),
+        environment_score=final_us_score,
     )
 
-    if entry_state == "STARTER_GO":
-        decision_head = "🟢 선발대 주문 허가 (STARTER_GO)"
+    if entry_state == "STARTER_GO_10":
+        decision_head = "🟢 10% 선발대 주문 허가"
         decision_color = "#2E7D32"
-        decision_actions = ["환경점수와 안전장치가 모두 통과했습니다. 예정금의 5~10%만 분할 진입합니다."]
+        decision_actions = ["환경점수 65점 이상과 세 소프트 확인조건을 모두 통과했습니다. 예정금의 10%만 분할 진입합니다."]
+    elif entry_state == "STARTER_GO_5":
+        decision_head = "🟢 5% 선발대 주문 허가"
+        decision_color = "#558B2F"
+        decision_actions = ["핵심 안전장치는 통과했지만 일부 확인조건이 남았습니다. 예정금의 5%만 분할 진입합니다."]
     elif entry_state == "ENTRY_WAIT":
         decision_head = f"🟡 환경점수 {final_us_phase} · 주문은 대기 (ENTRY_WAIT)"
         decision_color = "#F9A825"
@@ -1362,7 +1383,7 @@ with tab_orion_us:
     else:
         decision_head = f"🔴 신규 주문 거부 ({entry_state})"
         decision_color = "#C62828"
-        decision_actions = ["데이터 또는 낙하 칼날 안전장치가 해제되기 전까지 신규 주문을 금지합니다."]
+        decision_actions = ["데이터·낙하 칼날·신용 안전장치가 정상화되기 전까지 신규 주문을 금지합니다."]
     
     st.markdown(
         f"<div style='background:{decision_color}22; border-left: 8px solid {decision_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
@@ -1372,22 +1393,25 @@ with tab_orion_us:
         f"</div>", unsafe_allow_html=True
     )
 
-    if entry_state == "STARTER_GO":
-        st.success("✅ 미장 선발대 진입 허가: 미국 투자 예정금의 5~10%만 분할 진입. 갭 상승 3% 초과 종목은 추격 금지.")
-    elif entry_state in ("DATA_VETO", "FALLING_KNIFE_VETO"):
+    if entry_state == "STARTER_GO_10":
+        st.success("✅ 10% 선발대 허가: 미국 투자 예정금의 10%만 분할 진입. 갭 상승 3% 초과 종목은 추격 금지.")
+    elif entry_state == "STARTER_GO_5":
+        st.info(f"🟢 5% 선발대 허가: 제한 이유 — {', '.join(entry_reasons) if entry_reasons else '일부 확인조건 미충족'}")
+    elif entry_state in ("DATA_VETO", "FALLING_KNIFE_VETO", "CREDIT_STRESS_VETO"):
         st.error(f"⛔ 신규 진입 거부: {', '.join(entry_reasons)}")
     else:
         st.warning(f"⏳ 신규 진입 대기: {', '.join(entry_reasons)}")
 
     with st.expander("미장 진입 허가 체크리스트"):
         for key, passed in entry_checks.items():
-            st.write(f"{'✅' if passed else '❌'} {key}")
+            st.write(f"{'✅' if passed else '❌'} {us_entry_check_labels.get(key, key)}")
     
     st.markdown("##### 💼 이번 판정의 계좌 행동")
-    if entry_state == "STARTER_GO":
-        st.success("**신규 투자 허용:** 미국 투자 예정금의 5~10% · 나머지 현금 90~95% 대기")
+    if entry_state in ("STARTER_GO_5", "STARTER_GO_10"):
+        allowed_pct = 10 if entry_state == "STARTER_GO_10" else 5
+        st.success(f"**신규 투자 허용:** 미국 투자 예정금의 {allowed_pct}% · 나머지 현금 {100-allowed_pct}% 대기")
         st.markdown("**보유 종목:** 기존 핵심 포지션 유지. 종목별 갭 상승 3% 초과 시 그날은 주문하지 않습니다.")
-        st.markdown("**다음 단계:** SPY 20일선 유지와 RSP/SPY 개선이 이어질 때만 추가 분할을 검토합니다.")
+        st.markdown("**다음 단계:** 환경점수와 세 확인조건을 다시 점검한 뒤에만 추가 분할을 검토합니다.")
     elif entry_state == "ENTRY_WAIT":
         st.warning("**신규 투자 허용:** 0% · 현재 예정금은 전액 대기")
         st.markdown("**보유 종목:** 시장 신호만으로 매도하지 않고 기존 비중을 유지합니다.")

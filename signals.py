@@ -11,6 +11,9 @@ DIV_RSI_MARGIN     = 2.0    # RSI 다이버전스 인정 마진
 KNIFE_1D_RET       = -2.5   # 떨어지는 칼날: 당일 급락 임계값 (%)
 KNIFE_MA5_GAP      = -4.0   # 떨어지는 칼날: 5일선 이탈 임계값 (%)
 KNIFE_PENALTY      = 20     # 칼날 감지 시 차감 점수
+US_ENTRY_FLOOR     = 60.0   # 미국 선발대 검토 최소 환경점수
+US_FULL_ENTRY      = 65.0   # 10% 선발대에 필요한 환경점수
+US_CREDIT_RATIO_VETO = -0.02  # HYG/IEF 5일 -2% 이하는 명확한 신용 스트레스
 
 # ═════════════════════════════════════════
 # 공용 헬퍼
@@ -1828,7 +1831,7 @@ def calculate_us_orion_score(macro_data, as_of=None):
         metrics['tnx'] = tnx
         if tnx > 4.65:
             yield_score -= 20.0
-            triggers.append(f"10년물 {tnx:.2f}%로 밸류에이션 부담")
+            triggers.append(f"10년물 {tnx:.2f}%로 기술주 적정가치 부담")
     if tnx_5d is not None and tnx_5d > 0.025:
         yield_score -= 15.0
         triggers.append("10년물 금리 5일 급등")
@@ -1836,7 +1839,7 @@ def calculate_us_orion_score(macro_data, as_of=None):
         metrics['tyx'] = tyx
         if tyx >= 5.20:
             yield_score -= 20.0
-            triggers.append(f"30년물 {tyx:.2f}%로 장기 할인율 부담")
+            triggers.append(f"30년물 {tyx:.2f}%로 장기 적정가치 부담")
     if tnx is not None and irx is not None:
         spread = tnx - irx
         metrics['yield_spread'] = spread
@@ -1948,21 +1951,32 @@ def calculate_us_orion_score(macro_data, as_of=None):
     return total_score, us_phase, score_components, triggers, metrics
 
 
-def evaluate_us_entry_permission(macro_data, us_phase, metrics, flow_score=0, flow_is_stale=True):
-    """시장환경 점수와 주문 허가를 분리한 미국 주식 선발대 게이트."""
-    checks, reasons = {}, []
-
+def evaluate_us_entry_permission(
+    macro_data,
+    us_phase,
+    metrics,
+    flow_score=0,
+    flow_is_stale=True,
+    environment_score=None,
+):
+    """중복 하드게이트를 제거한 미국 주식 단계형 선발대 허가."""
+    checks = {}
     quality = metrics.get('data_quality', {})
     checks['data_quality'] = bool(quality.get('valid', False))
-    checks['regime_clear'] = us_phase == 'CLEAR'
-    checks['flow_fresh'] = not flow_is_stale
-    checks['flow_not_strong_outflow'] = flow_score > -20
+
+    if environment_score is None:
+        environment_score = US_FULL_ENTRY if us_phase == 'CLEAR' else 0.0
+    environment_score = float(environment_score)
+    checks['environment_floor_60'] = environment_score >= US_ENTRY_FLOOR
+    checks['environment_full_65'] = environment_score >= US_FULL_ENTRY
 
     spy = macro_data.get('spy_10y', pd.DataFrame())
     rsp = macro_data.get('rsp_10y', pd.DataFrame())
     hyg = macro_data.get('hyg_10y', pd.DataFrame())
     ief = macro_data.get('ief_10y', pd.DataFrame())
+
     falling_knife = True
+    checks['trend_confirmed'] = False
     if spy is not None and not spy.empty and 'Close' in spy and len(spy) >= 22:
         close = pd.to_numeric(spy['Close'], errors='coerce').dropna()
         ma5 = close.rolling(5).mean()
@@ -1970,62 +1984,101 @@ def evaluate_us_entry_permission(macro_data, us_phase, metrics, flow_score=0, fl
         ret_1d = float(close.pct_change().iloc[-1] * 100)
         ma5_gap = float((close.iloc[-1] / ma5.iloc[-1] - 1) * 100)
         falling_knife = ret_1d <= KNIFE_1D_RET or ma5_gap <= KNIFE_MA5_GAP
-        checks['spy_two_day_ma20_hold'] = bool(
-            close.iloc[-1] >= ma20.iloc[-1] and close.iloc[-2] >= ma20.iloc[-2]
-        )
+        checks['trend_confirmed'] = bool(close.iloc[-1] >= ma20.iloc[-1])
         metrics['spy_1d_return'] = ret_1d
         metrics['spy_ma5_gap'] = ma5_gap
-    else:
-        checks['spy_two_day_ma20_hold'] = False
     checks['falling_knife_released'] = not falling_knife
 
-    checks['breadth_not_worsening'] = False
+    checks['breadth_confirmed'] = False
     if all(df is not None and not df.empty and 'Close' in df and len(df) > 5 for df in (rsp, spy)):
         pair = pd.concat([rsp['Close'], spy['Close']], axis=1).dropna()
         if len(pair) > 5:
             ratio = pair.iloc[:, 0] / pair.iloc[:, 1]
             breadth_5d_change = float(ratio.iloc[-1] / ratio.iloc[-6] - 1.0)
             metrics['rsp_spy_5d_change'] = breadth_5d_change
-            checks['breadth_not_worsening'] = bool(breadth_5d_change >= 0)
+            checks['breadth_confirmed'] = bool(breadth_5d_change >= 0)
 
-    checks['credit_not_deteriorating'] = False
+    # 실제 펀드플로우가 아닌 가격·거래량 확인은 소프트 조건으로만 사용한다.
+    checks['price_volume_confirmed'] = bool(not flow_is_stale and flow_score > 0)
+
+    credit_ratio_change = None
     if all(df is not None and not df.empty and 'Close' in df and len(df) > 5 for df in (hyg, ief)):
         pair = pd.concat([hyg['Close'], ief['Close']], axis=1).dropna()
         if len(pair) > 5:
             ratio = pair.iloc[:, 0] / pair.iloc[:, 1]
-            checks['credit_not_deteriorating'] = bool(ratio.iloc[-1] >= ratio.iloc[-6] * 0.99)
+            credit_ratio_change = float(ratio.iloc[-1] / ratio.iloc[-6] - 1.0)
+            metrics['hyg_ief_5d_change'] = credit_ratio_change
+    hy_spread = metrics.get('hy_spread')
+    hy_change = metrics.get('hy_spread_5d_change')
+    credit_stress = (
+        credit_ratio_change is None
+        or credit_ratio_change <= US_CREDIT_RATIO_VETO
+        or (hy_spread is not None and hy_spread > 5.5)
+        or (hy_change is not None and hy_change >= 0.50)
+    )
+    checks['credit_stress_absent'] = not credit_stress
+
+    soft_keys = ('trend_confirmed', 'breadth_confirmed', 'price_volume_confirmed')
+    soft_count = sum(bool(checks[key]) for key in soft_keys)
+    metrics['entry_confirmation_count'] = soft_count
 
     labels = {
         'data_quality': '필수 데이터가 정상 확인되지 않음',
-        'regime_clear': 'ORION 기초 환경이 CLEAR에 미달',
-        'flow_fresh': '가격·거래량 프록시 최신성 미확인',
-        'flow_not_strong_outflow': '강한 하락 압력이 남아 있음',
-        'spy_two_day_ma20_hold': 'SPY가 20일선 위에서 2거래일 안착하지 못함',
+        'environment_floor_60': f'환경점수 {US_ENTRY_FLOOR:.0f}점 미만',
+        'environment_full_65': f'10% 선발대 기준 {US_FULL_ENTRY:.0f}점 미만',
+        'trend_confirmed': 'SPY가 20일선 위에 있지 않음',
+        'breadth_confirmed': 'RSP/SPY 최근 5일 시장 폭이 개선되지 않음',
+        'price_volume_confirmed': '가격·거래량 상승 확인이 부족함',
         'falling_knife_released': '낙하 칼날 안전장치가 해제되지 않음',
-        'breadth_not_worsening': 'RSP/SPY 최근 5일 시장 폭이 개선되지 않음',
-        'credit_not_deteriorating': 'HYG/IEF 신용 흐름이 안정되지 않음',
+        'credit_stress_absent': '명확한 신용 스트레스가 감지됨',
     }
     reasons = [labels[key] for key, passed in checks.items() if not passed]
+
     if not checks['data_quality']:
-        state = 'DATA_VETO'
+        state, allocation = 'DATA_VETO', 0
     elif not checks['falling_knife_released']:
-        state = 'FALLING_KNIFE_VETO'
-    elif all(checks.values()):
-        state = 'STARTER_GO'
+        state, allocation = 'FALLING_KNIFE_VETO', 0
+    elif not checks['credit_stress_absent']:
+        state, allocation = 'CREDIT_STRESS_VETO', 0
+    elif not checks['environment_floor_60'] or soft_count < 2:
+        state, allocation = 'ENTRY_WAIT', 0
+    elif checks['environment_full_65'] and soft_count == 3:
+        state, allocation = 'STARTER_GO_10', 10
     else:
-        state = 'ENTRY_WAIT'
+        state, allocation = 'STARTER_GO_5', 5
+
+    metrics['entry_allocation_pct'] = allocation
+    metrics['entry_state'] = state
     return state, checks, reasons
 
 
-def run_us_orion_walkforward_validation(macro_data, transaction_cost_bps=5.0, min_history=60):
-    """종가 신호를 다음 거래일 수익에 적용하는 미국 ORION 장기 전용 검증."""
+def run_us_orion_walkforward_validation(
+    macro_data,
+    transaction_cost_bps=5.0,
+    min_history=60,
+    horizons=(5, 20, 60),
+    cooldown_days=20,
+):
+    """WAIT에 기존 보유분을 청산하지 않는 진입 이벤트 기반 워크포워드 검증."""
     spy = macro_data.get('spy_10y', pd.DataFrame())
     if spy is None or spy.empty or 'Close' not in spy or len(spy) < min_history + 2:
         return {'usable': False, 'reason': 'insufficient_spy_history'}
 
     spy_close = pd.to_numeric(spy['Close'], errors='coerce').dropna()
     dates = spy_close.index
-    positions, scores, phases = [], [], []
+    signal_rows = []
+
+    def historical_flow_proxy(frame):
+        if frame is None or frame.empty or not {'Close', 'Volume'}.issubset(frame.columns) or len(frame) < 20:
+            return None
+        close = pd.to_numeric(frame['Close'], errors='coerce').dropna()
+        volume = pd.to_numeric(frame['Volume'], errors='coerce').reindex(close.index)
+        if len(close) < 20 or volume.dropna().empty:
+            return None
+        avg_volume = volume.rolling(20).mean().iloc[-1]
+        if pd.isna(avg_volume) or avg_volume <= 0:
+            return None
+        return float(close.pct_change().iloc[-1] * 100.0 * volume.iloc[-1] / avg_volume)
 
     for idx in range(min_history, len(dates) - 1):
         as_of = pd.Timestamp(dates[idx]).tz_localize(None)
@@ -2041,36 +2094,106 @@ def run_us_orion_walkforward_validation(macro_data, transaction_cost_bps=5.0, mi
                 col: pd.Timestamp(fred_slice[col].dropna().index[-1]).strftime('%Y-%m-%d')
                 for col in fred_slice.columns if not fred_slice[col].dropna().empty
             }
-        score, phase, _, _, _ = calculate_us_orion_score(sliced, as_of=as_of)
-        positions.append(1.0 if phase == 'CLEAR' else 0.0)
-        scores.append(score)
-        phases.append(phase)
 
-    if not positions:
+        base_score, base_phase, _, _, metrics = calculate_us_orion_score(sliced, as_of=as_of)
+        flow_values = [
+            historical_flow_proxy(sliced.get(key, pd.DataFrame()))
+            for key in ('spy_10y', 'qqq_10y', 'soxx_10y')
+        ]
+        flow_stale = any(value is None for value in flow_values)
+        flow_score = 0
+        if not flow_stale:
+            flow_score, _, _ = calculate_us_flow_signal(*flow_values)
+        final_score = max(0.0, min(100.0, base_score + flow_score * 0.2))
+        final_phase = (
+            'DATA_ERROR' if base_phase == 'DATA_ERROR'
+            else 'CLEAR' if final_score >= 65
+            else 'CAUTION' if final_score >= 40
+            else 'ALERT'
+        )
+        state, _, _ = evaluate_us_entry_permission(
+            sliced,
+            final_phase,
+            metrics,
+            flow_score=flow_score,
+            flow_is_stale=flow_stale,
+            environment_score=final_score,
+        )
+        signal_rows.append({
+            'date': as_of,
+            'state': state,
+            'score': final_score,
+            'eligible': bool(metrics.get('data_quality', {}).get('valid', False)),
+        })
+
+    if not signal_rows:
         return {'usable': False, 'reason': 'no_validation_observations'}
 
-    signal_dates = dates[min_history:len(dates) - 1]
-    next_returns = spy_close.pct_change().shift(-1).loc[signal_dates].fillna(0.0)
-    position_series = pd.Series(positions, index=signal_dates, dtype=float)
-    turnover = position_series.diff().abs().fillna(position_series.abs())
-    strategy_returns = position_series * next_returns - turnover * (transaction_cost_bps / 10000.0)
-    equity = (1.0 + strategy_returns).cumprod()
-    buy_hold = (1.0 + next_returns).cumprod()
-    drawdown = equity / equity.cummax() - 1.0
-    active = position_series > 0
+    signal_df = pd.DataFrame(signal_rows).set_index('date')
+    # 모든 비교군은 필수 데이터가 동시에 존재하는 공통 구간만 사용한다.
+    signal_df = signal_df[signal_df['eligible']].copy()
+    if signal_df.empty:
+        return {'usable': False, 'reason': 'no_common_valid_data_window'}
+    spy_open = pd.to_numeric(spy.get('Open', spy['Close']), errors='coerce').reindex(dates)
+    spy_low = pd.to_numeric(spy.get('Low', spy['Close']), errors='coerce').reindex(dates)
+    round_trip_cost = transaction_cost_bps * 2.0 / 10000.0
+
+    def spaced_indices(mask):
+        selected, last_idx = [], -10**9
+        for date in signal_df.index[mask]:
+            absolute_idx = dates.get_loc(date)
+            if absolute_idx - last_idx > cooldown_days:
+                selected.append(absolute_idx)
+                last_idx = absolute_idx
+        return selected
+
+    def event_summary(mask):
+        selected = spaced_indices(mask)
+        result = {'signal_days': int(mask.sum()), 'independent_events': int(len(selected))}
+        for horizon in horizons:
+            returns, adverse = [], []
+            for idx in selected:
+                if idx + horizon >= len(dates):
+                    continue
+                entry = float(spy_open.iloc[idx + 1])
+                exit_value = float(spy_close.iloc[idx + horizon])
+                path_low = spy_low.iloc[idx + 1:idx + horizon + 1]
+                if entry <= 0 or pd.isna(exit_value) or path_low.dropna().empty:
+                    continue
+                returns.append(exit_value / entry - 1.0 - round_trip_cost)
+                adverse.append(float(path_low.min() / entry - 1.0))
+            values = np.asarray(returns, dtype=float)
+            mae = np.asarray(adverse, dtype=float)
+            result[str(horizon)] = {
+                'events': int(len(values)),
+                'mean_return': float(values.mean()) if len(values) else None,
+                'median_return': float(np.median(values)) if len(values) else None,
+                'hit_rate': float((values > 0).mean()) if len(values) else None,
+                'p10_return': float(np.quantile(values, 0.10)) if len(values) else None,
+                'median_max_adverse': float(np.median(mae)) if len(mae) else None,
+            }
+        return result
+
+    five_mask = signal_df['state'] == 'STARTER_GO_5'
+    ten_mask = signal_df['state'] == 'STARTER_GO_10'
+    any_mask = five_mask | ten_mask
+    all_mask = pd.Series(True, index=signal_df.index)
 
     return {
         'usable': True,
-        'observations': int(len(strategy_returns)),
-        'exposure': float(position_series.mean()),
-        'total_return': float(equity.iloc[-1] - 1.0),
-        'buy_hold_return': float(buy_hold.iloc[-1] - 1.0),
-        'max_drawdown': float(drawdown.min()),
-        'turnover_events': int((turnover > 0).sum()),
-        'active_hit_rate': float((strategy_returns[active] > 0).mean()) if active.any() else None,
-        'last_score': float(scores[-1]),
-        'last_phase': phases[-1],
-        'transaction_cost_bps': float(transaction_cost_bps),
+        'method': 'entry_event_next_open_no_forced_exit_on_wait',
+        'observations': int(len(signal_df)),
+        'signal_rate': float(any_mask.mean()),
+        'signals': {
+            'all_days_baseline': event_summary(all_mask),
+            'starter_any': event_summary(any_mask),
+            'starter_5': event_summary(five_mask),
+            'starter_10': event_summary(ten_mask),
+        },
+        'last_score': float(signal_df['score'].iloc[-1]),
+        'last_state': str(signal_df['state'].iloc[-1]),
+        'transaction_cost_bps_each_way': float(transaction_cost_bps),
+        'cooldown_days': int(cooldown_days),
     }
 
 def get_us_strategic_advice(us_phase, total_score, triggers):
@@ -2081,7 +2204,7 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
         head = "🟢 위험선호 검토 가능 (CLEAR) - 진입 게이트 별도 확인"
         color = "#2e7d32"
     elif us_phase == "CAUTION":
-        head = "🟡 변동성 경계 (CAUTION) - 현금 확보 및 리밸런싱"
+        head = "🟡 환경 주의 (CAUTION) - 단계형 진입 게이트 확인"
         color = "#fbc02d"
     elif us_phase == "ALERT":
         head = "🔴 위험 회피 (ALERT) - 방어적 자산 배분 우선"
@@ -2113,9 +2236,9 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
         pass
         
     if us_phase == "CLEAR":
-        actions.append("🔎 **투자 전략**: 시장환경만 통과했습니다. 별도 진입 게이트가 STARTER_GO일 때만 예정금의 5~10%를 허용합니다.")
+        actions.append("🔎 **투자 전략**: 시장환경과 안전장치를 분리합니다. 단계형 진입 게이트가 허용한 예정금의 5% 또는 10%만 집행합니다.")
     elif us_phase == "CAUTION":
-        actions.append("⚖️ **투자 전략**: 신규 투자는 보수적으로 접근하고, 포트폴리오 내 과매수 종목의 수익 실현(Trimming)을 권장합니다.")
+        actions.append("⚖️ **투자 전략**: 신규 투자는 단계형 게이트가 허용한 범위만 집행하고, 기존 보유분은 시장 신호만으로 매도하지 않습니다.")
     elif us_phase == "ALERT":
         actions.append("🛡️ **투자 전략**: 하방 리스크가 큽니다. 단기채(SGOV 등) 및 현금 비중을 대폭 늘리십시오.")
     else:
@@ -2168,7 +2291,7 @@ def generate_us_economic_commentary(summary_dict, phase):
     - 연준 순유동성: {summary_dict.get('Net_Liquidity', 'N/A')}
     - VIX 공포지수: {summary_dict.get('VIX', 'N/A')}
 
-[미국 주요 ETF 당일 가격·거래량 프록시 (양수=상승 압력, 음수=하락 압력)]
+[미국 주요 ETF 당일 가격·거래량 프록시 (양수=상승 확인, 음수=하락 확인)]
     - SPY (S&P 500): {summary_dict.get('SPY_Flow', 'N/A')}
     - QQQ (나스닥): {summary_dict.get('QQQ_Flow', 'N/A')}
     - SOXX (반도체): {summary_dict.get('SOXX_Flow', 'N/A')}
@@ -2254,16 +2377,16 @@ def calculate_us_flow_signal(spy_flow, qqq_flow, soxx_flow):
     
     if avg_flow > 0.5:
         score += 40
-        status = "🟢 강한 상승 압력 (Strong Upward Pressure)"
+        status = "🟢 강한 가격·거래량 상승 확인"
     elif avg_flow > 0:
         score += 20
-        status = "🟡 약한 상승 압력 (Weak Upward Pressure)"
+        status = "🟡 약한 가격·거래량 상승 확인"
     elif avg_flow > -0.5:
         score -= 20
-        status = "🟠 약한 하락 압력 (Weak Downward Pressure)"
+        status = "🟠 약한 가격·거래량 하락 확인"
     else:
         score -= 40
-        status = "🔴 강한 하락 압력 (Strong Downward Pressure)"
+        status = "🔴 강한 가격·거래량 하락 확인"
 
     # 반도체는 경고 문구만 띄우지 않고 제한된 범위에서 실제 점수에도 반영한다.
     if soxx_flow > 1.0:
@@ -2277,9 +2400,9 @@ def calculate_us_flow_signal(spy_flow, qqq_flow, soxx_flow):
     details.append(("💻", f"SOXX 가격·거래량 프록시: {soxx_flow:+.2f}"))
     
     if soxx_flow < -1.0:
-        details.append(("⚠️", "반도체(SOXX) 섹터에 강한 하락 압력"))
+        details.append(("⚠️", "반도체(SOXX) 가격·거래량이 강한 하락을 확인"))
     elif soxx_flow > 1.0:
-        details.append(("🔥", "반도체(SOXX) 섹터에 강한 상승 압력"))
+        details.append(("🔥", "반도체(SOXX) 가격·거래량이 강한 상승을 확인"))
         
     return score, status, details
 

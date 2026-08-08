@@ -11,8 +11,13 @@ from signals import (
 )
 
 
-def _frame(values, index):
-    return pd.DataFrame({"Close": values}, index=index)
+def _frame(values, index, with_ohlcv=False):
+    frame = pd.DataFrame({"Close": values}, index=index)
+    if with_ohlcv:
+        frame["Open"] = frame["Close"] * 0.999
+        frame["Low"] = frame["Close"] * 0.995
+        frame["Volume"] = np.linspace(90_000_000, 110_000_000, len(index))
+    return frame
 
 
 def build_macro_data(falling_knife=False):
@@ -32,9 +37,10 @@ def build_macro_data(falling_knife=False):
         index=fred_index,
     )
     return {
-        "spy_10y": _frame(spy, market_index),
+        "spy_10y": _frame(spy, market_index, with_ohlcv=True),
+        "qqq_10y": _frame(spy * np.linspace(0.98, 1.04, 90), market_index, with_ohlcv=True),
         "rsp_10y": _frame(spy * np.linspace(0.99, 1.02, 90), market_index),
-        "soxx_10y": _frame(spy * np.linspace(0.95, 1.06, 90), market_index),
+        "soxx_10y": _frame(spy * np.linspace(0.95, 1.06, 90), market_index, with_ohlcv=True),
         "vix_10y": _frame(np.linspace(17, 15, 90), market_index),
         "vix3m_10y": _frame(np.linspace(19, 18, 90), market_index),
         "tnx_10y": _frame(np.linspace(4.4, 4.3, 90), market_index),
@@ -74,38 +80,58 @@ class UsOrionTests(unittest.TestCase):
         macro = build_macro_data(falling_knife=True)
         _, _, _, _, metrics = calculate_us_orion_score(macro)
         state, checks, _ = evaluate_us_entry_permission(
-            macro, "CLEAR", metrics, flow_score=20, flow_is_stale=False
+            macro, "CLEAR", metrics, flow_score=20, flow_is_stale=False, environment_score=70
         )
         self.assertEqual(state, "FALLING_KNIFE_VETO")
         self.assertFalse(checks["falling_knife_released"])
 
-    def test_fresh_confirmed_market_allows_only_starter_stage(self):
+    def test_fresh_confirmed_market_allows_ten_percent_starter(self):
         macro = build_macro_data()
         _, _, _, _, metrics = calculate_us_orion_score(macro)
         state, checks, reasons = evaluate_us_entry_permission(
-            macro, "CLEAR", metrics, flow_score=20, flow_is_stale=False
+            macro, "CLEAR", metrics, flow_score=20, flow_is_stale=False, environment_score=70
         )
-        self.assertEqual(state, "STARTER_GO", reasons)
+        self.assertEqual(state, "STARTER_GO_10", reasons)
         self.assertTrue(all(checks.values()))
 
-    def test_stale_flow_keeps_entry_waiting(self):
+    def test_one_missing_soft_confirmation_allows_five_percent(self):
         macro = build_macro_data()
         _, _, _, _, metrics = calculate_us_orion_score(macro)
         state, _, reasons = evaluate_us_entry_permission(
-            macro, "CLEAR", metrics, flow_score=20, flow_is_stale=True
+            macro, "CLEAR", metrics, flow_score=20, flow_is_stale=True, environment_score=70
+        )
+        self.assertEqual(state, "STARTER_GO_5")
+        self.assertIn("가격·거래량 상승 확인이 부족함", reasons)
+
+    def test_environment_below_sixty_waits(self):
+        macro = build_macro_data()
+        _, _, _, _, metrics = calculate_us_orion_score(macro)
+        state, _, reasons = evaluate_us_entry_permission(
+            macro, "CAUTION", metrics, flow_score=20, flow_is_stale=False, environment_score=59
         )
         self.assertEqual(state, "ENTRY_WAIT")
-        self.assertIn("가격·거래량 프록시 최신성 미확인", reasons)
+        self.assertIn("환경점수 60점 미만", reasons)
 
-    def test_walkforward_uses_next_day_returns_and_costs(self):
+    def test_clear_credit_stress_is_a_hard_veto(self):
+        macro = build_macro_data()
+        macro["fred_macro"].iloc[-1, macro["fred_macro"].columns.get_loc("BAMLH0A0HYM2")] = 6.0
+        _, _, _, _, metrics = calculate_us_orion_score(macro)
+        state, checks, _ = evaluate_us_entry_permission(
+            macro, "CLEAR", metrics, flow_score=20, flow_is_stale=False, environment_score=70
+        )
+        self.assertEqual(state, "CREDIT_STRESS_VETO")
+        self.assertFalse(checks["credit_stress_absent"])
+
+    def test_walkforward_uses_entry_events_without_forced_wait_exit(self):
         result = run_us_orion_walkforward_validation(
             build_macro_data(), transaction_cost_bps=5, min_history=60
         )
         self.assertTrue(result["usable"])
         self.assertGreater(result["observations"], 0)
-        self.assertEqual(result["transaction_cost_bps"], 5.0)
-        self.assertGreaterEqual(result["exposure"], 0.0)
-        self.assertLessEqual(result["exposure"], 1.0)
+        self.assertEqual(result["method"], "entry_event_next_open_no_forced_exit_on_wait")
+        self.assertEqual(result["transaction_cost_bps_each_way"], 5.0)
+        self.assertIn("starter_any", result["signals"])
+        self.assertNotIn("exposure", result)
 
     def test_diagnostic_icons_match_direction(self):
         self.assertEqual(get_us_trigger_display("연준 유동성 프록시 4주 변화 -25.0B")[0], "🔴")
