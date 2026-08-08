@@ -1719,202 +1719,374 @@ def get_tenbagger_signal(d):
 # ─────────────────────────────────────────
 # US Market ORION Signal Scoring
 # ─────────────────────────────────────────
-def calculate_us_orion_score(macro_data):
+def calculate_us_orion_score(macro_data, as_of=None):
     """
     Calculate the US ORION Signal score (0-100) based on macroeconomic and market data.
     macro_data: dict of dataframes from data_loader
     Returns: total_score, phase, score_components, triggers, metrics
     """
-    score_components = {
-        'macro': 0.0,
-        'credit': 0.0,
-        'strength': 0.0,
-        'aux': 0.0
-    }
-    
-    triggers = []
-    metrics = {}
-    
-    # helper for safe float
-    def get_last(df, col='Close'):
-        if df is not None and not df.empty and col in df:
-            return float(df[col].iloc[-1])
-        elif df is not None and not df.empty and 'Value' in df:
-            return float(df['Value'].iloc[-1])
-        return None
-        
-    def get_rsi(df, col='Close', period=14):
-        if df is not None and len(df) > period:
-            from indicators import get_rolling_rsi
-            rsi = get_rolling_rsi(df[col], period)
-            return float(rsi.iloc[-1])
-        return 50.0
+    score_components = {'macro': 0.0, 'credit': 0.0, 'strength': 0.0, 'aux': 0.0}
+    triggers, metrics = [], {}
 
-    # 1. Macro Liquidity (35%)
-    # Fed Liquidity = WALCL - WTREGEN - RRPONTSYD
+    def get_series(key, col='Close'):
+        df = macro_data.get(key)
+        if df is None or df.empty or col not in df:
+            return None
+        series = pd.to_numeric(df[col], errors='coerce').dropna()
+        return series if not series.empty else None
+
+    def get_last(key, col='Close'):
+        series = get_series(key, col)
+        return float(series.iloc[-1]) if series is not None else None
+
+    def period_return(key, periods):
+        series = get_series(key)
+        if series is None or len(series) <= periods:
+            return None
+        return float(series.iloc[-1] / series.iloc[-periods - 1] - 1.0)
+
+    def clamp(value):
+        return max(0.0, min(100.0, float(value)))
+
+    # ── 데이터 품질 게이트: 결측·노후 데이터는 중립점수로 숨기지 않는다. ──
+    missing, stale = [], []
+    now = pd.Timestamp(as_of if as_of is not None else pd.Timestamp.now()).tz_localize(None).normalize()
+    for key in (
+        'spy_10y', 'vix_10y', 'rsp_10y', 'soxx_10y',
+        'tnx_10y', 'tyx_10y', 'irx_10y', 'dxy_10y', 'usdjpy_10y',
+        'hyg_10y', 'ief_10y',
+    ):
+        series = get_series(key)
+        if series is None:
+            missing.append(key)
+            continue
+        last_date = pd.Timestamp(series.index[-1]).tz_localize(None).normalize()
+        if (now - last_date).days > 4:
+            stale.append(key)
+    fred = macro_data.get('fred_macro', pd.DataFrame())
+    for col in ('WALCL', 'WTREGEN', 'RRPONTSYD', 'BAMLH0A0HYM2'):
+        if fred.empty or col not in fred or pd.to_numeric(fred[col], errors='coerce').dropna().empty:
+            missing.append(f'fred:{col}')
+    fred_as_of = macro_data.get('fred_as_of', {})
+    for col, max_age in (('WALCL', 10), ('WTREGEN', 10), ('RRPONTSYD', 4), ('BAMLH0A0HYM2', 4)):
+        date = pd.to_datetime(fred_as_of.get(col), errors='coerce')
+        if pd.isna(date):
+            missing.append(f'fred_as_of:{col}')
+        elif (now - date.normalize()).days > max_age:
+            stale.append(f'fred:{col}')
+    data_quality = {'valid': not missing and not stale, 'missing': missing, 'stale': stale}
+    metrics['data_quality'] = data_quality
+
+    # 1. Macro & Liquidity (35%)
     fed_liquidity_score = 50.0
-    curr_liq = None
-    if 'fred_macro' in macro_data and not macro_data['fred_macro'].empty:
-        fred = macro_data['fred_macro']
-        if 'WALCL' in fred and 'WTREGEN' in fred and 'RRPONTSYD' in fred:
-            liquidity = fred['WALCL'] - fred['WTREGEN'] - fred['RRPONTSYD']
-            if len(liquidity) > 20:
-                curr_liq = liquidity.iloc[-1]
-                ma20_liq = liquidity.rolling(20).mean().iloc[-1]
-                metrics['net_liquidity'] = curr_liq / 1000 # in billions
-                if curr_liq > ma20_liq:
-                    fed_liquidity_score = 80.0
-                    triggers.append(f"연준 순유동성이 20일 이평선을 상회하며 유동성 환경 양호 (현재 {curr_liq/1000:.1f}B)")
-                else:
-                    fed_liquidity_score = 30.0
-                    triggers.append(f"연준 순유동성이 20일 이평선을 하회하며 유동성 축소 경계 (현재 {curr_liq/1000:.1f}B)")
+    if not fred.empty and all(col in fred for col in ('WALCL', 'WTREGEN', 'RRPONTSYD')):
+        # WALCL·WTREGEN = USD millions, RRPONTSYD = USD billions.
+        liquidity = (
+            pd.to_numeric(fred['WALCL'], errors='coerce')
+            - pd.to_numeric(fred['WTREGEN'], errors='coerce')
+            - pd.to_numeric(fred['RRPONTSYD'], errors='coerce') * 1000.0
+        ).dropna()
+        if len(liquidity) >= 29:
+            curr_liq = float(liquidity.iloc[-1])
+            change_4w_b = (curr_liq - float(liquidity.iloc[-29])) / 1000.0
+            metrics.update(net_liquidity=curr_liq / 1000.0, net_liquidity_4w_change=change_4w_b)
+            if change_4w_b > 50:
+                fed_liquidity_score = 80.0
+            elif change_4w_b > 0:
+                fed_liquidity_score = 65.0
+            elif change_4w_b > -50:
+                fed_liquidity_score = 45.0
+            else:
+                fed_liquidity_score = 20.0
+            triggers.append(f"연준 유동성 프록시 4주 변화 {change_4w_b:+.1f}B")
 
-    dxy = get_last(macro_data.get('dxy_10y'))
+    dxy = get_last('dxy_10y')
+    dxy_20d = period_return('dxy_10y', 20)
     dxy_score = 50.0
-    if dxy:
+    if dxy is not None:
         metrics['dxy'] = dxy
-        if dxy < 103:
-            dxy_score = 80.0
-            triggers.append(f"달러 약세(DXY {dxy:.1f})로 글로벌 위험자산 투자 심리 긍정적")
-        elif dxy > 105:
-            dxy_score = 20.0
-            triggers.append(f"강달러 현상(DXY {dxy:.1f})으로 인해 신흥국 및 기술주 유동성 압박 우려")
-        else:
-            dxy_score = 50.0
+    if dxy_20d is not None:
+        metrics['dxy_20d_return'] = dxy_20d
+        dxy_score = clamp(50.0 - dxy_20d * 1000.0)
+        if abs(dxy_20d) >= 0.02:
+            triggers.append(f"DXY 20일 변화 {dxy_20d*100:+.1f}%")
 
-    jpy = get_last(macro_data.get('usdjpy_10y'))
-    jpy_score = 50.0
-    if jpy:
-        jpy_ma20 = macro_data['usdjpy_10y']['Close'].rolling(20).mean().iloc[-1] if len(macro_data['usdjpy_10y']) >= 20 else jpy
-        if jpy < jpy_ma20 * 0.95:
-            jpy_score = 20.0
-            triggers.append(f"USD/JPY 급락({jpy:.1f})으로 엔캐리 트레이드 청산 리스크 발생 주의")
-        else:
-            jpy_score = 70.0
-            
-    tnx = get_last(macro_data.get('tnx_10y'))
-    irx = get_last(macro_data.get('irx_10y'))
-    yield_score = 50.0
-    if tnx:
+    jpy = get_last('usdjpy_10y')
+    jpy_5d = period_return('usdjpy_10y', 5)
+    jpy_20d = period_return('usdjpy_10y', 20)
+    jpy_score = 55.0
+    if jpy is not None:
+        metrics['usdjpy'] = jpy
+    if (jpy_5d is not None and jpy_5d <= -0.03) or (jpy_20d is not None and jpy_20d <= -0.05):
+        jpy_score = 20.0
+        triggers.append("USD/JPY 급락으로 엔캐리 청산 위험")
+
+    tnx, tyx, irx = get_last('tnx_10y'), get_last('tyx_10y'), get_last('irx_10y')
+    tnx_5d = period_return('tnx_10y', 5)
+    yield_score = 60.0
+    if tnx is not None:
         metrics['tnx'] = tnx
-    if tnx and irx:
+        if tnx > 4.65:
+            yield_score -= 20.0
+            triggers.append(f"10년물 {tnx:.2f}%로 밸류에이션 부담")
+    if tnx_5d is not None and tnx_5d > 0.025:
+        yield_score -= 15.0
+        triggers.append("10년물 금리 5일 급등")
+    if tyx is not None:
+        metrics['tyx'] = tyx
+        if tyx >= 5.20:
+            yield_score -= 20.0
+            triggers.append(f"30년물 {tyx:.2f}%로 장기 할인율 부담")
+    if tnx is not None and irx is not None:
         spread = tnx - irx
         metrics['yield_spread'] = spread
-        if spread > 0:
-            yield_score = 80.0
-        else:
-            yield_score = 30.0
-            triggers.append(f"장단기 금리차 역전(Spread {spread:.2f}%p)으로 거시경제 둔화 우려 지속")
-        
+        yield_score += 5.0 if spread > 0 else -10.0
+    yield_score = clamp(yield_score)
+
     macro_score = (fed_liquidity_score + dxy_score + jpy_score + yield_score) / 4.0
     score_components['macro'] = macro_score * 0.35
 
-    # 2. Credit & Psychology (35%)
-    hyg_spread_score = 50.0
-    hy_spread = None
-    if 'fred_macro' in macro_data and 'BAMLH0A0HYM2' in macro_data['fred_macro']:
-        hy_spread = macro_data['fred_macro']['BAMLH0A0HYM2'].iloc[-1]
-        metrics['hy_spread'] = hy_spread
-        if hy_spread < 4.0:
-            hyg_spread_score = 90.0
-            triggers.append(f"하이일드 스프레드({hy_spread:.2f}%) 안정권, 신용 리스크 낮음")
-        elif hy_spread > 5.5:
-            hyg_spread_score = 20.0
-            triggers.append(f"하이일드 스프레드({hy_spread:.2f}%) 급등, 기업 신용 경색 위험 신호 발생")
-        else:
-            hyg_spread_score = 50.0
+    # 2. Credit & Volatility (35%)
+    hy_score = 50.0
+    if not fred.empty and 'BAMLH0A0HYM2' in fred:
+        hy = pd.to_numeric(fred['BAMLH0A0HYM2'], errors='coerce').dropna()
+        if not hy.empty:
+            hy_spread = float(hy.iloc[-1])
+            hy_5d_change = float(hy.iloc[-1] - hy.iloc[-6]) if len(hy) > 5 else 0.0
+            metrics.update(hy_spread=hy_spread, hy_spread_5d_change=hy_5d_change)
+            if hy_spread < 4.0 and hy_5d_change <= 0.15:
+                hy_score = 80.0
+            elif hy_spread > 5.5 or hy_5d_change >= 0.50:
+                hy_score = 15.0
+                triggers.append(f"하이일드 스프레드 경색 ({hy_spread:.2f}%, 5일 {hy_5d_change:+.2f}%p)")
+            else:
+                hy_score = 50.0
 
-    vix = get_last(macro_data.get('vix_10y'))
-    vix_score = 50.0
-    if vix:
+    vix, vix3m = get_last('vix_10y'), None
+    vix3m_series = get_series('vix3m_10y')
+    if vix3m_series is not None:
+        vix3m_date = pd.Timestamp(vix3m_series.index[-1]).tz_localize(None).normalize()
+        if (now - vix3m_date).days <= 4:
+            vix3m = float(vix3m_series.iloc[-1])
+        else:
+            metrics['vix3m_optional_stale'] = True
+    vix_score = 55.0
+    if vix is not None:
         metrics['vix'] = vix
-        if vix < 15:
-            vix_score = 90.0
-        elif vix < 20:
-            vix_score = 70.0
-        elif vix < 30:
-            vix_score = 30.0
-            triggers.append(f"VIX 지수 상승({vix:.1f})으로 단기 변동성 확대 경계")
-        else:
+        if vix >= 30:
             vix_score = 10.0
-            triggers.append(f"VIX 지수 폭등({vix:.1f}), 시장 공포 심리 극대화")
-        
-    spy_rsi = get_rsi(macro_data.get('spy_10y'))
-    rsi_score = spy_rsi if spy_rsi else 50.0
+        elif vix >= 20:
+            vix_score = 35.0
+        elif vix < 12:
+            vix_score = 45.0  # 극단적 안도는 추격매수 보너스로 사용하지 않는다.
+        else:
+            vix_score = 70.0
+    if vix is not None and vix3m is not None:
+        metrics['vix_term_ratio'] = vix / vix3m
+        if vix >= vix3m:
+            vix_score -= 20.0
+            triggers.append("VIX 기간구조 백워데이션으로 단기 스트레스 확인")
+    vix_score = clamp(vix_score)
 
-    credit_score = (hyg_spread_score + vix_score + rsi_score) / 3.0
+    spy_series = get_series('spy_10y')
+    spy_rsi = 50.0
+    if spy_series is not None and len(spy_series) > 14:
+        spy_rsi = float(get_rolling_rsi(spy_series, 14).iloc[-1])
+    metrics['spy_rsi'] = spy_rsi
+    if spy_rsi < 30:
+        rsi_score = 30.0
+    elif spy_rsi < 45:
+        rsi_score = 50.0
+    elif spy_rsi <= 65:
+        rsi_score = 75.0
+    elif spy_rsi <= 75:
+        rsi_score = 55.0
+    else:
+        rsi_score = 30.0
+        triggers.append(f"SPY RSI {spy_rsi:.1f} 과열로 추격매수 경계")
+
+    credit_score = (hy_score + vix_score + rsi_score) / 3.0
     score_components['credit'] = credit_score * 0.35
 
-    # 3. Market Breadth (20%)
-    rsp_df = macro_data.get('rsp_10y')
-    spy_df = macro_data.get('spy_10y')
-    soxx_df = macro_data.get('soxx_10y')
-    
+    # 3. Market Breadth & Trend (25%)
     strength_score = 50.0
-    if rsp_df is not None and not rsp_df.empty and spy_df is not None and not spy_df.empty:
-        if len(rsp_df) > 20 and len(spy_df) > 20:
-            rsp_20d = (rsp_df['Close'].iloc[-1] / rsp_df['Close'].iloc[-21]) - 1
-            spy_20d = (spy_df['Close'].iloc[-1] / spy_df['Close'].iloc[-21]) - 1
-            if rsp_20d > spy_20d:
-                strength_score += 20.0
-                triggers.append(f"RSP가 SPY를 아웃퍼폼하며 시장 온기 확산 (RSP {rsp_20d*100:.1f}% > SPY {spy_20d*100:.1f}%)")
-            else:
-                strength_score -= 10.0
-                triggers.append(f"SPY가 RSP를 아웃퍼폼하며 대형주 집중 심화 (SPY {spy_20d*100:.1f}% > RSP {rsp_20d*100:.1f}%)")
-                
-    if soxx_df is not None and not soxx_df.empty and spy_df is not None and not spy_df.empty:
-        if len(soxx_df) > 20 and len(spy_df) > 20:
-            soxx_20d = (soxx_df['Close'].iloc[-1] / soxx_df['Close'].iloc[-21]) - 1
-            spy_20d = (spy_df['Close'].iloc[-1] / spy_df['Close'].iloc[-21]) - 1
-            if soxx_20d > spy_20d:
-                strength_score += 20.0
-                triggers.append(f"반도체(SOXX)가 시장을 아웃퍼폼하며 기술주 주도력 유지 (SOXX {soxx_20d*100:.1f}% > SPY {spy_20d*100:.1f}%)")
-            else:
-                strength_score -= 10.0
-                triggers.append(f"반도체(SOXX) 단기 약세로 주도력 둔화 경계 (SOXX {soxx_20d*100:.1f}% < SPY {spy_20d*100:.1f}%)")
-                
-    strength_score = max(0.0, min(100.0, strength_score))
-    score_components['strength'] = strength_score * 0.20
+    rsp_20d, spy_20d, soxx_20d = period_return('rsp_10y', 20), period_return('spy_10y', 20), period_return('soxx_10y', 20)
+    if rsp_20d is not None and spy_20d is not None:
+        metrics['rsp_spy_20d_gap'] = rsp_20d - spy_20d
+        strength_score += 15.0 if rsp_20d >= spy_20d else -10.0
+        triggers.append(f"RSP-SPY 20일 상대수익률 {(rsp_20d-spy_20d)*100:+.1f}%p")
+    if soxx_20d is not None and spy_20d is not None:
+        metrics['soxx_spy_20d_gap'] = soxx_20d - spy_20d
+        strength_score += 15.0 if soxx_20d >= spy_20d else -10.0
+        triggers.append(f"SOXX-SPY 20일 상대수익률 {(soxx_20d-spy_20d)*100:+.1f}%p")
+    if spy_series is not None and len(spy_series) >= 21:
+        spy_ma20 = float(spy_series.rolling(20).mean().iloc[-1])
+        metrics['spy_above_ma20'] = bool(spy_series.iloc[-1] >= spy_ma20)
+        strength_score += 15.0 if metrics['spy_above_ma20'] else -20.0
+    strength_score = clamp(strength_score)
+    score_components['strength'] = strength_score * 0.25
 
-    # 4. Aux (10%)
-    btc = get_last(macro_data.get('btc_10y'))
+    # 4. Auxiliary risk appetite (5%): BTC는 보조 확인에만 제한한다.
+    btc = get_last('btc_10y')
+    btc_series = get_series('btc_10y')
     aux_score = 50.0
-    if btc:
+    if btc is not None and btc_series is not None and len(btc_series) >= 50:
         metrics['btc'] = btc
-        btc_ma50 = macro_data['btc_10y']['Close'].rolling(50).mean().iloc[-1] if len(macro_data['btc_10y']) >= 50 else btc
-        if btc > btc_ma50:
-            aux_score = 80.0
-            triggers.append(f"비트코인 50일선 상회로 투기적 유동성 확장 국면")
-        else:
-            aux_score = 30.0
-            triggers.append(f"비트코인 50일선 하회로 투기 자금 축소 조짐")
-            
-    score_components['aux'] = aux_score * 0.10
+        aux_score = 70.0 if btc >= float(btc_series.rolling(50).mean().iloc[-1]) else 35.0
+    score_components['aux'] = aux_score * 0.05
 
     total_score = sum(score_components.values())
-    
-    if total_score >= 65:
+    if not data_quality['valid']:
+        us_phase = "DATA_ERROR"
+        triggers.append(f"데이터 품질 차단: 결측 {missing or '없음'}, 노후 {stale or '없음'}")
+    elif total_score >= 65:
         us_phase = "CLEAR"
     elif total_score >= 40:
         us_phase = "CAUTION"
     else:
         us_phase = "ALERT"
-        
     return total_score, us_phase, score_components, triggers, metrics
+
+
+def evaluate_us_entry_permission(macro_data, us_phase, metrics, flow_score=0, flow_is_stale=True):
+    """시장환경 점수와 주문 허가를 분리한 미국 주식 선발대 게이트."""
+    checks, reasons = {}, []
+
+    quality = metrics.get('data_quality', {})
+    checks['data_quality'] = bool(quality.get('valid', False))
+    checks['regime_clear'] = us_phase == 'CLEAR'
+    checks['flow_fresh'] = not flow_is_stale
+    checks['flow_not_strong_outflow'] = flow_score > -20
+
+    spy = macro_data.get('spy_10y', pd.DataFrame())
+    rsp = macro_data.get('rsp_10y', pd.DataFrame())
+    hyg = macro_data.get('hyg_10y', pd.DataFrame())
+    ief = macro_data.get('ief_10y', pd.DataFrame())
+    falling_knife = True
+    if spy is not None and not spy.empty and 'Close' in spy and len(spy) >= 22:
+        close = pd.to_numeric(spy['Close'], errors='coerce').dropna()
+        ma5 = close.rolling(5).mean()
+        ma20 = close.rolling(20).mean()
+        ret_1d = float(close.pct_change().iloc[-1] * 100)
+        ma5_gap = float((close.iloc[-1] / ma5.iloc[-1] - 1) * 100)
+        falling_knife = ret_1d <= KNIFE_1D_RET or ma5_gap <= KNIFE_MA5_GAP
+        checks['spy_two_day_ma20_hold'] = bool(
+            close.iloc[-1] >= ma20.iloc[-1] and close.iloc[-2] >= ma20.iloc[-2]
+        )
+        metrics['spy_1d_return'] = ret_1d
+        metrics['spy_ma5_gap'] = ma5_gap
+    else:
+        checks['spy_two_day_ma20_hold'] = False
+    checks['falling_knife_released'] = not falling_knife
+
+    checks['breadth_not_worsening'] = False
+    if all(df is not None and not df.empty and 'Close' in df and len(df) > 5 for df in (rsp, spy)):
+        pair = pd.concat([rsp['Close'], spy['Close']], axis=1).dropna()
+        if len(pair) > 5:
+            ratio = pair.iloc[:, 0] / pair.iloc[:, 1]
+            checks['breadth_not_worsening'] = bool(ratio.iloc[-1] >= ratio.iloc[-6])
+
+    checks['credit_not_deteriorating'] = False
+    if all(df is not None and not df.empty and 'Close' in df and len(df) > 5 for df in (hyg, ief)):
+        pair = pd.concat([hyg['Close'], ief['Close']], axis=1).dropna()
+        if len(pair) > 5:
+            ratio = pair.iloc[:, 0] / pair.iloc[:, 1]
+            checks['credit_not_deteriorating'] = bool(ratio.iloc[-1] >= ratio.iloc[-6] * 0.99)
+
+    labels = {
+        'data_quality': '필수 데이터 정상',
+        'regime_clear': 'ORION 위험선호 환경',
+        'flow_fresh': '수급 프록시 최신',
+        'flow_not_strong_outflow': '강한 가격·거래량 유출 없음',
+        'spy_two_day_ma20_hold': 'SPY 20일선 2거래일 안착',
+        'falling_knife_released': '낙하 칼날 해제',
+        'breadth_not_worsening': 'RSP/SPY 시장 폭 악화 없음',
+        'credit_not_deteriorating': 'HYG/IEF 신용 악화 없음',
+    }
+    reasons = [labels[key] for key, passed in checks.items() if not passed]
+    if not checks['data_quality']:
+        state = 'DATA_VETO'
+    elif not checks['falling_knife_released']:
+        state = 'FALLING_KNIFE_VETO'
+    elif all(checks.values()):
+        state = 'STARTER_GO'
+    else:
+        state = 'ENTRY_WAIT'
+    return state, checks, reasons
+
+
+def run_us_orion_walkforward_validation(macro_data, transaction_cost_bps=5.0, min_history=60):
+    """종가 신호를 다음 거래일 수익에 적용하는 미국 ORION 장기 전용 검증."""
+    spy = macro_data.get('spy_10y', pd.DataFrame())
+    if spy is None or spy.empty or 'Close' not in spy or len(spy) < min_history + 2:
+        return {'usable': False, 'reason': 'insufficient_spy_history'}
+
+    spy_close = pd.to_numeric(spy['Close'], errors='coerce').dropna()
+    dates = spy_close.index
+    positions, scores, phases = [], [], []
+
+    for idx in range(min_history, len(dates) - 1):
+        as_of = pd.Timestamp(dates[idx]).tz_localize(None)
+        sliced = {}
+        for key, value in macro_data.items():
+            if isinstance(value, pd.DataFrame) and isinstance(value.index, pd.DatetimeIndex):
+                sliced[key] = value.loc[value.index <= as_of].copy()
+            else:
+                sliced[key] = value
+        fred_slice = sliced.get('fred_macro', pd.DataFrame())
+        if not fred_slice.empty:
+            sliced['fred_as_of'] = {
+                col: pd.Timestamp(fred_slice[col].dropna().index[-1]).strftime('%Y-%m-%d')
+                for col in fred_slice.columns if not fred_slice[col].dropna().empty
+            }
+        score, phase, _, _, _ = calculate_us_orion_score(sliced, as_of=as_of)
+        positions.append(1.0 if phase == 'CLEAR' else 0.0)
+        scores.append(score)
+        phases.append(phase)
+
+    if not positions:
+        return {'usable': False, 'reason': 'no_validation_observations'}
+
+    signal_dates = dates[min_history:len(dates) - 1]
+    next_returns = spy_close.pct_change().shift(-1).loc[signal_dates].fillna(0.0)
+    position_series = pd.Series(positions, index=signal_dates, dtype=float)
+    turnover = position_series.diff().abs().fillna(position_series.abs())
+    strategy_returns = position_series * next_returns - turnover * (transaction_cost_bps / 10000.0)
+    equity = (1.0 + strategy_returns).cumprod()
+    buy_hold = (1.0 + next_returns).cumprod()
+    drawdown = equity / equity.cummax() - 1.0
+    active = position_series > 0
+
+    return {
+        'usable': True,
+        'observations': int(len(strategy_returns)),
+        'exposure': float(position_series.mean()),
+        'total_return': float(equity.iloc[-1] - 1.0),
+        'buy_hold_return': float(buy_hold.iloc[-1] - 1.0),
+        'max_drawdown': float(drawdown.min()),
+        'turnover_events': int((turnover > 0).sum()),
+        'active_hit_rate': float((strategy_returns[active] > 0).mean()) if active.any() else None,
+        'last_score': float(scores[-1]),
+        'last_phase': phases[-1],
+        'transaction_cost_bps': float(transaction_cost_bps),
+    }
 
 def get_us_strategic_advice(us_phase, total_score, triggers):
     """
     Generate dynamic advice string based on US ORION triggers.
     """
     if us_phase == "CLEAR":
-        head = "🟢 전천후 상승장 (CLEAR) - 주도주 집중"
+        head = "🟢 위험선호 검토 가능 (CLEAR) - 진입 게이트 별도 확인"
         color = "#2e7d32"
     elif us_phase == "CAUTION":
         head = "🟡 변동성 경계 (CAUTION) - 현금 확보 및 리밸런싱"
         color = "#fbc02d"
-    else:
+    elif us_phase == "ALERT":
         head = "🔴 위험 회피 (ALERT) - 방어적 자산 배분 우선"
         color = "#c62828"
+    else:
+        head = "⚫ 데이터 검증 실패 (DATA ERROR) - 신규 주문 금지"
+        color = "#424242"
         
     actions = []
     
@@ -1945,11 +2117,13 @@ def get_us_strategic_advice(us_phase, total_score, triggers):
         pass
         
     if us_phase == "CLEAR":
-        actions.append("🚀 **투자 전략**: 위험 자산 비중을 확대하고 AI/Tech 주도주의 추세를 추종하십시오.")
+        actions.append("🔎 **투자 전략**: 시장환경만 통과했습니다. 별도 진입 게이트가 STARTER_GO일 때만 예정금의 5~10%를 허용합니다.")
     elif us_phase == "CAUTION":
         actions.append("⚖️ **투자 전략**: 신규 투자는 보수적으로 접근하고, 포트폴리오 내 과매수 종목의 수익 실현(Trimming)을 권장합니다.")
-    else:
+    elif us_phase == "ALERT":
         actions.append("🛡️ **투자 전략**: 하방 리스크가 큽니다. 단기채(SGOV 등) 및 현금 비중을 대폭 늘리십시오.")
+    else:
+        actions.append("⛔ **투자 전략**: 결측·노후 데이터를 갱신하기 전에는 신규 주문을 실행하지 마십시오.")
         
     return head, color, actions
 
@@ -2070,6 +2244,13 @@ def calculate_us_flow_signal(spy_flow, qqq_flow, soxx_flow):
     else:
         score -= 40
         status = "🔴 강한 수급 유출 (Strong Outflow)"
+
+    # 반도체는 경고 문구만 띄우지 않고 제한된 범위에서 실제 점수에도 반영한다.
+    if soxx_flow > 1.0:
+        score += 10
+    elif soxx_flow < -1.0:
+        score -= 10
+    score = max(-40, min(40, score))
         
     details.append(("🏢", f"SPY 수급 프록시: {spy_flow:+.2f}"))
     details.append(("🚀", f"QQQ 수급 프록시: {qqq_flow:+.2f}"))

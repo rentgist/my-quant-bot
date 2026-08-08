@@ -40,7 +40,8 @@ from data_loader import (
     get_stock_data,
     get_upcoming_events,
     get_investor_flow,
-    get_1m_investor_flow
+    get_1m_investor_flow,
+    get_us_flow_snapshot,
 )
 import sys
 if "signals" in sys.modules:
@@ -55,6 +56,7 @@ try:
         calculate_us_risk_radar,
         calculate_kr_risk_radar,
         calculate_us_orion_score,
+        evaluate_us_entry_permission,
         get_us_strategic_advice,
         calculate_us_bottom_finder,
         calculate_kr_bottom_finder,
@@ -1071,6 +1073,7 @@ with tab_orion_us:
     st.markdown("### 🦅 미국 주요 ETF 수급 동향 프록시 리포트")
     st.caption("💡 팁: API 제약으로 인해 미국 ETF 거래량과 종가 등락을 결합해 추산한 **가상 수급 점수(Proxy Score)**입니다. 양수일수록 매수 우위, 음수일수록 매도 우위를 나타냅니다.")
     us_flow = get_us_flow_report()
+    us_flow_snapshot = get_us_flow_snapshot()
     
     sf_col1, sf_col2, sf_col3 = st.columns(3)
     
@@ -1089,7 +1092,12 @@ with tab_orion_us:
                         pass
         return res
 
-    flow_dict = parse_us_flow(us_flow)
+    flow_dict = {
+        ticker: float(item.get("flow_proxy", 0.0))
+        for ticker, item in us_flow_snapshot.get("records", {}).items()
+    }
+    if not flow_dict:
+        flow_dict = parse_us_flow(us_flow)
     
     def render_us_flow(col, label, ticker):
         score = flow_dict.get(ticker, 0.0)
@@ -1100,6 +1108,11 @@ with tab_orion_us:
         render_us_flow(sf_col1, "🏢 SPY (S&P 500)", "SPY")
         render_us_flow(sf_col2, "🚀 QQQ (Nasdaq)", "QQQ")
         render_us_flow(sf_col3, "💻 SOXX (반도체)", "SOXX")
+        flow_date = us_flow_snapshot.get("market_as_of") or "알 수 없음"
+        if us_flow_snapshot.get("is_stale", True):
+            st.error(f"⛔ 수급 프록시가 오래되었습니다(시장 기준일 {flow_date}). 최종 진입 점수와 주문 허가에 반영하지 않습니다.")
+        else:
+            st.caption(f"시장 기준일: {flow_date} · 실제 펀드플로우가 아닌 가격·거래량 프록시")
     else:
         sf_col1.metric("🏢 SPY 수급", "데이터 없음", delta_color="off")
         sf_col2.metric("🚀 QQQ 수급", "데이터 없음", delta_color="off")
@@ -1202,7 +1215,10 @@ with tab_orion_us:
                 uwdo = st.number_input("미장 경고일수 (-1: 자동)", min_value=-1, max_value=5, value=-1, step=1)
 
         from signals import calculate_us_flow_signal
-        us_flow_score, us_flow_status, us_flow_details = calculate_us_flow_signal(spy_manual, qqq_manual, flow_dict.get("SOXX", 0.0))
+        raw_us_flow_score, us_flow_status, us_flow_details = calculate_us_flow_signal(spy_manual, qqq_manual, flow_dict.get("SOXX", 0.0))
+        us_flow_score = 0 if us_flow_snapshot.get("is_stale", True) else raw_us_flow_score
+        if us_flow_snapshot.get("is_stale", True):
+            us_flow_status = "⚫ 노후 데이터 — 점수 반영 중지"
         
         st.markdown(f"**상태:** {us_flow_status}")
         for icon, msg in us_flow_details:
@@ -1212,9 +1228,20 @@ with tab_orion_us:
     st.markdown("#### Step 3: 🎯 통합 판정 (Action Plan)")
     
     # 통합 점수에 flow score 반영 (가중치 조절)
-    final_us_score = total_score + (us_flow_score * 0.2)
-    final_us_phase = "CLEAR" if final_us_score >= 65 else "CAUTION" if final_us_score >= 40 else "ALERT"
+    final_us_score = max(0.0, min(100.0, total_score + (us_flow_score * 0.2)))
+    if us_phase == "DATA_ERROR":
+        final_us_phase = "DATA_ERROR"
+    else:
+        final_us_phase = "CLEAR" if final_us_score >= 65 else "CAUTION" if final_us_score >= 40 else "ALERT"
     final_adv_head, final_adv_color, final_adv_actions = get_us_strategic_advice(final_us_phase, final_us_score, triggers)
+
+    entry_state, entry_checks, entry_reasons = evaluate_us_entry_permission(
+        macro_charts,
+        final_us_phase,
+        metrics,
+        flow_score=us_flow_score,
+        flow_is_stale=us_flow_snapshot.get("is_stale", True),
+    )
     
     st.markdown(
         f"<div style='background:{final_adv_color}22; border-left: 8px solid {final_adv_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
@@ -1223,6 +1250,17 @@ with tab_orion_us:
         f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in final_adv_actions]) + "</ul>"
         f"</div>", unsafe_allow_html=True
     )
+
+    if entry_state == "STARTER_GO":
+        st.success("✅ 미장 선발대 진입 허가: 미국 투자 예정금의 5~10%만 분할 진입. 갭 상승 3% 초과 종목은 추격 금지.")
+    elif entry_state in ("DATA_VETO", "FALLING_KNIFE_VETO"):
+        st.error(f"⛔ 신규 진입 거부: {', '.join(entry_reasons)}")
+    else:
+        st.warning(f"⏳ 신규 진입 대기: {', '.join(entry_reasons)}")
+
+    with st.expander("미장 진입 허가 체크리스트"):
+        for key, passed in entry_checks.items():
+            st.write(f"{'✅' if passed else '❌'} {key}")
     
     # ── [NEW] Phase별 비중 가이드 박스 ──
     from regime_playbook import REGIME_POLICIES
@@ -2518,7 +2556,7 @@ with tab_port:
         
         from ai_reporter import get_custom_portfolio_advice
         if "calculate_us_orion_score" in globals():
-            total_score, us_phase, _ = calculate_us_orion_score(macro_charts)
+            total_score, us_phase, _, _, _ = calculate_us_orion_score(macro_charts)
         else:
             us_phase = "CAUTION"
             total_score = 50.0

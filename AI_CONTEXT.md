@@ -13,7 +13,15 @@
 - i_reporter.py: Generates the dynamic rebalancing text (The "AI Control Room" report and custom portfolio strategies based on Guru logic: Buffett, Druckenmiller, Fisher).
 - egime_state.json: Used for tracking market regime states (e.g. Warning days) to persist logic across reruns.
 
-## 🔄 Recent Updates (Last Session - 2026.08.06)
+## 🔄 Recent Updates (Last Session - 2026.08.08)
+- **US ORION execution safety**:
+  - Separated the US market regime (`CLEAR`) from order permission (`STARTER_GO`).
+  - Added hard vetoes for stale/missing data and falling-knife conditions.
+  - Added two-day SPY MA20 confirmation, RSP/SPY breadth, HYG/IEF credit confirmation, and fresh flow-proxy checks.
+  - Corrected FRED RRP units, SOXX key wiring, RSI overheat scoring, yield-level logic, and tuple unpacking.
+  - Added next-session, cost-aware walk-forward validation and US ORION regression coverage; the full suite passes 41 tests.
+
+### Previous session — 2026.08.06
 - **UI Refactoring**: 
   - Separated the primary ORION Signal tab into US (🦅) and KR (🐯) specific tabs for better modularity.
   - Moved the AI 참모 리포트 under the 종목 발굴 & 타이밍 tab.
