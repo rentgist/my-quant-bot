@@ -8,13 +8,16 @@ from pathlib import Path
 def load_regime_classifier():
     signals_path = Path(__file__).resolve().parents[1] / "signals.py"
     module = ast.parse(signals_path.read_text(encoding="utf-8"))
-    function_node = next(
-        node
-        for node in module.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "calculate_regime_classification"
-    )
-    isolated_module = ast.Module(body=[function_node], type_ignores=[])
+    required_names = {
+        "load_state_from_github",
+        "save_state_to_github",
+        "calculate_regime_classification",
+    }
+    function_nodes = [
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name in required_names
+    ]
+    isolated_module = ast.Module(body=function_nodes, type_ignores=[])
     namespace = {}
     exec(compile(isolated_module, str(signals_path), "exec"), namespace)
     return namespace["calculate_regime_classification"]

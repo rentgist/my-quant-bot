@@ -237,6 +237,7 @@ def get_macro_charts():
         "rsp_10y": "RSP",
         "vkospi_10y": "^VKOSPI",
         "tnx_10y": "^TNX",
+        "tyx_10y": "^TYX",
         "wti_10y": "CL=F",
         "irx_10y": "^IRX",
         "mu_2y": "MU",
@@ -262,6 +263,9 @@ def get_macro_charts():
         for future in concurrent.futures.as_completed(futures):
             k, df = future.result()
             result[k] = df
+
+    # 미국 ORION과 기존 반도체 화면이 같은 SOXX 시계열을 공유하도록 명시적 별칭 제공.
+    result["soxx_10y"] = result.get("soxx_2y", pd.DataFrame())
 
     # KOSPI 및 환율은 실시간성이 더 좋은 FinanceDataReader(fdr) 사용
     start_10y = (pd.Timestamp.now() - pd.DateOffset(years=10)).strftime('%Y-%m-%d')
@@ -298,8 +302,15 @@ def get_macro_charts():
     result["fetched_at"] = get_kst_now().strftime("%m-%d %H:%M:%S")
 
     try:
-        fred_df = web.DataReader(['WALCL', 'WTREGEN', 'RRPONTSYD', 'BAMLH0A0HYM2'], 'fred', start_10y)
-        fred_df = fred_df.ffill().dropna()
+        fred_raw = web.DataReader(['WALCL', 'WTREGEN', 'RRPONTSYD', 'BAMLH0A0HYM2'], 'fred', start_10y)
+        result['fred_as_of'] = {
+            col: pd.Timestamp(fred_raw[col].last_valid_index()).strftime('%Y-%m-%d')
+            for col in fred_raw.columns
+            if fred_raw[col].last_valid_index() is not None
+        }
+        # FRED 원단위를 보존한다. WALCL·WTREGEN은 USD millions,
+        # RRPONTSYD는 USD billions이며 점수 계산 단계에서 명시적으로 환산한다.
+        fred_df = fred_raw.ffill().dropna()
         result['fred_macro'] = fred_df
     except Exception as e:
         print("FRED Data Error:", e)
@@ -783,7 +794,8 @@ def get_market_news(market="KR", limit=20):
 
 @st.cache_data(ttl=598)
 def get_us_flow_report():
-    remote_url = "https://raw.githubusercontent.com/rentgist/quant-alpha-engine/main/data/us_flow_report.md?t=1786005679"
+    cache_bucket = int(datetime.datetime.now().timestamp() // 600)
+    remote_url = f"https://raw.githubusercontent.com/rentgist/quant-alpha-engine/main/data/us_flow_report.md?t={cache_bucket}"
     try:
         resp = requests.get(remote_url, timeout=5)
         if resp.status_code == 200:
@@ -796,4 +808,54 @@ def get_us_flow_report():
         with open(local_file, "r", encoding="utf-8") as f:
             return f.read()
     return ""
+
+
+@st.cache_data(ttl=598)
+def get_us_flow_snapshot():
+    """구조화된 미국 ETF 가격·거래량 프록시와 최신성 상태를 반환한다."""
+    cache_bucket = int(datetime.datetime.now().timestamp() // 600)
+    remote_url = f"https://raw.githubusercontent.com/rentgist/quant-alpha-engine/main/data/us_flow_report.json?t={cache_bucket}"
+    snapshot = None
+    source = "github"
+    try:
+        resp = requests.get(remote_url, timeout=5, headers={"Cache-Control": "no-cache"})
+        if resp.status_code == 200:
+            snapshot = resp.json()
+    except Exception:
+        snapshot = None
+
+    if snapshot is None:
+        local_file = os.path.join("..", "quant-alpha-engine", "data", "us_flow_report.json")
+        if os.path.exists(local_file):
+            try:
+                with open(local_file, "r", encoding="utf-8") as f:
+                    snapshot = json.load(f)
+                source = "local"
+            except Exception:
+                snapshot = None
+
+    if not isinstance(snapshot, dict):
+        return {
+            "records": {}, "generated_at_kst": None, "market_as_of": None,
+            "is_stale": True, "source": "missing", "method": None,
+        }
+
+    records = {
+        item.get("ticker"): item
+        for item in snapshot.get("records", [])
+        if isinstance(item, dict) and item.get("ticker")
+    }
+    market_as_of = pd.to_datetime(snapshot.get("market_as_of"), errors="coerce")
+    now_kst = pd.Timestamp(get_kst_now()).tz_localize(None)
+    # 주말을 허용하되 마지막 미국 거래일이 4일보다 오래되면 주문 판단에서 제외한다.
+    is_stale = pd.isna(market_as_of) or (now_kst.normalize() - market_as_of.normalize()).days > 4
+    return {
+        "records": records,
+        "generated_at_kst": snapshot.get("generated_at_kst"),
+        "market_as_of": snapshot.get("market_as_of"),
+        "is_stale": bool(is_stale),
+        "source": source,
+        "method": snapshot.get("method"),
+        "is_actual_fund_flow": bool(snapshot.get("is_actual_fund_flow", False)),
+    }
 
