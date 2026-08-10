@@ -4,3 +4,5 @@ __pycache__/
 .DS_Store
 
 .env
+yfinance_v2.cache
+data/orion_macro_snapshot.pkl

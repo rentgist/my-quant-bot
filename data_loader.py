@@ -8,9 +8,40 @@ import yfinance as yf
 import concurrent.futures
 import requests_cache
 import threading
+from pathlib import Path
 
 # yfinance용 캐시 세션 (5분 유지) - 장중 실시간 데이터 지연 방지 및 Rate Limit 대응
 yf_session = requests_cache.CachedSession('yfinance_v2.cache', expire_after=300)
+
+# A successful market-data response is valuable even after the process restarts.
+# The UI loads this local snapshot first; live network collection is a deliberate
+# refresh action in final.py.  The file is runtime data, not a source artifact.
+MACRO_SNAPSHOT_PATH = Path(__file__).resolve().parent / "data" / "orion_macro_snapshot.pkl"
+
+
+def load_macro_snapshot():
+    """Return the last complete macro-data snapshot, or None when unavailable."""
+    try:
+        snapshot = pd.read_pickle(MACRO_SNAPSHOT_PATH)
+        if isinstance(snapshot, dict) and snapshot:
+            return snapshot
+    except (FileNotFoundError, EOFError, OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def save_macro_snapshot(snapshot):
+    """Atomically retain a non-empty, successfully collected macro snapshot."""
+    if not isinstance(snapshot, dict) or not snapshot:
+        return False
+    try:
+        MACRO_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = MACRO_SNAPSHOT_PATH.with_suffix(".tmp")
+        pd.to_pickle(snapshot, temporary_path)
+        temporary_path.replace(MACRO_SNAPSHOT_PATH)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
 
 import FinanceDataReader as fdr
 import streamlit as st
@@ -103,14 +134,34 @@ def get_krx_mapping_v2():
         mapping["_ERROR_MESSAGE_"] = str(exc)
         return mapping
 
-KRX_DICT = get_krx_mapping_v2()
+# Do not block the first Streamlit render on a network request for the full KRX
+# listing.  A small built-in mapping keeps common searches usable immediately;
+# the complete listing is refreshed in the background.
+KRX_DICT = _get_fallback_krx_mapping()
 _KRX_MAPPING_LOCK = threading.Lock()
+_KRX_MAPPING_LOADING = True
+
+
+def _refresh_krx_mapping_in_background():
+    global KRX_DICT, _KRX_MAPPING_LOADING
+    try:
+        KRX_DICT = _build_krx_mapping(_fetch_krx_listing())
+    except Exception as exc:
+        KRX_DICT = _get_fallback_krx_mapping()
+        KRX_DICT["_ERROR_"] = True
+        KRX_DICT["_ERROR_MESSAGE_"] = str(exc)
+    finally:
+        _KRX_MAPPING_LOADING = False
+
+
+threading.Thread(target=_refresh_krx_mapping_in_background, daemon=True).start()
 
 
 def get_krx_mapping_status():
     """한국 종목 검색 UI에서 사용할 종목 마스터 상태를 반환한다."""
     return {
         "available": not bool(KRX_DICT.get("_ERROR_")),
+        "loading": _KRX_MAPPING_LOADING,
         "stock_count": sum(1 for key in KRX_DICT if key.isdigit() and len(key) == 6),
         "error": KRX_DICT.get("_ERROR_MESSAGE_"),
     }
@@ -484,7 +535,9 @@ def get_sector_baseline():
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=1))
 def fetch_ticker_history(ticker_str, period="1y"):
-    df = yf.Ticker(ticker_str).history(period=period)
+    # Bound individual provider calls so one unavailable symbol cannot leave the
+    # dashboard appearing frozen. Tenacity still supplies one short retry.
+    df = yf.Ticker(ticker_str).history(period=period, timeout=8)
     if not df.empty and 'Close' in df.columns:
         df = df.dropna(subset=['Close'])
     return df

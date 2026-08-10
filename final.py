@@ -34,8 +34,10 @@ from regime_playbook import (
     run_regime_backtest,
 )
 from data_loader import (
-    get_real_cnn_fg, 
+    get_real_cnn_fg,
     get_macro_charts, 
+    load_macro_snapshot,
+    save_macro_snapshot,
     get_sector_baseline, 
     get_stock_data,
     get_krx_mapping_status,
@@ -434,11 +436,46 @@ def color_df(val):
 st.title("🛰 ORION")
 st.caption("확률이 충분하지 않은 거래는 하지 않습니다.")
 
+# Render a useful shell before any market provider is contacted.  A cold start
+# used to wait for 19 global symbols plus Korean indices before drawing a pixel.
+if "macro_charts" not in st.session_state:
+    previous_snapshot = load_macro_snapshot()
+    if previous_snapshot:
+        st.session_state["macro_charts"] = previous_snapshot
+        st.session_state["macro_data_source"] = "마지막 정상 수집본"
+
+controls_left, controls_right = st.columns([3, 1])
+with controls_left:
+    data_source = st.session_state.get("macro_data_source", "수집 전")
+    if "macro_charts" in st.session_state:
+        snapshot_time = st.session_state["macro_charts"].get("fetched_at", "시간 정보 없음")
+        st.info(f"시장 데이터: {data_source} · 기준 시각 {snapshot_time}")
+    else:
+        st.info("아직 검증된 시장 데이터 스냅샷이 없습니다. 최신 데이터를 불러오면 분석 화면을 시작합니다.")
+with controls_right:
+    refresh_market_data = st.button("최신 데이터 불러오기", type="primary", use_container_width=True)
+
+if refresh_market_data:
+    # A button press is an explicit user request for provider traffic.  Clear
+    # Streamlit's short cache so this action is genuinely a refresh.
+    get_macro_charts.clear()
+    with st.spinner("시장 데이터를 확인하고 있습니다. 일부 제공처가 지연되면 마지막 정상 데이터가 유지됩니다."):
+        refreshed_macro_charts = get_macro_charts()
+    st.session_state["macro_charts"] = refreshed_macro_charts
+    st.session_state["macro_data_source"] = "이번 세션 최신 수집"
+    if save_macro_snapshot(refreshed_macro_charts):
+        st.success("최신 수집본을 저장했습니다.")
+    else:
+        st.warning("화면에는 최신 데이터를 적용했지만 로컬 스냅샷 저장에는 실패했습니다.")
+
+if "macro_charts" not in st.session_state:
+    st.caption("데이터가 없는 상태에서는 매수·매도 판단을 표시하지 않습니다.")
+    st.stop()
+
+macro_charts = st.session_state["macro_charts"]
 cnn_score, cnn_rating, cnn_history = get_real_cnn_fg()
 sector_base = get_sector_baseline()
 spy_rsi_val = sector_base.get("S&P 500 (SPY)")
-
-macro_charts = get_macro_charts()
 usd_krw      = macro_charts.get("usdkrw_10y", pd.DataFrame())
 kospi_10y    = macro_charts.get("kospi_10y", pd.DataFrame())
 vkospi_10y   = macro_charts.get("vkospi_10y", pd.DataFrame())
