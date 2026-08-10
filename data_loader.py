@@ -7,6 +7,7 @@ import pandas as pd
 import yfinance as yf
 import concurrent.futures
 import requests_cache
+import threading
 
 # yfinance용 캐시 세션 (5분 유지) - 장중 실시간 데이터 지연 방지 및 Rate Limit 대응
 yf_session = requests_cache.CachedSession('yfinance_v2.cache', expire_after=300)
@@ -24,42 +25,114 @@ from signals import parse_insider, short_interest_label, get_comprehensive_risk_
 # ─────────────────────────────────────────
 import pandas_datareader.data as web
 
+KRX_FALLBACK_MAPPING = {
+    "LS ELECTRIC": {"raw_code": "010120", "yf_code": "010120.KS"},
+    "LSELECTRIC": {"raw_code": "010120", "yf_code": "010120.KS"},
+    "LS일렉트릭": {"raw_code": "010120", "yf_code": "010120.KS"},
+    "SK하이닉스": {"raw_code": "000660", "yf_code": "000660.KS"},
+    "SK HYNIX": {"raw_code": "000660", "yf_code": "000660.KS"},
+    "현대차": {"raw_code": "005380", "yf_code": "005380.KS"},
+    "현대자동차": {"raw_code": "005380", "yf_code": "005380.KS"},
+    "삼성전자": {"raw_code": "005930", "yf_code": "005930.KS"},
+    "카카오": {"raw_code": "035720", "yf_code": "035720.KS"},
+    "네이버": {"raw_code": "035420", "yf_code": "035420.KS"},
+    "NAVER": {"raw_code": "035420", "yf_code": "035420.KS"},
+    # KRX 종목 마스터가 일시적으로 내려오지 않아도 성호전자는 조회 가능하게 유지한다.
+    "성호전자": {"raw_code": "043260", "yf_code": "043260.KQ"},
+}
+
+
+def _normalise_kr_query(query):
+    return str(query).strip().replace(" ", "").upper()
+
+
+def _get_fallback_krx_mapping():
+    mapping = {}
+    for name, info in KRX_FALLBACK_MAPPING.items():
+        mapping[str(name).strip().upper()] = info.copy()
+        mapping[_normalise_kr_query(name)] = info.copy()
+        mapping[info["raw_code"]] = info.copy()
+    return mapping
+
+
+def _build_krx_mapping(listing):
+    """KRX 상장 목록을 종목명과 6자리 코드로 찾을 수 있는 검색 사전으로 변환한다."""
+    required_columns = {"Code", "Name", "Market"}
+    if listing is None or listing.empty or not required_columns.issubset(listing.columns):
+        raise ValueError("KRX 종목 목록의 필수 열이 없거나 응답이 비어 있습니다.")
+
+    mapping = _get_fallback_krx_mapping()
+    for _, row in listing.iterrows():
+        market = str(row["Market"]).strip().upper()
+        if market == "KOSPI":
+            market_suffix = ".KS"
+        elif market.startswith("KOSDAQ"):
+            market_suffix = ".KQ"
+        else:
+            # 요청 범위는 KOSPI/KOSDAQ이다. KONEX 등은 잘못된 Yahoo 접미사로
+            # 조회되는 것을 막기 위해 검색 사전에서 제외한다.
+            continue
+
+        code = str(row["Code"]).strip().zfill(6)
+        raw_name = str(row["Name"]).strip().upper()
+        if not raw_name or not code.isdigit() or len(code) != 6:
+            continue
+
+        info = {"raw_code": code, "yf_code": f"{code}{market_suffix}"}
+        mapping[raw_name] = info
+        mapping[_normalise_kr_query(raw_name)] = info
+        mapping[code] = info
+
+    return mapping
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=0.5, min=0.5, max=2))
+def _fetch_krx_listing():
+    listing = fdr.StockListing("KRX")
+    if listing is None or listing.empty:
+        raise ValueError("KRX 종목 목록 응답이 비어 있습니다.")
+    return listing
+
 @st.cache_data(ttl=86400)
 def get_krx_mapping_v2():
-    mapping = {
-        "LS ELECTRIC": {"raw_code": "010120", "yf_code": "010120.KS"},
-        "LSELECTRIC": {"raw_code": "010120", "yf_code": "010120.KS"},
-        "LS일렉트릭": {"raw_code": "010120", "yf_code": "010120.KS"},
-        "SK하이닉스": {"raw_code": "000660", "yf_code": "000660.KS"},
-        "SK Hynix": {"raw_code": "000660", "yf_code": "000660.KS"},
-        "현대차": {"raw_code": "005380", "yf_code": "005380.KS"},
-        "현대자동차": {"raw_code": "005380", "yf_code": "005380.KS"},
-        "삼성전자": {"raw_code": "005930", "yf_code": "005930.KS"},
-        "카카오": {"raw_code": "035720", "yf_code": "035720.KS"},
-        "네이버": {"raw_code": "035420", "yf_code": "035420.KS"},
-        "NAVER": {"raw_code": "035420", "yf_code": "035420.KS"}
-    }
     try:
-        df = fdr.StockListing('KRX')
-        for _, row in df.iterrows():
-            market_suffix = ".KS" if row['Market'] == 'KOSPI' else ".KQ"
-            # 원래 이름과 공백 제거 이름을 모두 등록하여 검색 성공률 향상
-            raw_name = str(row['Name']).upper()
-            spaceless_name = raw_name.replace(" ", "")
-            info_dict = {
-                "raw_code": row['Code'],
-                "yf_code": row['Code'] + market_suffix
-            }
-            mapping[raw_name] = info_dict
-            mapping[spaceless_name] = info_dict
-        return mapping
-    except Exception:
+        return _build_krx_mapping(_fetch_krx_listing())
+    except Exception as exc:
+        mapping = _get_fallback_krx_mapping()
         mapping["_ERROR_"] = True
+        mapping["_ERROR_MESSAGE_"] = str(exc)
         return mapping
 
 KRX_DICT = get_krx_mapping_v2()
-if KRX_DICT.get("_ERROR_"):
-    get_krx_mapping_v2.clear()
+_KRX_MAPPING_LOCK = threading.Lock()
+
+
+def get_krx_mapping_status():
+    """한국 종목 검색 UI에서 사용할 종목 마스터 상태를 반환한다."""
+    return {
+        "available": not bool(KRX_DICT.get("_ERROR_")),
+        "stock_count": sum(1 for key in KRX_DICT if key.isdigit() and len(key) == 6),
+        "error": KRX_DICT.get("_ERROR_MESSAGE_"),
+    }
+
+
+def resolve_kr_stock(query):
+    """종목명/공백 없는 종목명/6자리 코드로 KOSPI·KOSDAQ 종목을 찾는다."""
+    global KRX_DICT
+    normalised = _normalise_kr_query(query)
+    result = KRX_DICT.get(normalised)
+    if result is not None:
+        return result
+
+    # 시작 시 KRX 호출이 실패했더라도 실제 검색 시 한 번 더 복구한다.
+    if KRX_DICT.get("_ERROR_"):
+        with _KRX_MAPPING_LOCK:
+            if KRX_DICT.get("_ERROR_"):
+                get_krx_mapping_v2.clear()
+                KRX_DICT = get_krx_mapping_v2()
+        result = KRX_DICT.get(normalised)
+
+    return result
 
 # ─────────────────────────────────────────
 # 일정 관리
@@ -442,10 +515,14 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
         start   = (kst_now - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
 
         if is_kr:
-            query_spaceless = str(query).replace(" ", "").upper()
-            kr_info = KRX_DICT.get(query_spaceless)
-            if kr_info: raw_code, yf_code = kr_info["raw_code"], kr_info["yf_code"]
-            else:        raw_code, yf_code = query, f"{query}.KS"
+            kr_info = resolve_kr_stock(query)
+            if not kr_info:
+                if KRX_DICT.get("_ERROR_"):
+                    base["error"] = "한국 종목 목록을 불러오지 못했습니다. 잠시 후 다시 검색해 주세요."
+                else:
+                    base["error"] = "KOSPI/KOSDAQ 종목명 또는 6자리 종목코드를 확인해 주세요."
+                return base
+            raw_code, yf_code = kr_info["raw_code"], kr_info["yf_code"]
             try:
                 hist = fetch_fdr_history(raw_code, start=start).dropna()
             except Exception as e:

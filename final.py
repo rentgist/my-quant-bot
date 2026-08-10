@@ -38,6 +38,7 @@ from data_loader import (
     get_macro_charts, 
     get_sector_baseline, 
     get_stock_data,
+    get_krx_mapping_status,
     get_upcoming_events,
     get_investor_flow,
     get_1m_investor_flow,
@@ -1533,6 +1534,18 @@ with tab_radar:
     c1, c2 = st.columns(2)
     us_input = c1.text_input("🦅 미국 주식", "TSMC, 브로드컴, 버티브")
     kr_input = c2.text_input("🐯 한국 주식", "LS ELECTRIC")
+    krx_status = get_krx_mapping_status()
+    if krx_status["available"]:
+        st.caption(
+            f"한국 주식은 KOSPI·KOSDAQ 전체 종목명 또는 6자리 코드로 검색할 수 있습니다 "
+            f"(현재 {krx_status['stock_count']:,}종목). 신규 상장주·스팩·일부 소형주는 "
+            "외부 재무정보가 부족해 가격·기술지표만 표시될 수 있습니다."
+        )
+    else:
+        st.warning(
+            "⚠️ KRX 전체 종목 목록을 불러오지 못해 비상 종목 목록으로 검색 중입니다. "
+            "잠시 후 다시 검색하면 자동으로 복구를 시도합니다."
+        )
 
     queries = (
         [("미국", q.strip()) for q in us_input.split(",") if q.strip()] +
