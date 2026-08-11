@@ -9,6 +9,7 @@ import datetime
 import altair as alt
 
 from config import get_kst_now
+from market_refresh import collect_if_valid, is_market_session, refresh_is_due
 from hedging import (
     HEDGE_HORIZONS,
     build_daily_hedge_features,
@@ -455,18 +456,55 @@ with controls_left:
 with controls_right:
     refresh_market_data = st.button("최신 데이터 불러오기", type="primary", use_container_width=True)
 
-if refresh_market_data:
-    # A button press is an explicit user request for provider traffic.  Clear
-    # Streamlit's short cache so this action is genuinely a refresh.
+# Successful snapshots are published atomically to the page and disk.  Failed
+# collections leave the previously displayed, known-good snapshot untouched.
+now_kst = get_kst_now()
+st.session_state.setdefault("macro_refresh_last_attempt", now_kst)
+st.session_state.setdefault("macro_refresh_status", None)
+auto_refresh_due = (
+    "macro_charts" in st.session_state
+    and is_market_session(now_kst)
+    and refresh_is_due(st.session_state["macro_refresh_last_attempt"], now_kst)
+)
+refresh_mode = "manual" if refresh_market_data else "automatic" if auto_refresh_due else None
+
+if refresh_mode:
+    st.session_state["macro_refresh_last_attempt"] = now_kst
     get_macro_charts.clear()
-    with st.spinner("시장 데이터를 확인하고 있습니다. 일부 제공처가 지연되면 마지막 정상 데이터가 유지됩니다."):
-        refreshed_macro_charts = get_macro_charts()
-    st.session_state["macro_charts"] = refreshed_macro_charts
-    st.session_state["macro_data_source"] = "이번 세션 최신 수집"
-    if save_macro_snapshot(refreshed_macro_charts):
-        st.success("최신 수집본을 저장했습니다.")
+    with st.spinner("시장 데이터를 수집 중입니다. 실패하면 마지막 정상 데이터를 유지합니다."):
+        refresh_ok, refreshed_macro_charts, refresh_error = collect_if_valid(get_macro_charts)
+    if refresh_ok:
+        st.session_state["macro_charts"] = refreshed_macro_charts
+        st.session_state["macro_data_source"] = "최신 수집"
+        saved = save_macro_snapshot(refreshed_macro_charts)
+        snapshot_time = refreshed_macro_charts.get("fetched_at", "시간 정보 없음")
+        persist_status = "저장 완료" if saved else "화면 적용됨 · 저장 실패"
+        st.session_state["macro_refresh_status"] = (
+            f"{'수동' if refresh_mode == 'manual' else '자동'} 갱신 성공 · {snapshot_time} · {persist_status}"
+        )
     else:
-        st.warning("화면에는 최신 데이터를 적용했지만 로컬 스냅샷 저장에는 실패했습니다.")
+        st.session_state["macro_refresh_status"] = (
+            f"{'수동' if refresh_mode == 'manual' else '자동'} 갱신 실패 · 기존 정상 데이터를 유지합니다 ({refresh_error})"
+        )
+
+if st.session_state["macro_refresh_status"]:
+    st.caption(st.session_state["macro_refresh_status"])
+
+
+@st.fragment(run_every="5m")
+def market_refresh_scheduler():
+    """Wake an active dashboard every five minutes while either market is open."""
+    scheduler_now = get_kst_now()
+    if (
+        "macro_charts" in st.session_state
+        and is_market_session(scheduler_now)
+        and refresh_is_due(st.session_state["macro_refresh_last_attempt"], scheduler_now)
+    ):
+        # App-scope rerun refreshes every panel from one validated snapshot.
+        st.rerun()
+
+
+market_refresh_scheduler()
 
 if "macro_charts" not in st.session_state:
     st.caption("데이터가 없는 상태에서는 매수·매도 판단을 표시하지 않습니다.")
