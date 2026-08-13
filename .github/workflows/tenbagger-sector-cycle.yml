@@ -1,0 +1,64 @@
+name: Tenbagger sector cycle
+
+on:
+  schedule:
+    # 09:20 KST: one sector per weekday. GitHub schedules can start a few minutes late.
+    - cron: "20 0 * * 1-5"
+    # 14:10 KST: finalize only after all sectors in the current cycle are complete.
+    - cron: "10 5 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Scan phase
+        required: true
+        type: choice
+        options:
+          - morning
+          - afternoon
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tenbagger-sector-cycle
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Select scan phase
+        id: phase
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.phase }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "20 0 * * 1-5" ]; then
+            echo "value=morning" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=afternoon" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run deterministic scanner
+        run: python tenbagger_scanner.py --phase "${{ steps.phase.outputs.value }}"
+      - name: Persist scan state for Streamlit
+        shell: bash
+        run: |
+          if git diff --quiet -- data/tenbagger_scan_state.json data/tenbagger_final_candidates.json; then
+            exit 0
+          fi
+          git config user.name "orion-tenbagger-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/tenbagger_scan_state.json data/tenbagger_final_candidates.json
+          git commit -m "data: update tenbagger sector cycle"
+          git pull --rebase origin main
+          git push origin HEAD:main

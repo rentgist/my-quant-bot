@@ -1677,45 +1677,10 @@ def calculate_smart_target(d, ai_sig):
 
 
 def get_tenbagger_signal(d):
-    mcap     = float(d.get('MarketCap') or 0)
-    region   = d.get('Region')
-    rev_g    = float(d.get('Rev_Growth') or 0)
-    earn_g   = float(d.get('Earnings_Growth') or 0)
-    peg      = float(d.get('PEG')        or 99)
-    gap_high = float(d.get('Gap_High')   or 0)
-    op_m     = d.get('Op_Margin')
-    is_turnaround = d.get("Is_Turnaround", False)
-    rule_40  = d.get("Rule_of_40")
-
-    if region == "미국" and mcap >= 100_000_000_000:   return "-"
-    if region == "한국" and mcap >= 10_000_000_000_000: return "-"
-
-    is_rule_40_passed = rule_40 is not None and rule_40 >= 40
-
-    if rev_g < 0.20:
-        is_exception = False
-        if is_turnaround:
-            is_exception = True
-        elif op_m is not None and float(op_m) >= 0.20:
-            is_exception = True
-        elif is_rule_40_passed:
-            is_exception = True
-
-        if not is_exception:
-            return "-"
-
-    if gap_high < -35.0: return "-"
-
-    points = 0
-    if rev_g >= 0.30: points += 1
-    if earn_g >= 0.30 or is_turnaround: points += 1
-    if 0 < peg <= 1.5: points += 1
-    if op_m is not None and float(op_m) >= 0.20: points += 1
-    if is_rule_40_passed: points += 2
-
-    if points >= 3: return "🔥 기관 최선호 대장주 (Rule of 40)" if is_rule_40_passed else "🔥 기관 최선호 대장주"
-    if points >= 1: return "🌱 우량 고성장주 (Rule of 40)" if is_rule_40_passed else "🌱 우량 고성장주"
-    return "-"
+    # 하위 호환용 라벨. 실제 산식은 데이터 품질·성장·현금흐름·희석·
+    # 추세를 분리 평가하는 순수 모델에서 단일 관리한다.
+    from tenbagger_model import legacy_tenbagger_label
+    return legacy_tenbagger_label(d, d.get("Sector", ""))
 
 # Force Streamlit to reload this module
 

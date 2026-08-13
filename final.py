@@ -8,7 +8,9 @@ import numpy as np
 import datetime
 import altair as alt
 
-from config import get_kst_now
+from config import TENBAGGER_UNIVERSE, get_kst_now
+from tenbagger_model import evaluate_tenbagger_candidate
+from tenbagger_scanner import load_final_candidates, load_scan_state
 from market_refresh import collect_if_valid, is_market_session, refresh_is_due
 from hedging import (
     HEDGE_HORIZONS,
@@ -1593,6 +1595,58 @@ with tab_orion_us:
         st.code(thread_prompt_us_events, language="markdown")
 
 with tab_radar:
+    st.subheader("🎯 자동 텐배거 최종 연구 후보")
+    auto_final = load_final_candidates()
+    auto_state = load_scan_state()
+    final_candidates = auto_final.get("candidates", [])
+    if auto_final.get("status") == "ready":
+        generated_at = auto_final.get("generated_at", "시각 미상")
+        st.caption(
+            f"섹터 순환 완료 후 14시 이후 재검증 결과 · 생성 {generated_at} · "
+            "좋은 회사 후보와 실제 주문 허가는 별도입니다."
+        )
+        if final_candidates:
+            automated_rows = []
+            timing_labels = {
+                "ENTRY_REVIEW": "진입 검토 가능",
+                "PULLBACK_WAIT": "눌림목 대기",
+                "TREND_WAIT": "추세 확인 대기",
+                "QUALITY_WAIT": "기업품질 재검증",
+            }
+            for candidate in final_candidates:
+                evaluation = candidate.get("evaluation", {})
+                automated_rows.append({
+                    "섹터": candidate.get("sector"),
+                    "종목": candidate.get("Name"),
+                    "등급": evaluation.get("grade"),
+                    "종합": evaluation.get("score"),
+                    "기업품질": evaluation.get("quality_score"),
+                    "타이밍": evaluation.get("timing_score"),
+                    "현재 상태": timing_labels.get(
+                        evaluation.get("timing_status"), evaluation.get("timing_status")
+                    ),
+                    "최신가": candidate.get("Price"),
+                    "가격 기준시각": candidate.get("Price_As_Of") or "일봉 최근값",
+                    "매출성장": pct(candidate.get("Rev_Growth")),
+                    "영업이익률": pct(candidate.get("Op_Margin")),
+                    "주의": ", ".join(evaluation.get("cautions", [])) or "없음",
+                })
+            st.dataframe(pd.DataFrame(automated_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("이번 순환에서는 최종 기준을 통과한 후보가 없습니다.")
+    else:
+        completed = len(auto_state.get("completed_sectors", []))
+        total_sectors = len(TENBAGGER_UNIVERSE)
+        st.progress(
+            min(1.0, completed / total_sectors),
+            text=f"자동 섹터 순환 {completed}/{total_sectors} 완료",
+        )
+        st.caption(
+            "매 거래일 오전 한 섹터를 스캔합니다. 전 섹터 완료일 14시 이후 누적 후보를 최신 가격과 정밀 재무정보로 다시 검사합니다."
+        )
+    st.warning("이 표는 장기 연구 후보입니다. ORION이 STOP·WAIT이면 신규 주문에 사용하지 않습니다.")
+    st.divider()
+
     st.subheader("🔍 타점 선택 (Entry Point Selection) - 포트폴리오 종목 타점")
     st.caption("스나이퍼 탭에서 'GO' 신호가 떨어졌을 때, 어떤 종목을 살지 재무 및 수급을 점검하는 레이더입니다.")
     
@@ -2224,14 +2278,7 @@ with tab_radar: # Merged AI Report
 
 with tab_radar:  # 🚀 오늘의 텐배거 레이더
     st.subheader("🚀 섹터별 텐배거 마스터 레이더 (미래 지표 및 트렌드 필터)")
-    UNIVERSE = {
-        "🦅 미국 AI & 클라우드":              ["PLTR","CRWD","SNOW","DDOG","NET","SOUN","MDB","ZS","MNDY"],
-        "🦅 미국 혁신성장 (우주/바이오/핀테크)": ["IONQ","SOFI","RIVN","CELH","RKLB","ASTS","CRSP","LUNR","SYM","HOOD"],
-        "🐯 한국 반도체 소부장 (HBM/AI)":        ["피에스케이홀딩스", "한미반도체", "테크윙", "HPSP", "이수페타시스", "에이직랜드", "디아이", "원익IPS", "동진쎄미켐", "주성엔지니어링", "리노공업", "하나마이크론"],
-        "🐯 한국 K-뷰티 & K-푸드":            ["실리콘투","클래시스","파마리서치","삼양식품","브이티","에이피알","휴젤"],
-        "🐯 한국 바이오텍 & 헬스케어":          ["알테오젠","HLB","리가켐바이오","루닛","뷰노","제이엘케이"],
-        "🐯 한국 전력기기 & 로봇":             ["HD현대일렉트릭","레인보우로보틱스","두산로보틱스","LS ELECTRIC"],
-    }
+    UNIVERSE = TENBAGGER_UNIVERSE
     selected_theme = st.selectbox("스캔할 섹터:", list(UNIVERSE.keys()))
     if st.button("해당 섹터 레이더 가동"):
         is_korea = "한국" in selected_theme
@@ -2242,15 +2289,20 @@ with tab_radar:  # 🚀 오늘의 텐배거 레이더
             prog.progress((i + 1) / len(tickers), text=f"[{i+1}/{len(tickers)}] '{q}' 경량 스캔 중...")
             d = get_stock_data(q, is_kr=is_korea, fast_mode=True)
             d["Region"] = "한국" if is_korea else "미국"
+            d["Sector"] = selected_theme
             if not d.get("error"): radar_data.append(d)
         prog.empty()
         with st.container():
             radar_rows = []
             for d in radar_data:
                 tb_sig = get_tenbagger_signal(d)
-                if tb_sig != "-": 
+                if tb_sig != "-":
+                    evaluation = evaluate_tenbagger_candidate(d, selected_theme)
                     radar_rows.append({
                         "종목":           d["Name"], "등급": tb_sig,
+                        "종합점수":       evaluation["score"],
+                        "기업품질":       evaluation["quality_score"],
+                        "타이밍":         evaluation["timing_score"],
                         "시가총액":       fmt_mcap(d.get("MarketCap"), d["Region"]),
                         "매출성장":       pct(d.get("Rev_Growth")),
                         "이익성장(예상)": pct(d.get("Earnings_Growth")),

@@ -534,13 +534,41 @@ def get_sector_baseline():
     return res
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=1))
-def fetch_ticker_history(ticker_str, period="1y"):
+def fetch_ticker_history(ticker_str, period="1y", interval="1d"):
     # Bound individual provider calls so one unavailable symbol cannot leave the
     # dashboard appearing frozen. Tenacity still supplies one short retry.
-    df = yf.Ticker(ticker_str).history(period=period, timeout=8)
+    df = yf.Ticker(ticker_str).history(period=period, interval=interval, timeout=8)
     if not df.empty and 'Close' in df.columns:
         df = df.dropna(subset=['Close'])
     return df
+
+
+def get_latest_stock_quote(query, is_kr=False):
+    """Return the freshest available 5-minute quote with an explicit timestamp."""
+    if is_kr:
+        kr_info = resolve_kr_stock(query)
+        if not kr_info:
+            return None
+        ticker_str = kr_info["yf_code"]
+    else:
+        ticker_str = US_NAME_MAP.get(str(query).strip().upper(), query).upper()
+
+    try:
+        intraday = fetch_ticker_history(ticker_str, period="5d", interval="5m")
+        if intraday.empty:
+            return None
+        price = float(intraday["Close"].iloc[-1])
+        timestamp = pd.Timestamp(intraday.index[-1])
+        daily = fetch_ticker_history(ticker_str, period="5d", interval="1d")
+        previous_close = float(daily["Close"].iloc[-2]) if len(daily) >= 2 else None
+        return {
+            "price": price,
+            "previous_close": previous_close,
+            "as_of": timestamp.isoformat(),
+            "source": "Yahoo Finance 5분봉(지연 가능)",
+        }
+    except Exception:
+        return None
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=1))
 def fetch_fdr_history(raw_code, start):
@@ -679,6 +707,8 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
         peg_v = info.get('trailingPegRatio') or info.get('pegRatio')
         rev_g = info.get('revenueGrowth')
         gross_m = info.get('grossMargins')
+        current_ratio = info.get('currentRatio')
+        debt_to_equity = info.get('debtToEquity')
 
         # 백업 계산기 가동 (info 누락 시)
         if not info or len(info) <= 2:
@@ -732,6 +762,9 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
             "Op_Margin":       op_m,
             "PEG":             peg_v,
             "Rev_Growth":      rev_g,
+            "Current_Ratio":   current_ratio,
+            "Debt_Equity":     debt_to_equity,
+            "Dilution_YoY":    None,
         })
         base["Gross_Margin"] = gross_m
         
@@ -812,6 +845,15 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
                     inv_cap = tot_assets - cur_liab
                     if inv_cap > 0 and pd.notna(op_inc):
                         base["ROIC"] = (op_inc * (1 - tax_rate)) / inv_cap
+
+                    for row_name in ('Ordinary Shares Number', 'Share Issued'):
+                        if row_name in bs.index:
+                            share_series = pd.to_numeric(bs.loc[row_name], errors='coerce').dropna()
+                            if len(share_series) >= 2 and share_series.iloc[1] > 0:
+                                base["Dilution_YoY"] = (
+                                    float(share_series.iloc[0] / share_series.iloc[1]) - 1.0
+                                )
+                            break
 
                 if cf is not None and not cf.empty:
                     for row_name in ['Repurchase Of Capital Stock', 'Repurchase Of Stock', 'Stock Repurchased']:
