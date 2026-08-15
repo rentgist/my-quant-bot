@@ -455,8 +455,8 @@ def _apply_falling_knife(score, close, details):
 
 def _verdict_from_score(score, drawdown, is_knife):
     if drawdown > -5: verdict = "📈 고점권 — 바닥 탐지 불가"
-    elif score >= 70: verdict = "🔥 강력 매수 신호 (역사적 바닥 근접)"
-    elif score >= 50: verdict = "🟢 분할 매수 구간 (역발상 타점)"
+    elif score >= 70: verdict = "🔥 강한 바닥 후보 (가치 관찰 구간)"
+    elif score >= 50: verdict = "🟢 바닥 후보 관찰 구간"
     elif score >= 35: verdict = "🟡 조정 진행 중 (추가 하락 여지)"
     else: verdict = "⚪ 바닥 조건 미충족"
     if is_knife and score >= 35:
@@ -871,7 +871,7 @@ def calculate_regime_classification(
     
     if macro_score >= 80 and flow_score >= 80 and kospi_above_ma20:
         regime = "🟢 강력 GO (정배열)"
-        action = "완벽한 추세장. 스나이퍼 예산 즉시 본대 투입 (풀배팅 가능)."
+        action = "추세 확인 완료. 목표비중까지 분할 확대하되 한 번에 총자산 5%p를 넘기지 않습니다."
         color = "#21c354"
     elif go_ready:
         regime = "🟡 조건부 GO (추세 전환)"
@@ -1648,7 +1648,7 @@ def get_ai_signal(d):
         # 떨어지는 칼날 방어
         if change_f <= -3.0 or ma5_gap <= -4.0:
             return "⚠️ 떨어지는 칼날 (매수 대기)"
-        return "🔥 바닥 줍줍 (적극매수)"
+        return "🟠 Value 후보 (Scout 별도 검토)"
     return "🟡 방향성 탐색 (관망)"
 
 
@@ -1668,7 +1668,7 @@ def calculate_smart_target(d, ai_sig):
             return ma20, "20일선 부근 GTC"
         else:
             return bb_lower, "20선 하회 (볼린저하단 GTC)"
-    elif "바닥 줍줍" in ai_sig: 
+    elif "Value 후보" in ai_sig:
         return bb_lower, "볼린저 하단 GTC"
     elif "과매수"   in ai_sig: 
         return bb_upper,  "볼린저 상단"
