@@ -74,6 +74,7 @@ try:
         calculate_recovery_confirmation,
         calculate_macro_risk_gauge,
         calculate_cashflow_signal,
+        evaluate_market_execution_quality,
         calculate_regime_classification,
         get_strategic_advice,
         run_historical_backtest,
@@ -117,6 +118,8 @@ st.markdown("""
 # session_state 초기화 및 동기화 콜백
 if 'foreign_futures' not in st.session_state:
     st.session_state['foreign_futures'] = 0
+if 'futures_confirmed_main' not in st.session_state:
+    st.session_state['futures_confirmed_main'] = False
 if "account_total_assets" not in st.session_state:
     st.session_state["account_total_assets"] = 5000
 if "account_kr_equity" not in st.session_state:
@@ -810,14 +813,35 @@ with tab_orion_kr:
             
     with c_flow:
         st.markdown("#### Step 2: 💸 자금흐름 강도 (Flow Signal)")
-        
-        # 수동 입력 폼
+
+        # 파생 데이터는 직접 확인한 경우에만 보조 확인값으로 사용한다.
         f_col1, f_col2 = st.columns(2)
         with f_col1:
-            foreign_futures = st.number_input("① 외국인 선물 순매수 (계약)", step=100, key="sniper_futures", on_change=sync_futures_sniper)
+            foreign_futures = st.number_input(
+                "① 외국인 선물 순매수 (계약)",
+                step=100,
+                key="sniper_futures",
+                on_change=sync_futures_sniper,
+                help="모르면 0을 입력하지 말고 아래 확인란을 해제하세요. 미확인은 점수에서 제외되며 매수를 차단하지 않습니다.",
+            )
         with f_col2:
-            oi_trend = st.radio("② 선물 미결제약정", ["증가 추세", "감소/정체"], index=1)
-            
+            futures_confirmed_main = st.checkbox(
+                "선물 수치를 오늘 최신값으로 확인함",
+                key="futures_confirmed_main",
+            )
+
+        oi_signal = st.selectbox(
+            "② 선물 가격·미결제약정 조합",
+            [
+                "미확인",
+                "가격 상승 + 미결제약정 증가 (신규 롱 가능성)",
+                "가격 상승 + 미결제약정 감소 (숏커버 가능성)",
+                "가격 하락 + 미결제약정 증가 (신규 숏 가능성)",
+                "가격 하락 + 미결제약정 감소 (롱청산 가능성)",
+            ],
+            help="미결제약정 증가만으로는 상승·하락 방향을 알 수 없습니다. 선물 가격 방향을 함께 확인하세요.",
+        )
+
         st.markdown("<br>", unsafe_allow_html=True)
         save_col1, save_col2 = st.columns([2, 1])
         with save_col1:
@@ -828,8 +852,18 @@ with tab_orion_kr:
                 wdo = st.number_input("수동 경고일수 (-1: 자동)", min_value=-1, max_value=5, value=-1, step=1)
                 override_val = wdo if wdo != -1 else None
 
-        kr_flow_score, kr_flow_status, kr_flow_details = calculate_cashflow_signal(foreign_futures, oi_trend, rsp_change_pct, kospi_10y)
-        
+        market_internals = get_intraday_market_internals()
+        foreign_cashflow = summary_dict.get("Foreigner_raw") if summary_dict.get("flow_valid", False) else None
+        foreign_futures_signal = foreign_futures if futures_confirmed_main else None
+        kr_flow_score, kr_flow_status, kr_flow_details = calculate_cashflow_signal(
+            foreign_futures=foreign_futures_signal,
+            oi_signal=oi_signal,
+            kospi_hist=kospi_10y,
+            foreign_cashflow=foreign_cashflow,
+            market_breadth=market_internals,
+            rsp_change_pct=rsp_change_pct,
+        )
+
         st.markdown(f"**상태:** {kr_flow_status}")
         for icon, msg in kr_flow_details:
             st.write(f"{icon} {msg}")
@@ -846,12 +880,29 @@ with tab_orion_kr:
         except (KeyError, TypeError, ValueError):
             kospi_above_ma20 = False
 
+    execution_quality = evaluate_market_execution_quality(kospi_10y)
+    breadth_adr = market_internals.get("adr") if isinstance(market_internals, dict) else None
+    layer_value, layer_trend, layer_execution = st.columns(3)
+    layer_value.metric("구조적 가치", f"바닥점수 {kr_score}점", f"위험도 {kr_danger}점")
+    layer_trend.metric(
+        "추세 확인",
+        "20일선 회복" if kospi_above_ma20 else "20일선 미회복",
+        f"자금흐름 {kr_flow_score}점 | ADR {breadth_adr:.2f}" if breadth_adr is not None else f"자금흐름 {kr_flow_score}점 | ADR 미확인",
+    )
+    layer_execution.metric(
+        "당일 체결",
+        execution_quality["label"],
+        "다음 거래일 확인" if execution_quality["defer_new_order"] else "다음 거래일 분할 검토",
+    )
+    st.caption(execution_quality["reason"])
+
     regime, action, r_color = calculate_regime_classification(
         kr_macro_score,
         kr_flow_score,
         kospi_above_ma20,
         warning_days_override=override_val,
         save_state=save_regime,
+        execution_quality=execution_quality,
     )
     
     st.markdown(
@@ -898,6 +949,8 @@ with tab_orion_kr:
     kospi_status_str = ("안착 완료" if is_above else f"미안착 (이격: {gap:+,.2f}p)") if 'is_above' in locals() and 'gap' in locals() else "N/A"
     
     rsp_val_str = f"{rsp_change_pct:+.2f}%" if rsp_change_pct is not None else "N/A"
+    foreign_futures_prompt = f"{foreign_futures:+,.0f}계약" if futures_confirmed_main else "미확인 (점수 제외)"
+    breadth_prompt = f"ADR {breadth_adr:.2f}" if breadth_adr is not None else "미확인"
 
     # 프롬프트 조립
     upcoming_events_str = calendar_manager.get_upcoming_events_string()
@@ -912,6 +965,7 @@ with tab_orion_kr:
 - 매크로 점수: 한국 {kr_macro_score}점
 - 자금흐름 점수: 한국 {kr_flow_score}점
 - 통합 국면: {regime}
+- 당일 체결 품질: {execution_quality['label']} — {execution_quality['reason']}
 
 [시장 거시 지표 및 수급 (글로벌 펀더멘털 & 로컬 수급)]
 - 🦅 미국 장단기 금리차 (10Y-3M): {ai_yield_spread} (경기침체/유동성 선행지표)
@@ -923,7 +977,9 @@ with tab_orion_kr:
 - 🐯 한국 VKOSPI 현재: {ai_vkospi_val} (한국 기관/외인 파생 하락 헷지 팽창도)
 - 🐯 외국인 KOSPI 현물 순매수: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'}
 - 🐯 기관 KOSPI 현물 순매수: {summary_dict.get('Institutional', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 🐯 외국인 KOSPI 선물 순매수: {foreign_futures}계약 (방향성 선행지표)
+- 🐯 한국 시장 폭: {breadth_prompt} (상승/하락 종목 비율)
+- 🐯 외국인 KOSPI 선물 순매수: {foreign_futures_prompt} (현물 헤지 가능성이 있어 보조 확인용)
+- 🐯 선물 가격·미결제약정: {oi_signal}
 - 🐯 KOSPI 현재가: {kospi_str}
 - 🐯 KOSPI 5일 이평선 안착 상태: {kospi_status_str}
 
