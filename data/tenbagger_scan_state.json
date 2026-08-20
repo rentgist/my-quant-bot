@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "cycle_id": null,
+  "started_at": null,
+  "updated_at": null,
+  "next_sector_index": 0,
+  "completed_sectors": [],
+  "sector_results": {},
+  "cycle_complete": false,
+  "finalized_at": null
+}
