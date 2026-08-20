@@ -455,8 +455,8 @@ def _apply_falling_knife(score, close, details):
 
 def _verdict_from_score(score, drawdown, is_knife):
     if drawdown > -5: verdict = "📈 고점권 — 바닥 탐지 불가"
-    elif score >= 70: verdict = "🔥 강력 매수 신호 (역사적 바닥 근접)"
-    elif score >= 50: verdict = "🟢 분할 매수 구간 (역발상 타점)"
+    elif score >= 70: verdict = "🔥 강한 바닥 후보 (가치 관찰 구간)"
+    elif score >= 50: verdict = "🟢 바닥 후보 관찰 구간"
     elif score >= 35: verdict = "🟡 조정 진행 중 (추가 하락 여지)"
     else: verdict = "⚪ 바닥 조건 미충족"
     if is_knife and score >= 35:
@@ -678,68 +678,210 @@ def calculate_macro_risk_gauge(kospi_hist, usdkrw_hist):
     return macro_score, status, details
 
 
-def calculate_cashflow_signal(foreign_futures, oi_trend, rsp_change_pct, kospi_hist):
+def calculate_cashflow_signal(
+    foreign_futures,
+    oi_signal,
+    kospi_hist,
+    foreign_cashflow=None,
+    market_breadth=None,
+    rsp_change_pct=None,
+):
+    """한국 자금흐름을 현물·시장폭 중심으로 평가한다.
+
+    외국인 선물은 현물 헤지·차익거래가 섞일 수 있으므로 확인 변수로만
+    사용한다. 미결제약정도 가격 방향과 결합하지 않으면 롱·숏을 구분할 수
+    없으므로, 단순 증가 자체에는 점수를 부여하지 않는다.
+    """
     details = []
     flow_score = 0
 
-    # 1. 외국인 선물 (30점 만점)
-    if foreign_futures >= 5000:
-        flow_score += 30
-        details.append(("🟢", f"외국인 선물 강력 매수 (+{foreign_futures:,.0f}계약) [+30점]"))
-    elif foreign_futures >= 3500:
-        flow_score += 20
-        details.append(("🟢", f"외국인 선물 뚜렷한 매수 (+{foreign_futures:,.0f}계약) [+20점]"))
-    elif foreign_futures >= 1500:
-        flow_score += 10
-        details.append(("🟡", f"외국인 선물 약한 매수 (+{foreign_futures:,.0f}계약) [+10점]"))
-    else:
-        details.append(("🔴", f"외국인 선물 수급 미달 ({foreign_futures:+,.0f}계약) [+0점]"))
-
-    # 2. KOSPI 5일선 안착 (25점 만점)
-    if not kospi_hist.empty and len(kospi_hist) >= 5:
+    # 1. KOSPI 가격 추세 (30점 만점)
+    if kospi_hist is not None and not kospi_hist.empty and len(kospi_hist) >= 20:
         try:
-            close = kospi_hist['Close']
-            curr_k = float(close.iloc[-1])
+            close = kospi_hist["Close"]
+            current = float(close.iloc[-1])
             ma5 = float(close.rolling(5).mean().iloc[-1])
-            
-            if curr_k >= ma5:
-                flow_score += 25
-                details.append(("🟢", "KOSPI 5일선 안착 — 단기 모멘텀 회복 [+25점]"))
+            ma20 = float(close.rolling(20).mean().iloc[-1])
+            if current >= ma5:
+                flow_score += 15
+                details.append(("🟢", "KOSPI 5일선 유지 [+15점]"))
             else:
-                details.append(("🔴", "KOSPI 5일선 하회 — 단기 모멘텀 부재 [+0점]"))
+                details.append(("🔴", "KOSPI 5일선 하회 [+0점]"))
+            if current >= ma20:
+                flow_score += 15
+                details.append(("🟢", "KOSPI 20일선 유지 [+15점]"))
+            else:
+                details.append(("🔴", "KOSPI 20일선 하회 [+0점]"))
         except Exception:
-            details.append(("⚪", "KOSPI 5일선 산출 불가"))
+            details.append(("⚪", "KOSPI 이동평균 산출 불가"))
     else:
-        details.append(("⚪", "KOSPI 데이터 부족"))
+        details.append(("⚪", "KOSPI 20일 데이터 부족"))
 
-    # 3. 글로벌 RSP 강도 (25점 만점)
-    if rsp_change_pct is not None:
-        if rsp_change_pct >= 0.0:
-            flow_score += 25
-            details.append(("🟢", f"글로벌(RSP) 상승 추세 ({rsp_change_pct:+.2f}%) — 글로벌 투자심리 호조 [+25점]"))
-        elif rsp_change_pct >= -0.5:
-            flow_score += 15
-            details.append(("🟡", f"글로벌(RSP) 약보합 방어 ({rsp_change_pct:+.2f}%) — 거시 방어 성공 [+15점]"))
+    # 2. 외국인 KOSPI 현물 (20점 만점)
+    if foreign_cashflow is None:
+        details.append(("⚪", "외국인 현물 수급 미확인 — 점수 제외"))
+    else:
+        try:
+            cashflow = float(foreign_cashflow)
+            if cashflow >= 3000:
+                flow_score += 20
+                details.append(("🟢", f"외국인 현물 강한 순매수 ({cashflow:+,.0f}억원) [+20점]"))
+            elif cashflow >= 500:
+                flow_score += 15
+                details.append(("🟢", f"외국인 현물 순매수 ({cashflow:+,.0f}억원) [+15점]"))
+            elif cashflow > 0:
+                flow_score += 8
+                details.append(("🟡", f"외국인 현물 소폭 순매수 ({cashflow:+,.0f}억원) [+8점]"))
+            elif cashflow <= -3000:
+                details.append(("🔴", f"외국인 현물 대규모 순매도 ({cashflow:+,.0f}억원) [+0점]"))
+            else:
+                details.append(("🟡", f"외국인 현물 매도/중립 ({cashflow:+,.0f}억원) [+0점]"))
+        except (TypeError, ValueError):
+            details.append(("⚪", "외국인 현물 수급 형식 오류 — 점수 제외"))
+
+    # 3. 한국 시장 폭 (20점 만점)
+    advancing = market_breadth.get("advancing") if isinstance(market_breadth, dict) else None
+    declining = market_breadth.get("declining") if isinstance(market_breadth, dict) else None
+    try:
+        if advancing is not None and declining is not None and float(declining) > 0:
+            adr = float(advancing) / float(declining)
+            if adr >= 1.20:
+                flow_score += 20
+                details.append(("🟢", f"한국 시장 폭 확산 (ADR {adr:.2f}) [+20점]"))
+            elif adr >= 0.80:
+                flow_score += 10
+                details.append(("🟡", f"한국 시장 폭 중립 (ADR {adr:.2f}) [+10점]"))
+            else:
+                details.append(("🔴", f"한국 시장 폭 취약 (ADR {adr:.2f}) [+0점]"))
         else:
-            details.append(("🔴", f"글로벌(RSP) 하락 감지 ({rsp_change_pct:+.2f}%) — 글로벌 약세 동기화 우려 [+0점]"))
-    else:
-        details.append(("⚪", "RSP 데이터 산출 불가"))
+            details.append(("⚪", "한국 시장 폭 미확인 — 점수 제외"))
+    except (TypeError, ValueError, ZeroDivisionError):
+        details.append(("⚪", "한국 시장 폭 산출 불가 — 점수 제외"))
 
-    # 4. 미결제약정 (20점 만점)
-    if oi_trend == "증가 추세":
-        flow_score += 20
-        details.append(("🟢", "미결제약정 증가 — 신규 자금 유입 확인 [+20점]"))
+    # 4. 외국인 선물 (15점 만점, 필수 게이트 아님)
+    if foreign_futures is None:
+        details.append(("⚪", "외국인 선물 미확인 — 점수 제외, 매수 차단 아님"))
     else:
-        details.append(("🔴", "미결제약정 감소/정체 — 신규 자금 유입 부족 [+0점]"))
+        try:
+            futures = float(foreign_futures)
+            if futures >= 5000:
+                flow_score += 15
+                details.append(("🟢", f"외국인 선물 강한 순매수 ({futures:+,.0f}계약) [+15점]"))
+            elif futures >= 2500:
+                flow_score += 10
+                details.append(("🟢", f"외국인 선물 순매수 ({futures:+,.0f}계약) [+10점]"))
+            elif futures >= 1000:
+                flow_score += 5
+                details.append(("🟡", f"외국인 선물 소폭 순매수 ({futures:+,.0f}계약) [+5점]"))
+            elif futures < 0:
+                details.append(("🟡", f"외국인 선물 순매도 ({futures:+,.0f}계약) — 현물 헤지 가능성, 단독 차단 아님 [+0점]"))
+            else:
+                details.append(("⚪", "외국인 선물 중립 [+0점]"))
+        except (TypeError, ValueError):
+            details.append(("⚪", "외국인 선물 형식 오류 — 점수 제외"))
 
-    if flow_score >= 80:
-        status = "🟢 자금흐름 강함 (선발대 투입 신호)"
+    # 5. 선물 가격과 미결제약정의 결합 해석 (10점 만점)
+    oi_scores = {
+        "가격 상승 + 미결제약정 증가 (신규 롱 가능성)": (10, "🟢", "가격 상승·미결제약정 증가 — 신규 롱 가능성 [+10점]"),
+        "가격 상승 + 미결제약정 감소 (숏커버 가능성)": (5, "🟡", "가격 상승·미결제약정 감소 — 숏커버 가능성 [+5점]"),
+        "가격 하락 + 미결제약정 증가 (신규 숏 가능성)": (0, "🔴", "가격 하락·미결제약정 증가 — 신규 숏 가능성 [+0점]"),
+        "가격 하락 + 미결제약정 감소 (롱청산 가능성)": (0, "🔴", "가격 하락·미결제약정 감소 — 롱청산 가능성 [+0점]"),
+    }
+    oi_score, oi_icon, oi_message = oi_scores.get(
+        oi_signal,
+        (0, "⚪", "선물 가격·미결제약정 조합 미확인 — 점수 제외"),
+    )
+    flow_score += oi_score
+    details.append((oi_icon, oi_message))
+
+    # 6. RSP는 글로벌 온기 확인용 보조지표로만 사용한다. (5점 만점)
+    if rsp_change_pct is None:
+        details.append(("⚪", "RSP 데이터 미확인 — 점수 제외"))
+    else:
+        try:
+            rsp_change = float(rsp_change_pct)
+            if rsp_change >= 0:
+                flow_score += 5
+                details.append(("🟢", f"글로벌 위험선호 보조 확인 (RSP {rsp_change:+.2f}%) [+5점]"))
+            elif rsp_change >= -0.5:
+                flow_score += 3
+                details.append(("🟡", f"글로벌 위험선호 약보합 (RSP {rsp_change:+.2f}%) [+3점]"))
+            else:
+                details.append(("🔴", f"글로벌 위험선호 약화 (RSP {rsp_change:+.2f}%) [+0점]"))
+        except (TypeError, ValueError):
+            details.append(("⚪", "RSP 데이터 형식 오류 — 점수 제외"))
+
+    if flow_score >= 70:
+        status = "🟢 자금흐름 강함 (추세 확대 확인)"
     elif flow_score >= 50:
-        status = "🟡 자금흐름 보통 (수급 턴어라운드 시도)"
+        status = "🟡 자금흐름 확인 (조건부 GO 검토)"
     else:
-        status = "🔴 자금흐름 약함 (관망)"
+        status = "🔴 자금흐름 미확인/약함 (추가 확인)"
 
     return flow_score, status, details
+
+
+def evaluate_market_execution_quality(kospi_hist):
+    """당일 봉의 체결 품질을 평가해 추세 신호와 주문 타이밍을 분리한다."""
+    result = {
+        "code": "DATA_UNAVAILABLE",
+        "label": "⚪ 체결 품질 미확인",
+        "reason": "당일 고가·저가·종가 데이터가 부족합니다. 신규 주문은 종가 확인 후 검토합니다.",
+        "defer_new_order": True,
+        "close_location": None,
+        "high_to_close_pct": None,
+    }
+    if kospi_hist is None or kospi_hist.empty or len(kospi_hist) < 20:
+        return result
+    if not {"Close", "High", "Low"}.issubset(kospi_hist.columns):
+        return result
+
+    try:
+        close = float(kospi_hist["Close"].iloc[-1])
+        high = float(kospi_hist["High"].iloc[-1])
+        low = float(kospi_hist["Low"].iloc[-1])
+        ma5 = float(kospi_hist["Close"].rolling(5).mean().iloc[-1])
+        ma20 = float(kospi_hist["Close"].rolling(20).mean().iloc[-1])
+    except (TypeError, ValueError, KeyError, IndexError):
+        return result
+
+    day_range = high - low
+    close_location = 0.5 if day_range <= 0 else (close - low) / day_range
+    high_to_close_pct = 0.0 if high <= 0 else (high - close) / high * 100.0
+    result["close_location"] = close_location
+    result["high_to_close_pct"] = high_to_close_pct
+
+    if high_to_close_pct >= 3.0 and close_location <= 0.25:
+        result.update(
+            {
+                "code": "FAILED_BREAKOUT",
+                "label": "🔴 돌파 실패 — 체결 유예",
+                "reason": (
+                    f"장중 고점 대비 종가가 {high_to_close_pct:.1f}% 밀렸고 종가는 당일 범위 하단 "
+                    f"{close_location * 100:.0f}%에 위치했습니다. 추세 신호와 별개로 오늘 신규 주문은 유예합니다."
+                ),
+                "defer_new_order": True,
+            }
+        )
+    elif close >= ma5 and close >= ma20 and close_location >= 0.50:
+        result.update(
+            {
+                "code": "EXECUTABLE",
+                "label": "🟢 종가 체결 가능",
+                "reason": "종가가 5일선·20일선 위에서 당일 범위 중단 이상에 위치했습니다. 다음 거래일 분할 실행만 검토합니다.",
+                "defer_new_order": False,
+            }
+        )
+    else:
+        result.update(
+            {
+                "code": "WAIT_CONFIRMATION",
+                "label": "🟡 종가 추가 확인",
+                "reason": "추세는 훼손되지 않았더라도 종가 체결 품질이 충분하지 않습니다. 다음 거래일 지지·안착을 확인합니다.",
+                "defer_new_order": True,
+            }
+        )
+    return result
 
 
 def load_state_from_github(tracker_file):
@@ -837,6 +979,7 @@ def calculate_regime_classification(
     kospi_above_ma20,
     warning_days_override=None,
     save_state=False,
+    execution_quality=None,
 ):
     import datetime
     tracker_file = "regime_state.json"
@@ -849,6 +992,15 @@ def calculate_regime_classification(
     # KOSPI의 실제 20일선 탈환을 별도 필수 게이트로 확인한다.
     go_ready = macro_score >= 50 and flow_score >= 50 and kospi_above_ma20
     is_warning = flow_score >= 50 and not go_ready
+    execution_deferred = bool(
+        isinstance(execution_quality, dict)
+        and execution_quality.get("defer_new_order", False)
+    )
+    execution_reason = (
+        execution_quality.get("reason", "당일 체결 품질을 추가 확인합니다.")
+        if isinstance(execution_quality, dict)
+        else ""
+    )
     warning_days = state.get("warning_days", 0)
     last_date = state.get("last_date")
     
@@ -869,14 +1021,24 @@ def calculate_regime_classification(
         
     warning_days = warning_days_override if warning_days_override is not None else max(1, min(5, warning_days)) if is_warning else 0
     
-    if macro_score >= 80 and flow_score >= 80 and kospi_above_ma20:
-        regime = "🟢 강력 GO (정배열)"
-        action = "완벽한 추세장. 스나이퍼 예산 즉시 본대 투입 (풀배팅 가능)."
-        color = "#21c354"
+    if macro_score >= 80 and flow_score >= 70 and kospi_above_ma20:
+        if execution_deferred:
+            regime = "🟠 강력 GO — 체결 유예"
+            action = f"추세 확대 조건은 충족했지만 {execution_reason} 다음 거래일 종가 확인 후에만 총자산 5%p 이내로 분할 실행합니다."
+            color = "#ff9900"
+        else:
+            regime = "🟢 강력 GO (정배열)"
+            action = "추세 확인 완료. 목표비중까지 분할 확대하되 한 번에 총자산 5%p를 넘기지 않습니다."
+            color = "#21c354"
     elif go_ready:
-        regime = "🟡 조건부 GO (추세 전환)"
-        action = "20일선 탈환 완료. 본대 자금 분할 진입 시작."
-        color = "#fcca46"
+        if execution_deferred:
+            regime = "🟠 조건부 GO — 체결 유예"
+            action = f"20일선 탈환과 수급 조건은 유지됩니다. 다만 {execution_reason} 오늘 신규 주문은 동결하고 다음 거래일에 총자산 5%p 이내로만 재검토합니다."
+            color = "#ff9900"
+        else:
+            regime = "🟡 조건부 GO (추세 전환)"
+            action = "20일선 탈환 완료. 본대 자금 분할 진입을 시작하되 한 번에 총자산 5%p를 넘기지 않습니다."
+            color = "#fcca46"
     elif is_warning:
         if warning_days >= 3:
             regime = "✅ 경고 국면 확정 (3거래일 지지 성공)"
@@ -1648,7 +1810,7 @@ def get_ai_signal(d):
         # 떨어지는 칼날 방어
         if change_f <= -3.0 or ma5_gap <= -4.0:
             return "⚠️ 떨어지는 칼날 (매수 대기)"
-        return "🔥 바닥 줍줍 (적극매수)"
+        return "🟠 Value 후보 (Scout 별도 검토)"
     return "🟡 방향성 탐색 (관망)"
 
 
@@ -1668,7 +1830,7 @@ def calculate_smart_target(d, ai_sig):
             return ma20, "20일선 부근 GTC"
         else:
             return bb_lower, "20선 하회 (볼린저하단 GTC)"
-    elif "바닥 줍줍" in ai_sig: 
+    elif "Value 후보" in ai_sig:
         return bb_lower, "볼린저 하단 GTC"
     elif "과매수"   in ai_sig: 
         return bb_upper,  "볼린저 상단"

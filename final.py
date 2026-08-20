@@ -36,6 +36,11 @@ from regime_playbook import (
     classify_market_regime,
     run_regime_backtest,
 )
+from value_scout import (
+    evaluate_scout_candidate,
+    evaluate_scout_market_gate,
+    score_scout_fundamentals,
+)
 from data_loader import (
     get_real_cnn_fg,
     get_macro_charts, 
@@ -71,6 +76,7 @@ try:
         calculate_recovery_confirmation,
         calculate_macro_risk_gauge,
         calculate_cashflow_signal,
+        evaluate_market_execution_quality,
         calculate_regime_classification,
         get_strategic_advice,
         run_historical_backtest,
@@ -114,6 +120,8 @@ st.markdown("""
 # session_state 초기화 및 동기화 콜백
 if 'foreign_futures' not in st.session_state:
     st.session_state['foreign_futures'] = 0
+if 'futures_confirmed_main' not in st.session_state:
+    st.session_state['futures_confirmed_main'] = False
 if "account_total_assets" not in st.session_state:
     st.session_state["account_total_assets"] = 5000
 if "account_kr_equity" not in st.session_state:
@@ -419,7 +427,7 @@ def color_df(val):
             num = float(val.replace('%','').replace('+',''))
             return 'color: #ff4b4b' if num > 0 else 'color: #0068c9' if num < 0 else ''
         except: pass
-    if any(x in val for x in ["🔥 바닥 줍줍","🚀 추세 탑승","🚀 텐배거","🟢 매수 기록", "🔥 기관 최선호 대장주"]):
+    if any(x in val for x in ["🟠 Value 후보","🚀 추세 탑승","🚀 텐배거","🟢 매수 기록", "🔥 기관 최선호 대장주"]):
         return 'background-color: #ffcccc; font-weight: bold; color: black'
     if any(x in val for x in ["🟢 얕은 눌림목","🌱 폭발적 성장","💪","📈 주도주", "🟢 안정형", "🌱 우량 고성장주"]):
         return 'background-color: #ccffcc; font-weight: bold; color: black'
@@ -555,6 +563,23 @@ market_regime = classify_market_regime(
     kospi_10y,
     bottom_score=kr_score,
 )
+kr_scout_market_gate = evaluate_scout_market_gate(
+    bottom_score=kr_score,
+    data_valid=not kospi_10y.empty,
+    falling_knife=(
+        "칼날" in str(kr_verdict)
+        or bool(market_regime.get("panic_freeze"))
+    ),
+    systemic_risk=kr_danger >= 3,
+    trend_confirmed=market_regime.get("code") in {"BOTTOM_RECOVERY", "UPTREND"},
+)
+us_scout_market_gate = evaluate_scout_market_gate(
+    bottom_score=us_score,
+    data_valid=False,
+    falling_knife=False,
+    systemic_risk=False,
+    trend_confirmed=False,
+)
 
 # 미국 리스크 레이더 및 반등 신뢰도 글로벌 사전 계산 (1번 탭의 복사용 프롬프트 등에서 호출하기 위함)
 us_rec_verdict, us_rec_signals, us_rec_score = calculate_recovery_confirmation(rsp_10y, spy_10y, hyg_10y, ief_10y)
@@ -595,9 +620,16 @@ with tab_orion_kr:
         f"<div style='background:{adv_color}22; border-left: 8px solid {adv_color}; "
         f"padding:20px; border-radius:10px; margin-bottom:20px;'>"
         f"<h2 style='margin-top:0; color:{adv_color};'>{adv_head}</h2>"
-        f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>위험도 {kr_danger}점 · 바닥확률 {kr_score}% · 매크로안전도 {kr_macro_score}점 · {kr_phase}</p>"
+        f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>위험도 {kr_danger}점 · 바닥점수 {kr_score}점 · 매크로안전도 {kr_macro_score}점 · {kr_phase}</p>"
         f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in adv_actions]) + "</ul>"
         f"</div>", unsafe_allow_html=True
+    )
+
+    st.markdown("#### 1층 · Value Accumulation / Scout")
+    st.info(
+        f"**{kr_scout_market_gate['label']}** — {kr_scout_market_gate['reason']}\n\n"
+        "Scout는 본대 GO를 대신하지 않습니다. 시장 게이트가 열려도 종목별 낙폭·펀더멘털·과열 여부를 "
+        "다시 통과해야 하며, 실제 판정은 종목 발굴 탭의 Shadow 표에서 확인합니다."
     )
 
     st.divider()
@@ -783,14 +815,35 @@ with tab_orion_kr:
             
     with c_flow:
         st.markdown("#### Step 2: 💸 자금흐름 강도 (Flow Signal)")
-        
-        # 수동 입력 폼
+
+        # 파생 데이터는 직접 확인한 경우에만 보조 확인값으로 사용한다.
         f_col1, f_col2 = st.columns(2)
         with f_col1:
-            foreign_futures = st.number_input("① 외국인 선물 순매수 (계약)", step=100, key="sniper_futures", on_change=sync_futures_sniper)
+            foreign_futures = st.number_input(
+                "① 외국인 선물 순매수 (계약)",
+                step=100,
+                key="sniper_futures",
+                on_change=sync_futures_sniper,
+                help="모르면 0을 입력하지 말고 아래 확인란을 해제하세요. 미확인은 점수에서 제외되며 매수를 차단하지 않습니다.",
+            )
         with f_col2:
-            oi_trend = st.radio("② 선물 미결제약정", ["증가 추세", "감소/정체"], index=1)
-            
+            futures_confirmed_main = st.checkbox(
+                "선물 수치를 오늘 최신값으로 확인함",
+                key="futures_confirmed_main",
+            )
+
+        oi_signal = st.selectbox(
+            "② 선물 가격·미결제약정 조합",
+            [
+                "미확인",
+                "가격 상승 + 미결제약정 증가 (신규 롱 가능성)",
+                "가격 상승 + 미결제약정 감소 (숏커버 가능성)",
+                "가격 하락 + 미결제약정 증가 (신규 숏 가능성)",
+                "가격 하락 + 미결제약정 감소 (롱청산 가능성)",
+            ],
+            help="미결제약정 증가만으로는 상승·하락 방향을 알 수 없습니다. 선물 가격 방향을 함께 확인하세요.",
+        )
+
         st.markdown("<br>", unsafe_allow_html=True)
         save_col1, save_col2 = st.columns([2, 1])
         with save_col1:
@@ -801,8 +854,18 @@ with tab_orion_kr:
                 wdo = st.number_input("수동 경고일수 (-1: 자동)", min_value=-1, max_value=5, value=-1, step=1)
                 override_val = wdo if wdo != -1 else None
 
-        kr_flow_score, kr_flow_status, kr_flow_details = calculate_cashflow_signal(foreign_futures, oi_trend, rsp_change_pct, kospi_10y)
-        
+        market_internals = get_intraday_market_internals()
+        foreign_cashflow = summary_dict.get("Foreigner_raw") if summary_dict.get("flow_valid", False) else None
+        foreign_futures_signal = foreign_futures if futures_confirmed_main else None
+        kr_flow_score, kr_flow_status, kr_flow_details = calculate_cashflow_signal(
+            foreign_futures=foreign_futures_signal,
+            oi_signal=oi_signal,
+            kospi_hist=kospi_10y,
+            foreign_cashflow=foreign_cashflow,
+            market_breadth=market_internals,
+            rsp_change_pct=rsp_change_pct,
+        )
+
         st.markdown(f"**상태:** {kr_flow_status}")
         for icon, msg in kr_flow_details:
             st.write(f"{icon} {msg}")
@@ -819,12 +882,29 @@ with tab_orion_kr:
         except (KeyError, TypeError, ValueError):
             kospi_above_ma20 = False
 
+    execution_quality = evaluate_market_execution_quality(kospi_10y)
+    breadth_adr = market_internals.get("adr") if isinstance(market_internals, dict) else None
+    layer_value, layer_trend, layer_execution = st.columns(3)
+    layer_value.metric("구조적 가치", f"바닥점수 {kr_score}점", f"위험도 {kr_danger}점")
+    layer_trend.metric(
+        "추세 확인",
+        "20일선 회복" if kospi_above_ma20 else "20일선 미회복",
+        f"자금흐름 {kr_flow_score}점 | ADR {breadth_adr:.2f}" if breadth_adr is not None else f"자금흐름 {kr_flow_score}점 | ADR 미확인",
+    )
+    layer_execution.metric(
+        "당일 체결",
+        execution_quality["label"],
+        "다음 거래일 확인" if execution_quality["defer_new_order"] else "다음 거래일 분할 검토",
+    )
+    st.caption(execution_quality["reason"])
+
     regime, action, r_color = calculate_regime_classification(
         kr_macro_score,
         kr_flow_score,
         kospi_above_ma20,
         warning_days_override=override_val,
         save_state=save_regime,
+        execution_quality=execution_quality,
     )
     
     st.markdown(
@@ -871,6 +951,8 @@ with tab_orion_kr:
     kospi_status_str = ("안착 완료" if is_above else f"미안착 (이격: {gap:+,.2f}p)") if 'is_above' in locals() and 'gap' in locals() else "N/A"
     
     rsp_val_str = f"{rsp_change_pct:+.2f}%" if rsp_change_pct is not None else "N/A"
+    foreign_futures_prompt = f"{foreign_futures:+,.0f}계약" if futures_confirmed_main else "미확인 (점수 제외)"
+    breadth_prompt = f"ADR {breadth_adr:.2f}" if breadth_adr is not None else "미확인"
 
     # 프롬프트 조립
     upcoming_events_str = calendar_manager.get_upcoming_events_string()
@@ -880,11 +962,12 @@ with tab_orion_kr:
 [알고리즘 판정 결과]
 - 국면 판정: {adv_head}
 - 위험도 점수: 한국 {kr_danger}점 / 미국 {us_danger}점
-- 바닥 점수: 한국 {kr_score}% / 미국 {us_score}%
+- 바닥 점수: 한국 {kr_score}점 / 미국 {us_score}점
 - 현재 국면: 한국 {kr_phase} / 미국 {us_phase}
 - 매크로 점수: 한국 {kr_macro_score}점
 - 자금흐름 점수: 한국 {kr_flow_score}점
 - 통합 국면: {regime}
+- 당일 체결 품질: {execution_quality['label']} — {execution_quality['reason']}
 
 [시장 거시 지표 및 수급 (글로벌 펀더멘털 & 로컬 수급)]
 - 🦅 미국 장단기 금리차 (10Y-3M): {ai_yield_spread} (경기침체/유동성 선행지표)
@@ -896,7 +979,9 @@ with tab_orion_kr:
 - 🐯 한국 VKOSPI 현재: {ai_vkospi_val} (한국 기관/외인 파생 하락 헷지 팽창도)
 - 🐯 외국인 KOSPI 현물 순매수: {summary_dict.get('Foreigner', 'N/A') if 'summary_dict' in locals() else 'N/A'}
 - 🐯 기관 KOSPI 현물 순매수: {summary_dict.get('Institutional', 'N/A') if 'summary_dict' in locals() else 'N/A'}
-- 🐯 외국인 KOSPI 선물 순매수: {foreign_futures}계약 (방향성 선행지표)
+- 🐯 한국 시장 폭: {breadth_prompt} (상승/하락 종목 비율)
+- 🐯 외국인 KOSPI 선물 순매수: {foreign_futures_prompt} (현물 헤지 가능성이 있어 보조 확인용)
+- 🐯 선물 가격·미결제약정: {oi_signal}
 - 🐯 KOSPI 현재가: {kospi_str}
 - 🐯 KOSPI 5일 이평선 안착 상태: {kospi_status_str}
 
@@ -990,7 +1075,7 @@ with tab_orion_kr:
 {thread_indicators}
 
 [바닥/반등 분석]
-- 한국 바닥 확률: {kr_score}% | 미국 바닥 확률: {us_score}%
+- 한국 바닥점수: {kr_score}점 | 미국 바닥점수: {us_score}점
 - 통합 국면: {regime}
 - 반등 신뢰도 (미국): {us_rec_score}/100점
 
@@ -1445,6 +1530,13 @@ with tab_orion_us:
         flow_is_stale=us_flow_snapshot.get("is_stale", True),
         environment_score=final_us_score,
     )
+    us_scout_market_gate = evaluate_scout_market_gate(
+        bottom_score=us_score,
+        data_valid=final_us_phase != "DATA_ERROR" and not spy_10y.empty,
+        falling_knife=entry_state == "FALLING_KNIFE_VETO" or "칼날" in str(us_verdict),
+        systemic_risk=entry_state in {"DATA_VETO", "CREDIT_STRESS_VETO"},
+        trend_confirmed=entry_state in {"STARTER_GO_5", "STARTER_GO_10"},
+    )
 
     if entry_state == "STARTER_GO_10":
         decision_head = "🟢 10% 선발대 주문 허가"
@@ -1469,6 +1561,12 @@ with tab_orion_us:
         f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>환경 스코어 {final_us_score:.1f}점 · {final_us_phase}</p>"
         f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in decision_actions]) + "</ul>"
         f"</div>", unsafe_allow_html=True
+    )
+
+    st.markdown("#### 1층 · Value Accumulation / Scout")
+    st.info(
+        f"**{us_scout_market_gate['label']}** — {us_scout_market_gate['reason']}\n\n"
+        "미국 STARTER_GO가 확인되면 Scout 단계는 종료되고 기존 누적 진입 규칙으로 넘어갑니다."
     )
 
     if entry_state == "STARTER_GO_10":
@@ -1663,6 +1761,24 @@ with tab_radar:
     c1, c2 = st.columns(2)
     us_input = c1.text_input("🦅 미국 주식", "TSMC, 브로드컴, 버티브")
     kr_input = c2.text_input("🐯 한국 주식", "LS ELECTRIC")
+    with st.expander("🧪 Scout Shadow 비중 설정", expanded=False):
+        scout_col1, scout_col2, scout_col3 = st.columns(3)
+        scout_total_assets = scout_col1.number_input(
+            "총 투자자산 (만원)", min_value=0.0, value=5000.0, step=100.0,
+            key="scout_total_assets",
+        )
+        scout_target_weight = scout_col2.number_input(
+            "후보별 목표비중 (%)", min_value=1.0, max_value=100.0, value=10.0, step=1.0,
+            key="scout_target_weight",
+        )
+        scout_aggregate_weight = scout_col3.number_input(
+            "현재 전체 Scout 비중 (%)", min_value=0.0, max_value=5.0, value=0.0, step=0.5,
+            key="scout_aggregate_weight",
+        )
+        st.caption(
+            "실제 주문을 만들지 않는 Shadow 판정입니다. 후보별 기존 Scout는 0%로 가정하며, "
+            "여러 후보를 동시에 사더라도 전체 합계는 총자산 5%p를 넘길 수 없습니다."
+        )
     krx_status = get_krx_mapping_status()
     if krx_status["available"]:
         st.caption(
@@ -1706,7 +1822,7 @@ with tab_radar:
         st.warning(f"⚠️ 데이터 조회 실패 (오타 확인): {', '.join(failed_queries)}")
 
     if all_data:
-        signal_rows, tech_rows, fin_rows, risk_rows = [], [], [], []
+        signal_rows, scout_rows, tech_rows, fin_rows, risk_rows = [], [], [], [], []
         insider_blocks = []
 
         for d in all_data:
@@ -1723,6 +1839,39 @@ with tab_radar:
                 "현재가":      curr_price_str,
                 "등락률":      fmt_change(d.get("Change")),
                 "시가총액":    fmt_mcap(d.get("MarketCap"), d["Region"]),
+            })
+
+            scout_market_gate = (
+                kr_scout_market_gate if d["Region"] == "한국" else us_scout_market_gate
+            )
+            scout_decision = evaluate_scout_candidate(
+                d,
+                scout_market_gate,
+                target_weight_pct=scout_target_weight,
+                aggregate_scout_pct=scout_aggregate_weight,
+                total_assets=scout_total_assets,
+            )
+            scout_amount = (
+                f"{scout_decision['max_order_amount']:,.0f}만원"
+                if scout_decision.get("allowed") and scout_decision.get("max_order_amount") is not None
+                else "0원"
+            )
+            scout_rows.append({
+                "종목": d["Name"],
+                "시장 게이트": scout_market_gate["label"],
+                "Shadow 판정": scout_decision["label"],
+                "52주 DD": (
+                    f"{scout_decision['drawdown_pct']:.1f}%"
+                    if scout_decision.get("drawdown_pct") is not None else "N/A"
+                ),
+                "펀더멘털": (
+                    "분산 ETF"
+                    if scout_decision["asset_type"] == "broad_etf"
+                    else scout_decision["fundamentals"]["label"]
+                ),
+                "최대 신규비중": f"{scout_decision['max_new_weight_pct']:.1f}%p",
+                "최대 금액": scout_amount,
+                "판단 이유": scout_decision["reason"],
             })
 
             rs_txt = relative_strength_label(d.get("RSI_14"), spy_rsi_val)
@@ -1795,6 +1944,17 @@ with tab_radar:
             use_container_width=True
         )
 
+        st.markdown("#### 🧪 1-1. Value Accumulation / Scout Shadow 판정")
+        st.dataframe(
+            pd.DataFrame(scout_rows).set_index("종목"),
+            use_container_width=True,
+        )
+        st.caption(
+            "허용 조건: 시장 바닥점수 80점 이상 · 낙하 칼날/시스템 위험 없음 · "
+            "개별주 52주 DD -25% 이하(분산 ETF -15%) · 펀더멘털 4/5 이상 · 과열 아님. "
+            "종목당 목표비중의 20%와 총자산 2%p 중 작은 값, 전체 Scout 5%p가 상한입니다."
+        )
+
         st.markdown("#### 📈 2. 기술적 지표 (상대강도 + 멀티RSI + 52주 위치)")
         st.dataframe(
             pd.DataFrame(tech_rows).set_index("종목").style.map(
@@ -1839,7 +1999,7 @@ with tab_radar:
             st.info(f"**{d['Name']}** : {interpretation}")
 
 with tab_radar: # Merged AI Report
-    st.subheader("🌐 글로벌 매크로 및 시장 심리 (진바닥 & 반등 신뢰도 점수)")
+    st.subheader("🌐 글로벌 매크로 및 시장 심리 (바닥후보 & 반등 신뢰도 점수)")
 
     vix_10y = macro_charts.get("vix_10y", pd.DataFrame())
     vix3m_10y = macro_charts.get("vix3m_10y", pd.DataFrame())
@@ -1960,10 +2120,10 @@ with tab_radar: # Merged AI Report
 
     b_col1, b_col2 = st.columns(2)
     with b_col1:
-        st.markdown(f"**🦅 미국 진바닥 확률 (US Market)**")
+        st.markdown(f"**🦅 미국 바닥점수 (US Market)**")
         st.markdown(
             f"<div style='text-align:center; padding:20px; border-radius:10px; border:2px solid {us_color}; margin-bottom: 10px;'>"
-            f"<h1 style='margin:0; font-size:3em; color:{us_color};'>{us_score}%</h1>"
+            f"<h1 style='margin:0; font-size:3em; color:{us_color};'>{us_score}점</h1>"
             f"<h4 style='margin:0;'>{us_verdict}</h4>"
             f"<p style='margin-top:15px; font-size:18px; font-weight:bold; color:#555;'>현재 국면: {us_phase}</p>"
             f"</div>", unsafe_allow_html=True
@@ -1972,10 +2132,10 @@ with tab_radar: # Merged AI Report
             for detail in us_details: st.markdown(f"- {detail}")
 
     with b_col2:
-        st.markdown(f"**🐯 한국 진바닥 확률 (KOSPI)**")
+        st.markdown(f"**🐯 한국 바닥점수 (KOSPI)**")
         st.markdown(
             f"<div style='text-align:center; padding:20px; border-radius:10px; border:2px solid {kr_color}; margin-bottom: 10px;'>"
-            f"<h1 style='margin:0; font-size:3em; color:{kr_color};'>{kr_score}%</h1>"
+            f"<h1 style='margin:0; font-size:3em; color:{kr_color};'>{kr_score}점</h1>"
             f"<h4 style='margin:0;'>{kr_verdict}</h4>"
             f"<p style='margin-top:15px; font-size:18px; font-weight:bold; color:#555;'>현재 국면: {kr_phase}</p>"
             f"</div>", unsafe_allow_html=True
@@ -2029,7 +2189,7 @@ with tab_radar: # Merged AI Report
             f"padding:15px; border-radius:8px; font-weight:bold; font-size:1.05em; margin-bottom:10px;'>"
             f"🦅 {us_adv_head}</div>", unsafe_allow_html=True
         )
-        st.caption(f"판단 근거: 위험 {us_danger}점 · 바닥 {us_score}% · 반등 신뢰도 {us_rec_score} · {us_phase}")
+        st.caption(f"판단 근거: 위험 {us_danger}점 · 바닥 {us_score}점 · 반등 신뢰도 {us_rec_score} · {us_phase}")
         for act in us_adv_actions:
             st.markdown(f"- {act}")
 
@@ -2039,7 +2199,7 @@ with tab_radar: # Merged AI Report
             f"padding:15px; border-radius:8px; font-weight:bold; font-size:1.05em; margin-bottom:10px;'>"
             f"🐯 {kr_adv_head}</div>", unsafe_allow_html=True
         )
-        st.caption(f"판단 근거: 위험 {kr_danger}점 · 바닥 {kr_score}% · 매크로 안전도 {kr_macro_score} · {kr_phase}")
+        st.caption(f"판단 근거: 위험 {kr_danger}점 · 바닥 {kr_score}점 · 매크로 안전도 {kr_macro_score} · {kr_phase}")
         for act in kr_adv_actions:
             st.markdown(f"- {act}")
 
@@ -2096,7 +2256,7 @@ with tab_radar: # Merged AI Report
                     bt_col1.info("과거 10년간 70점 이상 달성 없음")
 
                 stat_50 = bt_us["50~69점 (분할 매수)"]
-                bt_col2.markdown("**🟢 50~69점 (분할 매수 구간)**")
+                bt_col2.markdown("**🟢 50~69점 (바닥 후보 관찰)**")
                 if stat_50["발생 횟수"] > 0:
                     bt_col2.markdown(f"- 시그널 발생: 과거 10년간 **{stat_50['발생 횟수']}일**")
                     bt_col2.markdown(f"- 평균 3개월 수익률: **+{stat_50['평균 3M 수익률']:.2f}%**")
@@ -2124,7 +2284,7 @@ with tab_radar: # Merged AI Report
                     st.altair_chart(chart, use_container_width=True)
                     st.caption(
                         "🟨 노란 영역 = 바닥 점수 / 🔴 빨간 선 = 고점 대비 낙폭. "
-                        "점수가 50 이상으로 치솟는 시점 = 역사적 매수 기회 (2018년 말, 2020년 코로나, 2022년 바닥 확인). "
+                        "점수가 50 이상으로 치솟는 시점 = 역사적으로 관찰 가치가 높았던 구간. "
                         "낙폭이 깊어지는데 점수가 함께 올라가는지가 모델 건전성의 핵심입니다."
                     )
             else:
@@ -2161,7 +2321,7 @@ with tab_radar: # Merged AI Report
                     bt_col1.info("과거 10년간 70점 이상 달성 없음")
 
                 stat_50 = bt_kr["50~69점 (분할 매수)"]
-                bt_col2.markdown("**🟢 50~69점 (분할 매수 구간)**")
+                bt_col2.markdown("**🟢 50~69점 (바닥 후보 관찰)**")
                 if stat_50["발생 횟수"] > 0:
                     bt_col2.markdown(f"- 시그널 발생: 과거 10년간 **{stat_50['발생 횟수']}일**")
                     bt_col2.markdown(f"- 평균 3개월 수익률: **+{stat_50['평균 3M 수익률']:.2f}%**")
@@ -2353,7 +2513,7 @@ with tab_radar:  # 🚀 오늘의 텐배거 레이더
                 st.warning("⚠️ 현재 조건(지하실 역추세 및 실적/마진 기준)을 통과한 진성 우량주가 이 섹터에 존재하지 않습니다.")
 
 with tab_radar: # Merged AI Report  # 🤖 AI 참모 리포트
-    st.subheader("🤖 AI 참모 전용 구조화 리포트 v23.0 (진바닥 판독기 연동)")
+    st.subheader("🤖 AI 참모 전용 구조화 리포트 v23.0 (바닥후보 판독기 연동)")
     st.caption("아래 텍스트를 복사하여 ChatGPT, Claude, Gemini 등에 붙여넣고 심층 분석을 받아보세요.")
 
     if not all_data:
@@ -2369,9 +2529,9 @@ with tab_radar: # Merged AI Report  # 🤖 AI 참모 리포트
         f"- 한국 VKOSPI (파생 헷지): {ai_vkospi_val}",
         "",
         "【시장 국면 & 시스템 전략 제언】",
-        f"- 🦅 미국: {us_phase} | 위험 탐지 {us_danger}점 | 진바닥 확률 {us_score}% | 반등 신뢰도 {us_rec_score}/100",
+        f"- 🦅 미국: {us_phase} | 위험 탐지 {us_danger}점 | 바닥점수 {us_score}점 | 반등 신뢰도 {us_rec_score}/100",
         f"  → 시스템 제언: {us_adv_head}",
-        f"- 🐯 한국: {kr_phase} | 위험 탐지 {kr_danger}점 | 진바닥 확률 {kr_score}% | 매크로 안전도 {kr_macro_score}/100",
+        f"- 🐯 한국: {kr_phase} | 위험 탐지 {kr_danger}점 | 바닥점수 {kr_score}점 | 매크로 안전도 {kr_macro_score}/100",
         f"  → 시스템 제언: {kr_adv_head}",
         "",
         "【스캔 종목 데이터】"
@@ -2428,7 +2588,7 @@ with tab_radar: # Merged AI Report  # 🤖 AI 참모 리포트
         "",
         "4. [기술적 타점 분석 및 최종 매매 시나리오]",
         "   - RSI 멀티타임프레임과 52주 위치, 시장대비 강도를 종합해 현재 가장 매수 신뢰도가 높은 종목을 선정해 줘.",
-        "   - '위험 점수'와 '진바닥 확률', '반등 신뢰도' 등 매크로 지표를 고려해 포트폴리오 비중(예: ETF 절반 + 개별 우량주 절반) 배분 전략을 제시해 줘.",
+        "   - '위험 점수'와 '바닥점수', '반등 신뢰도' 등 매크로 지표를 고려해 포트폴리오 비중(예: ETF 절반 + 개별 우량주 절반) 배분 전략을 제시해 줘.",
         "   - 현재 시장 심리(F&G, SPY RSI)를 바탕으로 지금 당장 '적극 매수', '관망', '비중 축소' 해야 할 종목들을 분류하고 구체적인 액션 플랜을 제시해 줘."
     ]
     st.code("\n".join(lines), language="text")
@@ -2470,23 +2630,7 @@ with tab_port:
         return items
 
     def portfolio_fundamental_score(stock):
-        score = 0
-        rev_g = float(stock.get("Rev_Growth") or 0)
-        op_m = float(stock.get("Op_Margin") or 0)
-        roe_v = float(stock.get("ROE") or 0)
-        peg_v = float(stock.get("PEG") or 99)
-        per_v = stock.get("PER")
-        if rev_g >= 0.20:
-            score += 1
-        if op_m >= 0.10 or stock.get("Is_Turnaround", False):
-            score += 1
-        if roe_v >= 0.05:
-            score += 1
-        if 0 < peg_v <= 1.5:
-            score += 1
-        if per_v and float(per_v) < 30:
-            score += 1
-        return score
+        return score_scout_fundamentals(stock)["score"]
 
     port_items = (
         parse_portfolio_input(port_us_raw, "미국") +
@@ -3443,7 +3587,7 @@ with tab_hedging:
     us_score = locals().get('us_score', 0)
     if us_score >= 70:
         exit_score += 15
-        exit_details.append(f"미국 진바닥 확률 {us_score}% — 글로벌 동반 반등 가능성. 곱버스 청산 고려 (+15)")
+        exit_details.append(f"미국 바닥점수 {us_score}점 — 글로벌 동반 반등 가능성. 곱버스 청산 고려 (+15)")
 
     exit_score = min(exit_score, 100)
 

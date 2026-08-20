@@ -12,6 +12,8 @@
 - 한국·미국 ORION Signal과 거시 위험 점검
 - 종목 발굴, AI 리포트, 시장 일정
 - 폭락·반등·상승·횡보 국면별 주식·현금 운용 가이드
+- 본대 추세확인과 분리된 Value Accumulation / Scout Shadow 판정
+- 구조적 가치·추세·당일 체결 품질을 분리한 한국 시장 실행 가드
 - 보유종목의 시장 국면·추세·펀더멘탈 기반 부분축소 검토
 - 인버스 전략의 별도 시간순 검증 및 안전 차단
 
@@ -22,6 +24,8 @@
 | [AI_CONTEXT.md](AI_CONTEXT.md) | 새 AI 작업이 시작될 때 읽는 현재 설계·원칙 |
 | [CHANGELOG.md](CHANGELOG.md) | 날짜별 코드·기능 변경 이력 |
 | [포트폴리오 로그 템플릿](docs/templates/investment_log_template.md) | 날짜별 계좌 스냅샷 작성 양식 |
+| [Value Scout 운용 규칙](docs/VALUE_SCOUT_POLICY.md) | 시장 게이트·종목 적격성·비중·무효화 기준 |
+| [한국 시장 체결 품질 정책](docs/MARKET_EXECUTION_POLICY.md) | 외국인 선물·시장 폭·종가 돌파 실패의 해석과 주문 유예 기준 |
 
 ## 포트폴리오 로그
 

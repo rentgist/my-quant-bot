@@ -628,6 +628,10 @@ def get_stock_data(query, is_kr=False, fast_mode=False):
         # yfinance .info Rate Limit (429) 우회용 2차 백업 (Financial Statements 기반 자동 복구)
         financials_loaded = False
         inc_fallback, bs_fallback, cf_fallback = None, None, None
+        # ETF처럼 .info는 정상이어도 현금흐름 항목이 없는 자산은 아래
+        # FCF/EV 폴백을 지나간다. 이때 지역변수가 생성되지 않아 조회 전체가
+        # 실패하지 않도록 빈 재무제표 컨테이너를 먼저 연결한다.
+        inc, bs, cf = inc_fallback, bs_fallback, cf_fallback
         if not info or len(info) <= 2:
             try:
                 fast = tk.fast_info
