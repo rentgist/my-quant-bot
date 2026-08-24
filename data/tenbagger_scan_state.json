@@ -2,10 +2,11 @@
   "schema_version": 1,
   "cycle_id": "2026-08-21",
   "started_at": "2026-08-21T11:01:38+09:00",
-  "updated_at": "2026-08-21T11:01:40+09:00",
-  "next_sector_index": 1,
+  "updated_at": "2026-08-24T11:01:04+09:00",
+  "next_sector_index": 2,
   "completed_sectors": [
-    "🇺🇸 미국 AI & 클라우드"
+    "🇺🇸 미국 AI & 클라우드",
+    "🇺🇸 미국 혁신성장"
   ],
   "sector_results": {
     "🇺🇸 미국 AI & 클라우드": {
@@ -160,6 +161,86 @@
             "cautions": [
               "영업적자"
             ]
+          }
+        }
+      ]
+    },
+    "🇺🇸 미국 혁신성장": {
+      "sector": "🇺🇸 미국 혁신성장",
+      "scanned_count": 10,
+      "success_count": 10,
+      "failures": [],
+      "candidates": [
+        {
+          "Name": "SOFI",
+          "Region": "미국",
+          "_ticker": "SOFI",
+          "Price": 18.91,
+          "Change": 5.52,
+          "MarketCap": 24423593984,
+          "Rev_Growth": 0.426,
+          "Earnings_Growth": 0.404,
+          "Op_Margin": 0.16956,
+          "ROE": 0.07095,
+          "Forward_PER": 23.032887,
+          "PEG": 0.9083,
+          "FCF_Yield": null,
+          "ROIC": null,
+          "Rule_of_40": 59.556,
+          "W52_pos": 22.0,
+          "MA20_gap": 6.51,
+          "Dilution_YoY": null,
+          "Price_As_Of": null,
+          "Price_Source": null,
+          "sector": "🇺🇸 미국 혁신성장",
+          "evaluation": {
+            "score": 68,
+            "quality_score": 53,
+            "timing_score": 15,
+            "growth_score": 25,
+            "grade": "관찰",
+            "eligible": true,
+            "quality_pass": true,
+            "timing_status": "ENTRY_REVIEW",
+            "data_coverage": 1.0,
+            "vetoes": [],
+            "cautions": []
+          }
+        },
+        {
+          "Name": "HOOD",
+          "Region": "미국",
+          "_ticker": "HOOD",
+          "Price": 108.13,
+          "Change": 13.7,
+          "MarketCap": 97217765376,
+          "Rev_Growth": 0.323,
+          "Earnings_Growth": 0.476,
+          "Op_Margin": 0.43884,
+          "ROE": 0.23618999,
+          "Forward_PER": 33.29156,
+          "PEG": 2.4543,
+          "FCF_Yield": null,
+          "ROIC": null,
+          "Rule_of_40": 76.18400000000001,
+          "W52_pos": 49.2,
+          "MA20_gap": 15.18,
+          "Dilution_YoY": null,
+          "Price_As_Of": null,
+          "Price_Source": null,
+          "sector": "🇺🇸 미국 혁신성장",
+          "evaluation": {
+            "score": 67,
+            "quality_score": 57,
+            "timing_score": 10,
+            "growth_score": 25,
+            "grade": "관찰",
+            "eligible": true,
+            "quality_pass": true,
+            "timing_status": "TREND_WAIT",
+            "data_coverage": 1.0,
+            "vetoes": [],
+            "cautions": []
           }
         }
       ]
