@@ -2,7 +2,7 @@
   "schema_version": 1,
   "cycle_id": "2026-08-21",
   "started_at": "2026-08-21T11:01:38+09:00",
-  "updated_at": "2026-08-24T11:01:04+09:00",
+  "updated_at": "2026-08-25T10:56:04+09:00",
   "next_sector_index": 2,
   "completed_sectors": [
     "🇺🇸 미국 AI & 클라우드",
@@ -247,5 +247,6 @@
     }
   },
   "cycle_complete": false,
-  "finalized_at": null
+  "finalized_at": null,
+  "last_error": "🇰🇷 한국 반도체 소부장: 데이터 성공률 50% 미만, 다음 실행에서 재시도"
 }
