@@ -52,7 +52,7 @@ function Get-IssueField {
         [Parameter(Mandatory)][string]$Label
     )
 
-    $pattern = "(?ms)^###\\s+" + [regex]::Escape($Label) + "\\s*\\r?\\n(?<value>.*?)(?=^###\\s+|\\z)"
+    $pattern = "(?ms)^###\s+" + [regex]::Escape($Label) + "\s*\r?\n(?<value>.*?)(?=^###\s+|\z)"
     $matches = [regex]::Matches($Body, $pattern)
     if ($matches.Count -ne 1) {
         throw "Issue must contain exactly one '$Label' field."
@@ -456,3 +456,4 @@ finally {
     }
     $mutex.Dispose()
 }
+
