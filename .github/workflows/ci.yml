@@ -25,7 +25,7 @@ jobs:
               (Resolve-Path $file), [ref]$tokens, [ref]$errors
             )
             if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error "$file:$($_.Extent.StartLineNumber): $($_.Message)" }
+              $errors | ForEach-Object { Write-Error "${file}:$($_.Extent.StartLineNumber): $($_.Message)" }
               exit 1
             }
           }
