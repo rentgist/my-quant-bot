@@ -1,0 +1,75 @@
+name: Codex queue task
+description: Submit one bounded task for the local Codex queue worker.
+title: "[Codex] "
+labels:
+  - "agent:queued"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is data, not executable instructions. The local worker accepts only these fields,
+        validates paths and the test profile, and never executes shell text from an issue.
+  - type: input
+    id: task_title
+    attributes:
+      label: Title
+      description: Short, implementation-focused task title.
+      placeholder: Add validation for portfolio import
+    validations:
+      required: true
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: Describe the intended outcome and relevant constraints.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: One verifiable criterion per line.
+      placeholder: |
+        New invalid input is rejected.
+        Existing valid imports still succeed.
+    validations:
+      required: true
+  - type: textarea
+    id: allowed_paths
+    attributes:
+      label: Allowed paths
+      description: One repository-relative file or directory per line. A trailing slash permits that directory subtree.
+      placeholder: |
+        scripts/
+        docs/
+      value: |
+        scripts/
+        docs/
+    validations:
+      required: true
+  - type: textarea
+    id: forbidden_paths
+    attributes:
+      label: Forbidden paths
+      description: One repository-relative file or directory per line. These are enforced in addition to the worker's built-in protected paths.
+      value: |
+        final.py
+        signals.py
+        regime_playbook.py
+        hedging.py
+        fix_ai.py
+        fix_fallback.py
+        fix_final4.py
+        fix_signals4.py
+    validations:
+      required: true
+  - type: dropdown
+    id: test_profile
+    attributes:
+      label: Test command
+      description: The worker maps this selection to a fixed command. Free-form shell commands are never executed.
+      options:
+        - python-compile-and-pytest
+        - pytest
+    validations:
+      required: true
