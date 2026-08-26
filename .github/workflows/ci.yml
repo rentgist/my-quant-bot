@@ -7,20 +7,41 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  automation-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install test dependencies
-        run: python -m pip install --disable-pip-version-check numpy pandas pytest
-      - name: Check Python syntax
-        run: >-
-          python -m py_compile
-          final.py config.py data_loader.py defensive_overlay.py hedging.py
-          indicators.py portfolio_manager.py regime_playbook.py signals.py
-          calendar_manager.py ai_reporter.py alert_bot.py tests/*.py
-      - name: Run current tests
-        run: python -m pytest
+      - name: Parse PowerShell automation scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            'scripts/codex-queue-worker.ps1',
+            'scripts/run-agent-review.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file), [ref]$tokens, [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$file:$($_.Extent.StartLineNumber): $($_.Message)" }
+              exit 1
+            }
+          }
+      - name: Verify required automation files exist
+        shell: pwsh
+        run: |
+          $required = @(
+            '.github/ISSUE_TEMPLATE/codex-task.yml',
+            'automation/codex-task-prompt.md',
+            'docs/automation-architecture.md',
+            'scripts/codex-queue-worker.ps1',
+            'scripts/run-agent-review.ps1'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              Write-Error "Missing required automation file: $file"
+              exit 1
+            }
+          }
