@@ -186,10 +186,23 @@ function Invoke-CodexPrompt {
         [Parameter(Mandatory)][ValidateSet("workspace-write", "read-only")][string]$Sandbox
     )
 
-    Get-Content -LiteralPath $PromptPath -Raw |
-        & $CodexPath exec --cd $Path --sandbox $Sandbox - 1> $null 2> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Codex did not complete successfully. The dedicated worktree was preserved for diagnosis."
+    $codexExitCode = -1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Codex writes informational startup text to stderr on Windows.
+        # Windows PowerShell 5.1 can surface this as a native-command error.
+        # Judge success only by the native process exit code.
+        $ErrorActionPreference = "Continue"
+        Get-Content -LiteralPath $PromptPath -Raw |
+            & $CodexPath exec --cd $Path --sandbox $Sandbox - 1> $null 2> $null
+        $codexExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($codexExitCode -ne 0) {
+        throw "Codex did not complete successfully (exit code $codexExitCode). The dedicated worktree was preserved for diagnosis."
     }
 }
 
