@@ -220,7 +220,7 @@ try {
     }
 
     $ghPath = Resolve-RequiredCommand -Names @("gh.exe", "gh") -DisplayName "GitHub CLI"
-    $codexPath = Resolve-RequiredCommand -Names @("codex.cmd", "codex.exe", "codex") -DisplayName "Codex"
+    $codexPath = Resolve-RequiredCommand -Names @("codex.exe", "codex.cmd", "codex") -DisplayName "Codex"
 
     $queueJson = & $ghPath issue list --repo $Repository --label $QueueLabel --state open --limit 100 --json number,title,url
     if ($LASTEXITCODE -ne 0) {
@@ -456,4 +456,5 @@ finally {
     }
     $mutex.Dispose()
 }
+
 
