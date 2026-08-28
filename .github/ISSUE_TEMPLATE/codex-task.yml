@@ -71,5 +71,6 @@ body:
       options:
         - python-compile-and-pytest
         - pytest
+        - automation-smoke
     validations:
       required: true

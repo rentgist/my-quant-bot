@@ -4,7 +4,12 @@ param(
     [string]$QueueLabel = "agent:queued",
     [string]$BaseBranch = "main",
     [string]$WorktreeRoot,
-    [switch]$KeepWorktreeOnSuccess
+    [switch]$KeepWorktreeOnSuccess,
+    [ValidateRange(1, 10)]
+    [int]$MaxTaskAttempts = 3,
+    [string]$RunningLabel = "agent:running",
+    [string]$BlockedLabel = "agent:blocked",
+    [string]$DoneLabel = "agent:done"
 )
 
 Set-StrictMode -Version Latest
@@ -44,6 +49,90 @@ function Resolve-RequiredCommand {
     }
 
     throw "$DisplayName command was not found. No repository files were changed."
+}
+
+function Get-LifecycleStatePath {
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][int]$IssueNumber
+    )
+
+    return (Join-Path $Directory ("issue-{0}.json" -f $IssueNumber))
+}
+
+function Get-LifecycleState {
+    param([Parameter(Mandatory)][string]$StatePath)
+
+    if (-not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        return (Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json)
+    }
+    catch {
+        throw "The lifecycle state file '$StatePath' is invalid. It was preserved for diagnosis."
+    }
+}
+
+function Save-LifecycleState {
+    param(
+        [Parameter(Mandatory)][string]$StatePath,
+        [Parameter(Mandatory)][int]$IssueNumber,
+        [Parameter(Mandatory)][string]$BranchName,
+        [Parameter(Mandatory)][string]$WorktreePath,
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter(Mandatory)][string]$Phase,
+        [Parameter(Mandatory)][int]$Attempts,
+        [string]$FailureReason
+    )
+
+    $state = [ordered]@{
+        schemaVersion = 1
+        issueNumber = $IssueNumber
+        branchName = $BranchName
+        worktreePath = $WorktreePath
+        status = $Status
+        phase = $Phase
+        attempts = $Attempts
+        updatedAtUtc = [DateTime]::UtcNow.ToString("o")
+        failureReason = $FailureReason
+    }
+    Set-Content -LiteralPath $StatePath -Value ($state | ConvertTo-Json -Depth 3) -Encoding utf8
+}
+
+function Set-GitHubLifecycle {
+    param(
+        [Parameter(Mandatory)][string]$GhPath,
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][int]$IssueNumber,
+        [Parameter(Mandatory)][string]$FromLabel,
+        [Parameter(Mandatory)][string]$ToLabel,
+        [Parameter(Mandatory)][string]$StatusMessage
+    )
+
+    # Remote visibility is best-effort: a missing label or a temporary GitHub failure must not
+    # erase the durable local diagnostic state.
+    & $GhPath issue edit $IssueNumber --repo $Repository --remove-label $FromLabel --add-label $ToLabel 1> $null 2> $null
+    $labelUpdated = $LASTEXITCODE -eq 0
+    & $GhPath issue comment $IssueNumber --repo $Repository --body $StatusMessage 1> $null 2> $null
+    $commentCreated = $LASTEXITCODE -eq 0
+    if (-not $labelUpdated -or -not $commentCreated) {
+        Write-Warning "GitHub lifecycle update was incomplete; local lifecycle state remains authoritative for recovery."
+    }
+}
+
+function Test-TaskBranchHasCommit {
+    param(
+        [Parameter(Mandatory)][string]$WorktreePath,
+        [Parameter(Mandatory)][string]$BaseBranch
+    )
+
+    $count = (& git -C $WorktreePath rev-list --count "$BaseBranch..HEAD").Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not inspect the task branch while recovering lifecycle state."
+    }
+    return [int]$count -gt 0
 }
 
 function Get-IssueField {
@@ -177,7 +266,10 @@ function Invoke-TestProfile {
         elseif ($Profile -eq "automation-smoke") {
             $automationFiles = @(
                 (Join-Path $Path "scripts\codex-queue-worker.ps1"),
-                (Join-Path $Path "scripts\run-agent-review.ps1")
+                (Join-Path $Path "scripts\run-agent-review.ps1"),
+                (Join-Path $Path "scripts\run-codex-queue-scheduled.ps1"),
+                (Join-Path $Path "scripts\install-codex-queue-task.ps1"),
+                (Join-Path $Path "scripts\uninstall-codex-queue-task.ps1")
             )
 
             foreach ($file in $automationFiles) {
@@ -240,6 +332,15 @@ $hasMutex = $false
 $createdWorktree = $false
 $successful = $false
 $promptPath = $null
+$lifecycleStatePath = $null
+$lifecycleDirectory = $null
+$taskState = $null
+$taskAttempts = 0
+$issueNumber = $null
+$branchName = $null
+$worktreePath = $null
+$taskPhase = "not-started"
+$ghPath = $null
 
 try {
     $hasMutex = $mutex.WaitOne(0)
@@ -264,23 +365,57 @@ try {
     $ghPath = Resolve-RequiredCommand -Names @("gh.exe", "gh") -DisplayName "GitHub CLI"
     $codexPath = Resolve-RequiredCommand -Names @("codex.exe", "codex.cmd", "codex") -DisplayName "Codex"
 
+    if ([string]::IsNullOrWhiteSpace($WorktreeRoot)) {
+        $repositoryParent = Split-Path -Parent $repositoryRoot
+        $repositoryName = Split-Path -Leaf $repositoryRoot
+        $WorktreeRoot = Join-Path $repositoryParent "$repositoryName-agent-worktrees"
+    }
+    $WorktreeRoot = [System.IO.Path]::GetFullPath($WorktreeRoot)
+    $lifecycleDirectory = Join-Path $WorktreeRoot "lifecycle"
+    New-Item -ItemType Directory -Path $lifecycleDirectory -Force | Out-Null
+
     $queueJson = & $ghPath issue list --repo $Repository --label $QueueLabel --state open --limit 100 --json number,title,url
     if ($LASTEXITCODE -ne 0) {
         throw "Could not query the GitHub Issue queue."
     }
     $queuedIssues = @($queueJson | ConvertFrom-Json | Sort-Object number)
-    if ($queuedIssues.Count -eq 0) {
+    $runningJson = & $ghPath issue list --repo $Repository --label $RunningLabel --state open --limit 100 --json number,title,url
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not query running GitHub Issues for interruption recovery."
+    }
+    $runningIssues = @($runningJson | ConvertFrom-Json | Sort-Object number)
+    $recoverableIssues = @($runningIssues | Where-Object {
+        $candidateState = Get-LifecycleState -StatePath (Get-LifecycleStatePath -Directory $lifecycleDirectory -IssueNumber ([int]$_.number))
+        $null -ne $candidateState -and $candidateState.status -in @("running", "queued")
+    })
+    $orphanedRunningIssues = @($runningIssues | Where-Object {
+        $candidateState = Get-LifecycleState -StatePath (Get-LifecycleStatePath -Directory $lifecycleDirectory -IssueNumber ([int]$_.number))
+        $null -eq $candidateState
+    })
+    if ($recoverableIssues.Count -gt 0) {
+        $issueNumber = [int]$recoverableIssues[0].number
+        Write-Output "Recovering interrupted lifecycle for Issue #$issueNumber."
+    }
+    elseif ($orphanedRunningIssues.Count -gt 0) {
+        $issueNumber = [int]$orphanedRunningIssues[0].number
+        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage "Codex queue status: blocked (local recovery state is unavailable; no duplicate branch was created)."
+        throw "Issue #$issueNumber is marked running without local recovery state and was blocked safely."
+    }
+    elseif ($queuedIssues.Count -gt 0) {
+        $issueNumber = [int]$queuedIssues[0].number
+    }
+    else {
         Write-Output "No queued Issue found."
         exit 0
     }
-    $issueNumber = [int]$queuedIssues[0].number
     $issueJson = & $ghPath issue view $issueNumber --repo $Repository --json number,title,body,url,labels
     if ($LASTEXITCODE -ne 0) {
         throw "Could not read the selected GitHub Issue."
     }
     $issue = $issueJson | ConvertFrom-Json
-    if (-not (@($issue.labels | ForEach-Object name) -contains $QueueLabel)) {
-        throw "Selected Issue no longer has the queue label."
+    $issueLabels = @($issue.labels | ForEach-Object name)
+    if (-not ($issueLabels -contains $QueueLabel) -and -not ($issueLabels -contains $RunningLabel)) {
+        throw "Selected Issue no longer has a queue lifecycle label."
     }
 
     $taskTitle = Get-IssueField -Body $issue.body -Label "Title"
@@ -299,32 +434,66 @@ try {
     }
     $slug = $slug.Substring(0, [Math]::Min($slug.Length, 48))
     $branchName = "automation/$issueNumber-$slug"
-    & git -C $repositoryRoot show-ref --verify --quiet "refs/heads/$branchName"
-    if ($LASTEXITCODE -eq 0) {
-        throw "Branch '$branchName' already exists; refusing to reuse an existing task worktree."
-    }
-
-    if ([string]::IsNullOrWhiteSpace($WorktreeRoot)) {
-        $repositoryParent = Split-Path -Parent $repositoryRoot
-        $repositoryName = Split-Path -Leaf $repositoryRoot
-        $WorktreeRoot = Join-Path $repositoryParent "$repositoryName-agent-worktrees"
-    }
-    $WorktreeRoot = [System.IO.Path]::GetFullPath($WorktreeRoot)
     $worktreePath = Join-Path $WorktreeRoot "$issueNumber-$slug"
-    if (Test-Path -LiteralPath $worktreePath) {
-        throw "Dedicated worktree path already exists; refusing to reuse it."
+    $lifecycleStatePath = Get-LifecycleStatePath -Directory $lifecycleDirectory -IssueNumber $issueNumber
+    $taskState = Get-LifecycleState -StatePath $lifecycleStatePath
+    if ($null -ne $taskState) {
+        if ($taskState.issueNumber -ne $issueNumber -or $taskState.branchName -ne $branchName -or $taskState.worktreePath -ne $worktreePath) {
+            throw "Lifecycle state does not match the selected Issue. It was preserved for diagnosis."
+        }
+        if ($taskState.status -notin @("queued", "running", "blocked")) {
+            throw "Lifecycle state is not eligible for another worker attempt. It was preserved for diagnosis."
+        }
+        if ($taskState.status -eq "blocked") {
+            # Re-adding agent:queued is a deliberate human acknowledgement after a bounded retry cycle.
+            $taskAttempts = 1
+        }
+        else {
+            $taskAttempts = [int]$taskState.attempts + 1
+        }
     }
-    New-Item -ItemType Directory -Path $WorktreeRoot -Force | Out-Null
-    & git -C $repositoryRoot worktree add -b $branchName $worktreePath $BaseBranch
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not create the dedicated worktree."
+    else {
+        $taskAttempts = 1
     }
-    $createdWorktree = $true
+    if ($taskAttempts -gt $MaxTaskAttempts) {
+        $taskPhase = "retry-limit"
+        Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "blocked" -Phase "retry-limit" -Attempts $taskAttempts -FailureReason "Maximum automatic attempts reached."
+        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage "Codex queue status: blocked (automatic retry limit reached; diagnostics preserved locally)."
+        throw "Issue #$issueNumber reached the maximum of $MaxTaskAttempts attempts and was blocked."
+    }
 
-    $templatePath = Join-Path $repositoryRoot "automation\codex-task-prompt.md"
-    $template = Get-Content -LiteralPath $templatePath -Raw
-    $promptPath = (New-TemporaryFile).FullName
-    $validatedFields = @"
+    New-Item -ItemType Directory -Path $WorktreeRoot -Force | Out-Null
+    Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase "worktree-preparing" -Attempts $taskAttempts
+    Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $QueueLabel -ToLabel $RunningLabel -StatusMessage "Codex queue status: running (attempt $taskAttempts of $MaxTaskAttempts)."
+
+    if (-not (Test-Path -LiteralPath $worktreePath)) {
+        & git -C $repositoryRoot show-ref --verify --quiet "refs/heads/$branchName"
+        if ($LASTEXITCODE -eq 0) {
+            & git -C $repositoryRoot worktree add $worktreePath $branchName
+        }
+        else {
+            & git -C $repositoryRoot worktree add -b $branchName $worktreePath $BaseBranch
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not create or recover the dedicated worktree."
+        }
+        $createdWorktree = $true
+    }
+    $checkedOutBranch = (& git -C $worktreePath branch --show-current).Trim()
+    if ($LASTEXITCODE -ne 0 -or $checkedOutBranch -ne $branchName) {
+        throw "Dedicated worktree is not on the expected task branch. It was preserved for diagnosis."
+    }
+    $taskPhase = "worktree-ready"
+    Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
+
+    $testResultPath = Join-Path $WorktreeRoot "$issueNumber-test-result.txt"
+    $reviewResultPath = Join-Path $WorktreeRoot "$issueNumber-review.txt"
+    $taskAlreadyCommitted = Test-TaskBranchHasCommit -WorktreePath $worktreePath -BaseBranch $BaseBranch
+    if (-not $taskAlreadyCommitted) {
+        $templatePath = Join-Path $repositoryRoot "automation\codex-task-prompt.md"
+        $template = Get-Content -LiteralPath $templatePath -Raw
+        $promptPath = (New-TemporaryFile).FullName
+        $validatedFields = @"
 
 Issue number: $issueNumber
 Issue URL: $($issue.url)
@@ -343,28 +512,30 @@ $($forbiddenPaths -join "`n")
 
 Test profile: $testProfile
 "@
-    Set-Content -LiteralPath $promptPath -Value ($template + $validatedFields) -Encoding utf8
-    Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $promptPath -Path $worktreePath -Sandbox "workspace-write"
+        Set-Content -LiteralPath $promptPath -Value ($template + $validatedFields) -Encoding utf8
+        Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $promptPath -Path $worktreePath -Sandbox "workspace-write"
+        $taskPhase = "implemented"
+        Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
 
-    $effectiveForbiddenPaths = @($BuiltInForbiddenPaths + $forbiddenPaths | Select-Object -Unique)
-    $changedPaths = Get-ChangedPaths -Path $worktreePath
-    Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
+        $effectiveForbiddenPaths = @($BuiltInForbiddenPaths + $forbiddenPaths | Select-Object -Unique)
+        $changedPaths = Get-ChangedPaths -Path $worktreePath
+        Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
 
-    $testResultPath = Join-Path $WorktreeRoot "$issueNumber-test-result.txt"
-    if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
-        throw "Tests failed. Default policy forbids Draft PR creation after a failed test run."
-    }
+        if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
+            throw "Tests failed. Default policy forbids Draft PR creation after a failed test run."
+        }
+        $taskPhase = "tested"
+        Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
 
-    & git -C $worktreePath add -- @($changedPaths)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not stage validated worktree changes."
-    }
+        & git -C $worktreePath add -- @($changedPaths)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not stage validated worktree changes."
+        }
 
-    $reviewResultPath = Join-Path $WorktreeRoot "$issueNumber-review.txt"
-    $reviewScript = Join-Path $repositoryRoot "scripts\run-agent-review.ps1"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $reviewScript -WorktreePath $worktreePath -TestResultPath $testResultPath -ReviewOutputPath $reviewResultPath -BaseBranch $BaseBranch
-    $reviewExitCode = $LASTEXITCODE
-    if ($reviewExitCode -eq 10) {
+        $reviewScript = Join-Path $repositoryRoot "scripts\run-agent-review.ps1"
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $reviewScript -WorktreePath $worktreePath -TestResultPath $testResultPath -ReviewOutputPath $reviewResultPath -BaseBranch $BaseBranch
+        $reviewExitCode = $LASTEXITCODE
+        if ($reviewExitCode -eq 10) {
         $selfReviewPromptPath = $null
         try {
             $selfReviewPromptPath = (New-TemporaryFile).FullName
@@ -390,11 +561,11 @@ $stagedDiff
             }
         }
     }
-    elseif ($reviewExitCode -ne 0) {
+        elseif ($reviewExitCode -ne 0) {
         throw "Review script failed unexpectedly. Draft PR creation was blocked."
     }
 
-    if ($reviewExitCode -eq 0) {
+        if ($reviewExitCode -eq 0) {
         $reviewResolutionPromptPath = $null
         try {
             $reviewResolutionPromptPath = (New-TemporaryFile).FullName
@@ -431,28 +602,44 @@ $stagedDiff
         }
     }
 
-    # Re-stage only after enforcement, then re-run the fixed test profile so the evidence attached
-    # to the Draft PR always corresponds to the final staged diff.
-    $changedPaths = Get-ChangedPaths -Path $worktreePath
-    Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
-    & git -C $worktreePath add -- @($changedPaths)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not stage validated review changes."
+        # Re-stage only after enforcement, then re-run the fixed test profile so the evidence attached
+        # to the Draft PR always corresponds to the final staged diff.
+        $changedPaths = Get-ChangedPaths -Path $worktreePath
+        Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
+        & git -C $worktreePath add -- @($changedPaths)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not stage validated review changes."
+        }
+        if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
+            throw "Tests failed after review. Default policy forbids Draft PR creation."
+        }
+        $changedPaths = Get-ChangedPaths -Path $worktreePath
+        Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
+        $taskPhase = "verified"
+        Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
     }
-    if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
-        throw "Tests failed after review. Default policy forbids Draft PR creation."
+    else {
+        # A reboot may occur after the local commit but before push/PR creation. Re-test the exact
+        # committed tree and continue from that checkpoint without invoking Codex or creating another branch.
+        if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
+            throw "Recovered task commit failed its fixed test profile; Draft PR creation was blocked."
+        }
+        $taskPhase = "committed"
+        Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
     }
-    $changedPaths = Get-ChangedPaths -Path $worktreePath
-    Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
 
-    $gitUserName = (& git -C $worktreePath config user.name).Trim()
-    $gitUserEmail = (& git -C $worktreePath config user.email).Trim()
-    if ([string]::IsNullOrWhiteSpace($gitUserName) -or [string]::IsNullOrWhiteSpace($gitUserEmail)) {
-        throw "Git user.name and user.email must be configured before the worker can create its task commit."
-    }
-    & git -C $worktreePath commit -m "chore(automation): implement issue #$issueNumber" 1> $null 2> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not create the task commit."
+    if (-not $taskAlreadyCommitted) {
+        $gitUserName = (& git -C $worktreePath config user.name).Trim()
+        $gitUserEmail = (& git -C $worktreePath config user.email).Trim()
+        if ([string]::IsNullOrWhiteSpace($gitUserName) -or [string]::IsNullOrWhiteSpace($gitUserEmail)) {
+            throw "Git user.name and user.email must be configured before the worker can create its task commit."
+        }
+        & git -C $worktreePath commit -m "chore(automation): implement issue #$issueNumber" 1> $null 2> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not create the task commit."
+        }
+        $taskPhase = "committed"
+        Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
     }
     $gitPushExitCode = -1
     $previousErrorActionPreference = $ErrorActionPreference
@@ -470,10 +657,21 @@ $stagedDiff
     if ($gitPushExitCode -ne 0) {
         throw "Could not push the task branch (exit code $gitPushExitCode). main was not pushed."
     }
+    $taskPhase = "pushed"
+    Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
 
-    $prBodyPath = (New-TemporaryFile).FullName
-    try {
-        Set-Content -LiteralPath $prBodyPath -Encoding utf8 -Value @"
+    $existingPrJson = & $ghPath pr list --repo $Repository --head $branchName --state open --limit 1 --json url,isDraft
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not check whether a Draft PR already exists for the recovered task branch."
+    }
+    $existingPr = @($existingPrJson | ConvertFrom-Json)
+    if ($existingPr.Count -gt 0 -and -not [bool]$existingPr[0].isDraft) {
+        throw "The recovered task branch already has a non-draft pull request; lifecycle completion requires human review."
+    }
+    if ($existingPr.Count -eq 0) {
+        $prBodyPath = (New-TemporaryFile).FullName
+        try {
+            Set-Content -LiteralPath $prBodyPath -Encoding utf8 -Value @"
 Automated local queue run for Issue #$issueNumber.
 
 - Test profile: $testProfile
@@ -481,19 +679,44 @@ Automated local queue run for Issue #$issueNumber.
 - Review report: $([System.IO.Path]::GetFileName($reviewResultPath))
 - Merge policy: human approval required; this Draft PR is never auto-merged.
 "@
-        & $ghPath pr create --repo $Repository --draft --base $BaseBranch --head $branchName --title "[Codex] $taskTitle" --body-file $prBodyPath 1> $null 2> $null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not create the Draft PR. The task branch remains available for manual recovery."
+            & $ghPath pr create --repo $Repository --draft --base $BaseBranch --head $branchName --title "[Codex] $taskTitle" --body-file $prBodyPath 1> $null 2> $null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not create the Draft PR. The task branch remains available for manual recovery."
+            }
         }
-    }
-    finally {
-        Remove-Item -LiteralPath $prBodyPath -Force -ErrorAction SilentlyContinue
+        finally {
+            Remove-Item -LiteralPath $prBodyPath -Force -ErrorAction SilentlyContinue
+        }
     }
 
     $successful = $true
+    $taskPhase = "done"
+    Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "done" -Phase $taskPhase -Attempts $taskAttempts
+    Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $DoneLabel -StatusMessage "Codex queue status: done (Draft PR created; human review and merge are required)."
     Write-Output "Draft PR created for Issue #$issueNumber on branch $branchName. Human approval is required before merge."
 }
 catch {
+    if ($null -ne $lifecycleStatePath -and $null -ne $issueNumber -and $null -ne $branchName -and $null -ne $worktreePath) {
+        if ($taskPhase -ne "retry-limit") {
+            if ($taskAttempts -lt $MaxTaskAttempts) {
+                Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "queued" -Phase $taskPhase -Attempts $taskAttempts -FailureReason $_.Exception.Message
+                if ($null -ne $ghPath) {
+                    Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $QueueLabel -StatusMessage "Codex queue status: queued for retry (attempt $taskAttempts of $MaxTaskAttempts failed; diagnostics preserved locally)."
+                }
+            }
+            else {
+                Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "blocked" -Phase $taskPhase -Attempts $taskAttempts -FailureReason $_.Exception.Message
+                if ($null -ne $ghPath) {
+                    Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage "Codex queue status: blocked (automatic retry limit reached; diagnostics preserved locally)."
+                }
+            }
+        }
+    }
+    elseif ($null -ne $issueNumber -and $null -ne $ghPath) {
+        # A malformed Issue can fail before a safe branch/worktree identity exists. It still must
+        # leave the visible queue instead of being retried indefinitely.
+        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $QueueLabel -ToLabel $BlockedLabel -StatusMessage "Codex queue status: blocked (task validation failed before worktree creation)."
+    }
     Write-Error $_.Exception.Message
     exit 1
 }
