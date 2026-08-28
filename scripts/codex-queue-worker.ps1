@@ -454,9 +454,21 @@ $stagedDiff
     if ($LASTEXITCODE -ne 0) {
         throw "Could not create the task commit."
     }
-    & git -C $worktreePath push -u origin $branchName 1> $null 2> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not push the task branch. main was not pushed."
+    $gitPushExitCode = -1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Git can write normal remote progress messages to stderr on Windows.
+        # Judge push success by the native process exit code.
+        $ErrorActionPreference = "Continue"
+        & git -C $worktreePath push -u origin $branchName 1> $null 2> $null
+        $gitPushExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($gitPushExitCode -ne 0) {
+        throw "Could not push the task branch (exit code $gitPushExitCode). main was not pushed."
     }
 
     $prBodyPath = (New-TemporaryFile).FullName
