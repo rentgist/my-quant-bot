@@ -154,20 +154,49 @@ function Invoke-TestProfile {
         if ($Profile -eq "python-compile-and-pytest") {
             $pythonFiles = @(Get-ChildItem -LiteralPath $Path -File -Filter "*.py" | ForEach-Object FullName)
             $pythonFiles += @(Get-ChildItem -LiteralPath (Join-Path $Path "tests") -File -Filter "*.py" | ForEach-Object FullName)
+
             & python -m py_compile @pythonFiles 1> $null 2> $null
             if ($LASTEXITCODE -ne 0) {
                 Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (Python syntax check)" -Encoding utf8
                 return $false
             }
-        }
-        elseif ($Profile -ne "pytest") {
-            throw "Unsupported test profile. Shell commands from the Issue are never evaluated."
-        }
 
-        & python -m pytest 1> $null 2> $null
-        if ($LASTEXITCODE -ne 0) {
-            Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (test suite)" -Encoding utf8
-            return $false
+            & python -m pytest 1> $null 2> $null
+            if ($LASTEXITCODE -ne 0) {
+                Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (test suite)" -Encoding utf8
+                return $false
+            }
+        }
+        elseif ($Profile -eq "pytest") {
+            & python -m pytest 1> $null 2> $null
+            if ($LASTEXITCODE -ne 0) {
+                Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (test suite)" -Encoding utf8
+                return $false
+            }
+        }
+        elseif ($Profile -eq "automation-smoke") {
+            $automationFiles = @(
+                (Join-Path $Path "scripts\codex-queue-worker.ps1"),
+                (Join-Path $Path "scripts\run-agent-review.ps1")
+            )
+
+            foreach ($file in $automationFiles) {
+                $tokens = $null
+                $errors = $null
+                [System.Management.Automation.Language.Parser]::ParseFile(
+                    $file,
+                    [ref]$tokens,
+                    [ref]$errors
+                ) | Out-Null
+
+                if ($errors.Count -gt 0) {
+                    Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (PowerShell parser)" -Encoding utf8
+                    return $false
+                }
+            }
+        }
+        else {
+            throw "Unsupported test profile. Shell commands from the Issue are never evaluated."
         }
     }
     finally {
@@ -260,7 +289,7 @@ try {
     $allowedPaths = ConvertTo-ValidatedPathList -Value (Get-IssueField -Body $issue.body -Label "Allowed paths") -FieldName "Allowed paths"
     $forbiddenPaths = ConvertTo-ValidatedPathList -Value (Get-IssueField -Body $issue.body -Label "Forbidden paths") -FieldName "Forbidden paths"
     $testProfile = Get-IssueField -Body $issue.body -Label "Test command"
-    if ($testProfile -notin @("python-compile-and-pytest", "pytest")) {
+    if ($testProfile -notin @("python-compile-and-pytest", "pytest", "automation-smoke")) {
         throw "Unsupported test profile. Shell commands from the Issue are never evaluated."
     }
 
