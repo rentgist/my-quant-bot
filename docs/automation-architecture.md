@@ -88,3 +88,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\codex-queue-worker
 ```
 
 성공 시에만 해당 Issue용 task branch를 push하고 Draft PR을 만듭니다. 이 저장소 변경을 도입하는 현재 작업은 별도 `automation/agent-queue-v1` 브랜치에서 검토하며, 이 문서 자체는 Draft PR을 자동 생성하지 않습니다.
+
+## 무인 Windows worker와 lifecycle
+
+`scripts/run-codex-queue-scheduled.ps1`은 예약 실행 전용 래퍼입니다. 예약 작업의 `IgnoreNew` 정책과 래퍼의 전역 mutex, worker의 전역 mutex를 함께 사용하므로 예약 작업이 겹치거나 수동 실행과 동시에 같은 Issue를 처리하지 않습니다.
+
+worker는 전용 worktree 루트의 `lifecycle/issue-<번호>.json`에 다음 최소 상태와 진단 정보를 기록합니다. 이 파일은 저장소 밖에 두며 실패하거나 재부팅된 경우에도 삭제하지 않습니다.
+
+| 상태 | 의미 | 다음 처리 |
+| --- | --- | --- |
+| `queued` | GitHub의 `agent:queued` Issue | 새 전용 branch/worktree를 생성하거나 중단된 `running` 상태를 복구 |
+| `running` | 작업을 시작했으며 단계별 checkpoint를 기록 중 | 다음 poll에서 같은 branch/worktree를 재사용해 재개 |
+| `blocked` | 입력 검증 실패 또는 자동 재시도 한도 도달 | 진단을 보존하고 사람이 검토한 뒤 `agent:queued`로 명시적으로 재큐잉 |
+| `done` | 고정 테스트를 통과하고 Draft PR을 만들었음 | 사람의 PR 검토 및 merge만 남음 |
+
+재부팅이나 강제 종료 후 `running` state를 발견하면 worker는 새 branch를 만들지 않습니다. 이미 커밋된 branch는 Codex를 다시 실행하지 않고 동일한 고정 테스트를 다시 통과한 뒤 push/Draft PR 단계만 재개합니다. 커밋 전 중단은 같은 worktree에서 재시도합니다. 실패한 작업은 다음 poll에 같은 branch/worktree에서 재시도하도록 `queued`로 되돌아갑니다. `running` 라벨은 남았지만 로컬 recovery state가 없는 경우에는 안전하게 `blocked`로 바꾸고 새 branch를 만들지 않습니다. 자동 시도 횟수는 기본 3회(`-MaxTaskAttempts`)이며, 한도를 넘으면 `blocked`로 전환하므로 무한 재시도하지 않습니다. 사람이 원인을 해결하고 `agent:queued`로 다시 넣으면 새 bounded retry cycle이 시작됩니다.
+
+GitHub에서는 `agent:queued`, `agent:running`, `agent:blocked`, `agent:done` 라벨과 짧은 상태 comment를 사용합니다. 네트워크 또는 GitHub API 오류로 comment/label 변경이 실패해도 로컬 lifecycle 파일을 삭제하지 않으며, 다음 실행에서 복구 판단에 사용합니다. 설치 스크립트는 필요한 lifecycle label이 없을 때만 생성합니다. 어떤 경로도 access token, 환경변수 값 또는 secret을 로그에 기록하지 않습니다.
+
+### 예약 작업 설치 및 제거
+
+사전 조건은 로컬 clone의 기본 worktree가 `main`에 있고 tracked/staged 변경이 없으며, 현재 Windows 사용자로 `gh auth login`과 Codex 실행이 가능한 것입니다. 설치 스크립트는 GitHub lifecycle label을 확인/생성한 후 S4U 사용자 principal의 예약 작업을 등록합니다. S4U를 지원하지 않는 조직 정책 환경에서는 Windows Task Scheduler 정책을 관리자에게 확인해야 합니다. label 확인 또는 생성에 실패하면 예약 작업은 등록하지 않습니다.
+
+저장소 루트의 PowerShell에서 다음 한 명령으로 15분 주기 설치를 수행합니다.
+
+```powershell
+.\scripts\install-codex-queue-task.ps1
+```
+
+다른 주기나 재시도 상한이 필요하면 설치 시에만 명시합니다. 예를 들면 `.\scripts\install-codex-queue-task.ps1 -IntervalMinutes 30 -MaxTaskAttempts 2`입니다. 이 작업은 Draft PR을 만들 수 있는 worker만 실행하며, merge는 절대로 실행하지 않습니다.
+
+제거도 다음 한 명령입니다. 작업 branch, worktree, lifecycle JSON, 테스트/리뷰 진단 파일은 삭제하지 않습니다.
+
+```powershell
+.\scripts\uninstall-codex-queue-task.ps1
+```
