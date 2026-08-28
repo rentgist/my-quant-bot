@@ -56,6 +56,11 @@
 - **장애 자동 복구**: KRX 종목 목록 수집을 최대 3회 재시도하고, 앱 시작 시 실패했더라도 실제 검색 시 한 번 더 복구하도록 보강했습니다.
 - **데이터 한계 안내**: 전체 종목 마스터 상태와 지원 종목 수를 검색 화면에 표시하고, 신규 상장주·스팩·일부 소형주는 재무정보가 제한될 수 있음을 안내합니다.
 
+## [2026-08-26] Safe local agent queue automation
+
+- Added a local Issue-to-Codex-to-Draft-PR boundary with dedicated worktrees, path enforcement, fixed test profiles, and no direct main modification or merge path.
+- Added PR-only secretless CI, optional read-only Claude Code review with Codex fallback, and operator recovery/approval documentation.
+
 ## [2026-08-03] 고정 종착가격 진입전략 비교 계산기
 
 - **전략 비교 계산기**: 마켓 캘린더 하단에 일괄매수·혼합형·추세확인형 비교 계산기를 추가했습니다.
