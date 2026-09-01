@@ -34,7 +34,7 @@ $labelJson = & $ghCommand.Source label list --repo $Repository --limit 100 --jso
 if ($LASTEXITCODE -ne 0) {
     throw "Could not verify GitHub lifecycle labels; scheduled task was not installed."
 }
-$existingLabels = @($labelJson | ConvertFrom-Json | ForEach-Object name)
+$existingLabels = @($labelJson | ConvertFrom-Json | ForEach-Object { $_.name })
 $requiredLabels = @(
     @{ Name = $QueueLabel; Color = "1D76DB"; Description = "Queued for the local Codex worker" },
     @{ Name = "agent:running"; Color = "FBCA04"; Description = "Being processed by the local Codex worker" },
@@ -65,9 +65,7 @@ if (-not [string]::IsNullOrWhiteSpace($WorktreeRoot)) {
 }
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ($arguments -join " ")
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
-$trigger.RepetitionInterval = (New-TimeSpan -Minutes $IntervalMinutes)
-$trigger.RepetitionDuration = (New-TimeSpan -Days 3650)
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) -RepetitionDuration (New-TimeSpan -Days 3650)
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 4)
 $userId = "{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited
