@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Repository = "rentgist/my-quant-bot",
     [string]$QueueLabel = "agent:queued",
@@ -378,12 +378,14 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Could not query the GitHub Issue queue."
     }
-    $queuedIssues = @($queueJson | ConvertFrom-Json | Sort-Object number)
+    $parsedQueuedIssues = $queueJson | ConvertFrom-Json
+    $queuedIssues = @($parsedQueuedIssues | Sort-Object number)
     $runningJson = & $ghPath issue list --repo $Repository --label $RunningLabel --state open --limit 100 --json number,title,url
     if ($LASTEXITCODE -ne 0) {
         throw "Could not query running GitHub Issues for interruption recovery."
     }
-    $runningIssues = @($runningJson | ConvertFrom-Json | Sort-Object number)
+    $parsedRunningIssues = $runningJson | ConvertFrom-Json
+    $runningIssues = @($parsedRunningIssues | Sort-Object number)
     $recoverableIssues = @($runningIssues | Where-Object {
         $candidateState = Get-LifecycleState -StatePath (Get-LifecycleStatePath -Directory $lifecycleDirectory -IssueNumber ([int]$_.number))
         $null -ne $candidateState -and $candidateState.status -in @("running", "queued")
@@ -413,7 +415,7 @@ try {
         throw "Could not read the selected GitHub Issue."
     }
     $issue = $issueJson | ConvertFrom-Json
-    $issueLabels = @($issue.labels | ForEach-Object name)
+    $issueLabels = @($issue.labels | ForEach-Object { $_.name })
     if (-not ($issueLabels -contains $QueueLabel) -and -not ($issueLabels -contains $RunningLabel)) {
         throw "Selected Issue no longer has a queue lifecycle label."
     }
@@ -733,5 +735,6 @@ finally {
     }
     $mutex.Dispose()
 }
+
 
 
