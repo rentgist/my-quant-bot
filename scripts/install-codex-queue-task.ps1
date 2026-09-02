@@ -39,7 +39,8 @@ $requiredLabels = @(
     @{ Name = $QueueLabel; Color = "1D76DB"; Description = "Queued for the local Codex worker" },
     @{ Name = "agent:running"; Color = "FBCA04"; Description = "Being processed by the local Codex worker" },
     @{ Name = "agent:blocked"; Color = "D93F0B"; Description = "Worker stopped; diagnostics require human review" },
-    @{ Name = "agent:done"; Color = "0E8A16"; Description = "Draft PR created; human review and merge required" }
+    @{ Name = "agent:done"; Color = "0E8A16"; Description = "Draft PR created; human review and merge required" },
+    @{ Name = "agent:approval-required"; Color = "B60205"; Description = "High-risk task requires explicit human approval before merge" }
 )
 foreach ($label in $requiredLabels) {
     if ($existingLabels -notcontains $label.Name) {

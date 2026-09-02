@@ -9,7 +9,8 @@ param(
     [int]$MaxTaskAttempts = 3,
     [string]$RunningLabel = "agent:running",
     [string]$BlockedLabel = "agent:blocked",
-    [string]$DoneLabel = "agent:done"
+    [string]$DoneLabel = "agent:done",
+    [string]$ApprovalRequiredLabel = "agent:approval-required"
 )
 
 Set-StrictMode -Version Latest
@@ -25,6 +26,17 @@ $BuiltInForbiddenPaths = @(
     "fix_final4.py",
     "fix_signals4.py"
 )
+
+$HighRiskPathRules = @(
+    ".github/",
+    "automation/",
+    "scripts/"
+)
+
+$SupportedTaskTypes = @("bug", "feature", "research", "maintenance", "refactor")
+$SupportedPriorities = @("P0", "P1", "P2", "P3")
+$SupportedRiskTiers = @("low", "medium", "high", "critical")
+$RequiredOwnerWorkerRole = "Owner: human; worker: local Codex queue"
 
 function Resolve-RequiredCommand {
     param([Parameter(Mandatory)][string[]]$Names, [Parameter(Mandatory)][string]$DisplayName)
@@ -122,6 +134,21 @@ function Set-GitHubLifecycle {
     }
 }
 
+function Add-GitHubLabel {
+    param(
+        [Parameter(Mandatory)][string]$GhPath,
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][int]$IssueNumber,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    # The Draft PR remains the hard automation boundary even if this visibility label cannot be updated.
+    & $GhPath issue edit $IssueNumber --repo $Repository --add-label $Label 1> $null 2> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "GitHub approval label was not updated; the Draft PR gate remains in effect."
+    }
+}
+
 function Test-TaskBranchHasCommit {
     param(
         [Parameter(Mandatory)][string]$WorktreePath,
@@ -152,6 +179,40 @@ function Get-IssueField {
         throw "Issue field '$Label' is empty."
     }
     return $value
+}
+
+function Assert-AllowedValue {
+    param(
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][string[]]$AllowedValues,
+        [Parameter(Mandatory)][string]$FieldName
+    )
+
+    if ($Value -notin $AllowedValues) {
+        throw "Issue field '$FieldName' has an unsupported value."
+    }
+}
+
+function Test-HighRiskPathScope {
+    param([Parameter(Mandatory)][string[]]$AllowedPaths)
+
+    foreach ($path in $AllowedPaths) {
+        foreach ($rule in $HighRiskPathRules) {
+            if (Test-PathRuleMatch -Path $path -Rule $rule -or Test-PathRuleMatch -Path $rule -Rule $path) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function New-BlockedStatusMessage {
+    param(
+        [Parameter(Mandatory)][string]$Code,
+        [Parameter(Mandatory)][string]$NextAction
+    )
+
+    return "Codex queue status: BLOCKED | code=$Code | owner=human | next=$NextAction"
 }
 
 function ConvertTo-ValidatedPathList {
@@ -269,7 +330,8 @@ function Invoke-TestProfile {
                 (Join-Path $Path "scripts\run-agent-review.ps1"),
                 (Join-Path $Path "scripts\run-codex-queue-scheduled.ps1"),
                 (Join-Path $Path "scripts\install-codex-queue-task.ps1"),
-                (Join-Path $Path "scripts\uninstall-codex-queue-task.ps1")
+                (Join-Path $Path "scripts\uninstall-codex-queue-task.ps1"),
+                (Join-Path $Path "scripts\show-management-summary.ps1")
             )
 
             foreach ($file in $automationFiles) {
@@ -400,7 +462,7 @@ try {
     }
     elseif ($orphanedRunningIssues.Count -gt 0) {
         $issueNumber = [int]$orphanedRunningIssues[0].number
-        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage "Codex queue status: blocked (local recovery state is unavailable; no duplicate branch was created)."
+        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage (New-BlockedStatusMessage -Code "RECOVERY_STATE_MISSING" -NextAction "review the local lifecycle state before requeueing.")
         throw "Issue #$issueNumber is marked running without local recovery state and was blocked safely."
     }
     elseif ($queuedIssues.Count -gt 0) {
@@ -420,14 +482,27 @@ try {
         throw "Selected Issue no longer has a queue lifecycle label."
     }
 
+    $taskType = Get-IssueField -Body $issue.body -Label "Task type"
+    Assert-AllowedValue -Value $taskType -AllowedValues $SupportedTaskTypes -FieldName "Task type"
+    $priority = Get-IssueField -Body $issue.body -Label "Priority"
+    Assert-AllowedValue -Value $priority -AllowedValues $SupportedPriorities -FieldName "Priority"
+    $riskTier = Get-IssueField -Body $issue.body -Label "Risk tier"
+    Assert-AllowedValue -Value $riskTier -AllowedValues $SupportedRiskTiers -FieldName "Risk tier"
+    $ownerWorkerRole = Get-IssueField -Body $issue.body -Label "Owner / worker role"
+    Assert-AllowedValue -Value $ownerWorkerRole -AllowedValues @($RequiredOwnerWorkerRole) -FieldName "Owner / worker role"
     $taskTitle = Get-IssueField -Body $issue.body -Label "Title"
     $objective = Get-IssueField -Body $issue.body -Label "Objective"
     $acceptanceCriteria = Get-IssueField -Body $issue.body -Label "Acceptance criteria"
+    $nextAction = Get-IssueField -Body $issue.body -Label "Next action"
     $allowedPaths = ConvertTo-ValidatedPathList -Value (Get-IssueField -Body $issue.body -Label "Allowed paths") -FieldName "Allowed paths"
     $forbiddenPaths = ConvertTo-ValidatedPathList -Value (Get-IssueField -Body $issue.body -Label "Forbidden paths") -FieldName "Forbidden paths"
     $testProfile = Get-IssueField -Body $issue.body -Label "Test command"
     if ($testProfile -notin @("python-compile-and-pytest", "pytest", "automation-smoke")) {
         throw "Unsupported test profile. Shell commands from the Issue are never evaluated."
+    }
+    $requiresApproval = $riskTier -in @("high", "critical")
+    if ((Test-HighRiskPathScope -AllowedPaths $allowedPaths) -and -not $requiresApproval) {
+        throw "High-risk path scope requires a high or critical Risk tier."
     }
 
     $slug = ($taskTitle.ToLowerInvariant() -replace "[^a-z0-9]+", "-").Trim("-")
@@ -460,13 +535,16 @@ try {
     if ($taskAttempts -gt $MaxTaskAttempts) {
         $taskPhase = "retry-limit"
         Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "blocked" -Phase "retry-limit" -Attempts $taskAttempts -FailureReason "Maximum automatic attempts reached."
-        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage "Codex queue status: blocked (automatic retry limit reached; diagnostics preserved locally)."
+        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage (New-BlockedStatusMessage -Code "RETRY_LIMIT" -NextAction "review local diagnostics and requeue only after correction.")
         throw "Issue #$issueNumber reached the maximum of $MaxTaskAttempts attempts and was blocked."
     }
 
     New-Item -ItemType Directory -Path $WorktreeRoot -Force | Out-Null
     Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase "worktree-preparing" -Attempts $taskAttempts
     Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $QueueLabel -ToLabel $RunningLabel -StatusMessage "Codex queue status: running (attempt $taskAttempts of $MaxTaskAttempts)."
+    if ($requiresApproval) {
+        Add-GitHubLabel -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -Label $ApprovalRequiredLabel
+    }
 
     if (-not (Test-Path -LiteralPath $worktreePath)) {
         & git -C $repositoryRoot show-ref --verify --quiet "refs/heads/$branchName"
@@ -500,11 +578,18 @@ try {
 Issue number: $issueNumber
 Issue URL: $($issue.url)
 Title: $taskTitle
+Task type: $taskType
+Priority: $priority
+Risk tier: $riskTier
+Owner / worker role: $ownerWorkerRole
 Objective:
 $objective
 
 Acceptance criteria:
 $acceptanceCriteria
+
+Next action:
+$nextAction
 
 Allowed paths:
 $($allowedPaths -join "`n")
@@ -676,10 +761,16 @@ $stagedDiff
             Set-Content -LiteralPath $prBodyPath -Encoding utf8 -Value @"
 Automated local queue run for Issue #$issueNumber.
 
+- Task type: $taskType
+- Priority: $priority
+- Risk tier: $riskTier
+- Owner / worker role: $ownerWorkerRole
+- Next action: $nextAction
 - Test profile: $testProfile
 - Test result: PASSED
 - Review report: $([System.IO.Path]::GetFileName($reviewResultPath))
 - Merge policy: human approval required; this Draft PR is never auto-merged.
+- Approval gate: $(if ($requiresApproval) { "EXPLICIT HUMAN APPROVAL REQUIRED before marking ready for review or merging." } else { "human review and merge decision required." })
 "@
             & $ghPath pr create --repo $Repository --draft --base $BaseBranch --head $branchName --title "[Codex] $taskTitle" --body-file $prBodyPath 1> $null 2> $null
             if ($LASTEXITCODE -ne 0) {
@@ -694,7 +785,11 @@ Automated local queue run for Issue #$issueNumber.
     $successful = $true
     $taskPhase = "done"
     Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "done" -Phase $taskPhase -Attempts $taskAttempts
-    Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $DoneLabel -StatusMessage "Codex queue status: done (Draft PR created; human review and merge are required)."
+    $completionMessage = "Codex queue status: done (Draft PR created; human review and merge are required)."
+    if ($requiresApproval) {
+        $completionMessage = "Codex queue status: done (Draft PR created; explicit human approval is required before merge)."
+    }
+    Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $DoneLabel -StatusMessage $completionMessage
     Write-Output "Draft PR created for Issue #$issueNumber on branch $branchName. Human approval is required before merge."
 }
 catch {
@@ -709,7 +804,7 @@ catch {
             else {
                 Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "blocked" -Phase $taskPhase -Attempts $taskAttempts -FailureReason $_.Exception.Message
                 if ($null -ne $ghPath) {
-                    Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage "Codex queue status: blocked (automatic retry limit reached; diagnostics preserved locally)."
+                    Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $RunningLabel -ToLabel $BlockedLabel -StatusMessage (New-BlockedStatusMessage -Code "RETRY_LIMIT" -NextAction "review local diagnostics and requeue only after correction.")
                 }
             }
         }
@@ -717,7 +812,7 @@ catch {
     elseif ($null -ne $issueNumber -and $null -ne $ghPath) {
         # A malformed Issue can fail before a safe branch/worktree identity exists. It still must
         # leave the visible queue instead of being retried indefinitely.
-        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $QueueLabel -ToLabel $BlockedLabel -StatusMessage "Codex queue status: blocked (task validation failed before worktree creation)."
+        Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $QueueLabel -ToLabel $BlockedLabel -StatusMessage (New-BlockedStatusMessage -Code "TASK_VALIDATION" -NextAction "correct the Issue fields and requeue.")
     }
     Write-Error $_.Exception.Message
     exit 1

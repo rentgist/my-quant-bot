@@ -19,7 +19,8 @@ jobs:
             'scripts/run-agent-review.ps1',
             'scripts/run-codex-queue-scheduled.ps1',
             'scripts/install-codex-queue-task.ps1',
-            'scripts/uninstall-codex-queue-task.ps1'
+            'scripts/uninstall-codex-queue-task.ps1',
+            'scripts/show-management-summary.ps1'
           )
           foreach ($file in $files) {
             $tokens = $null
@@ -43,7 +44,8 @@ jobs:
             'scripts/run-agent-review.ps1',
             'scripts/run-codex-queue-scheduled.ps1',
             'scripts/install-codex-queue-task.ps1',
-            'scripts/uninstall-codex-queue-task.ps1'
+            'scripts/uninstall-codex-queue-task.ps1',
+            'scripts/show-management-summary.ps1'
           )
           foreach ($file in $required) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
