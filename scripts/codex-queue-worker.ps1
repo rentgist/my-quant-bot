@@ -198,7 +198,7 @@ function Test-HighRiskPathScope {
 
     foreach ($path in $AllowedPaths) {
         foreach ($rule in $HighRiskPathRules) {
-            if (Test-PathRuleMatch -Path $path -Rule $rule -or Test-PathRuleMatch -Path $rule -Rule $path) {
+            if ((Test-PathRuleMatch -Path $path -Rule $rule) -or (Test-PathRuleMatch -Path $rule -Rule $path)) {
                 return $true
             }
         }

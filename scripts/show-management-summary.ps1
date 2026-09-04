@@ -51,7 +51,7 @@ function Get-LifecycleStatus {
 function Write-IssueGroup {
     param(
         [Parameter(Mandatory)][string]$Status,
-        [Parameter(Mandatory)][object[]]$Issues
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Issues
     )
 
     Write-Output ("{0}: {1}" -f $Status, $Issues.Count)
@@ -73,8 +73,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "Could not read GitHub pull requests. No repository state was changed."
 }
 
-$issues = @($issueJson | ConvertFrom-Json)
-$draftPrs = @($prJson | ConvertFrom-Json | Where-Object { [bool]$_.isDraft })
+$parsedIssues = $issueJson | ConvertFrom-Json
+$issues = @($parsedIssues)
+$parsedPrs = $prJson | ConvertFrom-Json
+$draftPrs = @($parsedPrs | Where-Object { [bool]$_.isDraft })
 $managedIssues = @($issues | Where-Object { $null -ne (Get-LifecycleStatus -Issue $_) })
 
 Write-Output "Management summary: $Repository"
