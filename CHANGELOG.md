@@ -61,6 +61,11 @@
 - Added a local Issue-to-Codex-to-Draft-PR boundary with dedicated worktrees, path enforcement, fixed test profiles, and no direct main modification or merge path.
 - Added PR-only secretless CI, optional read-only Claude Code review with Codex fallback, and operator recovery/approval documentation.
 
+## [2026-09-02] CEO control plane and approval workflow
+
+- Extended the existing Codex Issue queue with managed task metadata, explicit risk tiers, and a high-risk human approval gate.
+- Added a read-only management summary for lifecycle work, Draft PRs, and decisions requiring the user.
+
 ## [2026-08-03] 고정 종착가격 진입전략 비교 계산기
 
 - **전략 비교 계산기**: 마켓 캘린더 하단에 일괄매수·혼합형·추세확인형 비교 계산기를 추가했습니다.

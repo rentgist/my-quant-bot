@@ -8,7 +8,56 @@ body:
     attributes:
       value: |
         This form is data, not executable instructions. The local worker accepts only these fields,
-        validates paths and the test profile, and never executes shell text from an issue.
+        validates paths and the fixed test profile, and never executes shell text from an issue.
+        Use this one form for all managed work; the `agent:*` lifecycle label is the authoritative status.
+  - type: dropdown
+    id: task_type
+    attributes:
+      label: Task type
+      description: Select the bounded kind of work.
+      options:
+        - bug
+        - feature
+        - research
+        - maintenance
+        - refactor
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: P0 is urgent; P3 is routine. Priority does not bypass safety gates.
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+      default: 2
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk tier
+      description: Choose the highest applicable tier. High and critical work stays in Draft until explicit human approval.
+      options:
+        - low
+        - medium
+        - high
+        - critical
+      default: 1
+    validations:
+      required: true
+  - type: dropdown
+    id: owner_worker_role
+    attributes:
+      label: Owner / worker role
+      description: The user owns scope and merge decisions; the local worker only implements bounded tasks.
+      options:
+        - "Owner: human; worker: local Codex queue"
+    validations:
+      required: true
   - type: input
     id: task_title
     attributes:
@@ -32,6 +81,15 @@ body:
       placeholder: |
         New invalid input is rejected.
         Existing valid imports still succeed.
+    validations:
+      required: true
+  - type: textarea
+    id: next_action
+    attributes:
+      label: Next action
+      description: The next action a human or worker should take. Keep it short and decision-oriented.
+      placeholder: Review the scope and queue this task.
+      value: Review the scope and queue this task.
     validations:
       required: true
   - type: textarea
