@@ -666,7 +666,7 @@ $stagedDiff
     if ($LASTEXITCODE -ne 0) {
         throw "Could not check whether a Draft PR already exists for the recovered task branch."
     }
-    $existingPr = @($existingPrJson | ConvertFrom-Json)
+    $existingPr = $existingPrJson | ConvertFrom-Json
     if ($existingPr.Count -gt 0 -and -not [bool]$existingPr[0].isDraft) {
         throw "The recovered task branch already has a non-draft pull request; lifecycle completion requires human review."
     }
