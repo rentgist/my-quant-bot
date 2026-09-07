@@ -5,7 +5,11 @@ param(
     [string]$BaseBranch = "main",
     [string]$WorktreeRoot,
     [ValidateRange(1, 10)]
-    [int]$MaxTaskAttempts = 3
+    [int]$MaxTaskAttempts = 3,
+    [ValidateRange(1, 2147483647)]
+    [int]$HealthIssueNumber = 35,
+    [ValidateRange(1, 1440)]
+    [int]$ScheduleIntervalMinutes = 15
 )
 
 Set-StrictMode -Version Latest
@@ -34,30 +38,40 @@ function Sync-BaseBranchIfSafe {
         [Parameter(Mandatory)][string]$BaseBranch
     )
 
-    $currentBranch = (& git -C $RepositoryRoot branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0 -or $currentBranch -ne $BaseBranch) {
+    $currentBranchOutput = & git -C $RepositoryRoot branch --show-current
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Control-plane self-update skipped because the current branch could not be read."
+        return "branch-check-failed"
+    }
+    $currentBranch = ((@($currentBranchOutput) | ForEach-Object { [string]$_ }) -join "").Trim()
+    if ($currentBranch -ne $BaseBranch) {
         Write-Warning "Control-plane self-update skipped because the base repository is not on '$BaseBranch'."
-        return
+        return "skipped-not-on-base"
     }
 
     $trackedDirty = (Invoke-NativeQuiet -FilePath "git" -Arguments @("-C", $RepositoryRoot, "diff", "--quiet", "--no-ext-diff")) -ne 0
     $stagedDirty = (Invoke-NativeQuiet -FilePath "git" -Arguments @("-C", $RepositoryRoot, "diff", "--cached", "--quiet", "--no-ext-diff")) -ne 0
     if ($trackedDirty -or $stagedDirty) {
         Write-Warning "Control-plane self-update skipped because tracked or staged local changes exist. Untracked files are not considered dirty."
-        return
+        return "skipped-dirty"
     }
 
     if ((Invoke-NativeQuiet -FilePath "git" -Arguments @("-C", $RepositoryRoot, "fetch", "origin", $BaseBranch)) -ne 0) {
         Write-Warning "Control-plane self-update could not fetch origin/$BaseBranch; the installed version will continue for this run."
-        return
+        return "fetch-failed"
     }
 
     if ((Invoke-NativeQuiet -FilePath "git" -Arguments @("-C", $RepositoryRoot, "merge", "--ff-only", "origin/$BaseBranch")) -ne 0) {
         Write-Warning "Control-plane self-update could not fast-forward to origin/$BaseBranch; the installed version will continue for this run."
-        return
+        return "fast-forward-failed"
     }
+
+    return "synced"
 }
 
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$syncStatus = "not-run"
+$workerExitCode = -1
 $mutex = [System.Threading.Mutex]::new($false, "Global\rentgist-my-quant-bot-codex-queue-scheduled")
 $hasMutex = $false
 
@@ -68,8 +82,7 @@ try {
         exit 0
     }
 
-    $repositoryRoot = Split-Path -Parent $PSScriptRoot
-    Sync-BaseBranchIfSafe -RepositoryRoot $repositoryRoot -BaseBranch $BaseBranch
+    $syncStatus = Sync-BaseBranchIfSafe -RepositoryRoot $repositoryRoot -BaseBranch $BaseBranch
 
     $workerPath = Join-Path $PSScriptRoot "codex-queue-worker.ps1"
     if (-not (Test-Path -LiteralPath $workerPath -PathType Leaf)) {
@@ -173,6 +186,33 @@ try {
 }
 finally {
     if ($hasMutex) {
+        # Publish a bounded heartbeat on every completed scheduled run. This is best-effort and must
+        # never turn a successful worker run into a failure merely because telemetry could not publish.
+        $heartbeatPath = Join-Path $PSScriptRoot "publish-codex-worker-heartbeat.ps1"
+        if (Test-Path -LiteralPath $heartbeatPath -PathType Leaf) {
+            $heartbeatArguments = @(
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", $heartbeatPath,
+                "-Repository", $Repository,
+                "-HealthIssueNumber", $HealthIssueNumber,
+                "-RepositoryRoot", $repositoryRoot,
+                "-BaseBranch", $BaseBranch,
+                "-SyncStatus", $syncStatus,
+                "-WorkerExitCode", $workerExitCode,
+                "-ScheduleIntervalMinutes", $ScheduleIntervalMinutes
+            )
+            $previousHeartbeatErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                & powershell @heartbeatArguments 1> $null 2> $null
+            }
+            catch { }
+            finally {
+                $ErrorActionPreference = $previousHeartbeatErrorActionPreference
+            }
+        }
+
         $mutex.ReleaseMutex()
     }
     $mutex.Dispose()
