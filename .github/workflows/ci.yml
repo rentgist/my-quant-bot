@@ -22,7 +22,8 @@ jobs:
             'scripts/uninstall-codex-queue-task.ps1',
             'scripts/show-management-summary.ps1',
             'scripts/publish-codex-queue-diagnostic.ps1',
-            'scripts/test-codex-queue-worker-runtime.ps1'
+            'scripts/test-codex-queue-worker-runtime.ps1',
+            'scripts/recover-codex-zero-change.ps1'
           )
           foreach ($file in $files) {
             $tokens = $null
@@ -49,7 +50,8 @@ jobs:
             'scripts/uninstall-codex-queue-task.ps1',
             'scripts/show-management-summary.ps1',
             'scripts/publish-codex-queue-diagnostic.ps1',
-            'scripts/test-codex-queue-worker-runtime.ps1'
+            'scripts/test-codex-queue-worker-runtime.ps1',
+            'scripts/recover-codex-zero-change.ps1'
           )
           foreach ($file in $required) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
@@ -65,3 +67,6 @@ jobs:
       - name: Verify empty ChangedPaths handling on Windows PowerShell 5.1
         shell: powershell
         run: .\scripts\test-codex-queue-worker-runtime.ps1
+      - name: Verify zero-change patch validation on Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\recover-codex-zero-change.ps1 -SelfTest
