@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Repository = "rentgist/my-quant-bot",
     [string]$QueueLabel = "agent:queued",
@@ -274,12 +274,15 @@ function Get-ChangedPaths {
 
 function Assert-ChangedPathsAllowed {
     param(
-        [Parameter(Mandatory)][string[]]$ChangedPaths,
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$ChangedPaths,
         [Parameter(Mandatory)][string[]]$AllowedPaths,
         [Parameter(Mandatory)][string[]]$ForbiddenPaths
     )
 
-    if ($ChangedPaths.Count -eq 0) {
+    if ($null -eq $ChangedPaths -or @($ChangedPaths).Count -eq 0) {
         throw "Codex made no changes; Draft PR creation was skipped."
     }
     foreach ($changedPath in $ChangedPaths) {
@@ -605,7 +608,7 @@ Test profile: $testProfile
         Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
 
         $effectiveForbiddenPaths = @($BuiltInForbiddenPaths + $forbiddenPaths | Select-Object -Unique)
-        $changedPaths = Get-ChangedPaths -Path $worktreePath
+        $changedPaths = @(Get-ChangedPaths -Path $worktreePath)
         Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
 
         if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
@@ -691,7 +694,7 @@ $stagedDiff
 
         # Re-stage only after enforcement, then re-run the fixed test profile so the evidence attached
         # to the Draft PR always corresponds to the final staged diff.
-        $changedPaths = Get-ChangedPaths -Path $worktreePath
+        $changedPaths = @(Get-ChangedPaths -Path $worktreePath)
         Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
         & git -C $worktreePath add -- @($changedPaths)
         if ($LASTEXITCODE -ne 0) {
@@ -700,7 +703,7 @@ $stagedDiff
         if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
             throw "Tests failed after review. Default policy forbids Draft PR creation."
         }
-        $changedPaths = Get-ChangedPaths -Path $worktreePath
+        $changedPaths = @(Get-ChangedPaths -Path $worktreePath)
         Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
         $taskPhase = "verified"
         Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
@@ -830,6 +833,5 @@ finally {
     }
     $mutex.Dispose()
 }
-
 
 

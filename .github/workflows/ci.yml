@@ -21,7 +21,8 @@ jobs:
             'scripts/install-codex-queue-task.ps1',
             'scripts/uninstall-codex-queue-task.ps1',
             'scripts/show-management-summary.ps1',
-            'scripts/publish-codex-queue-diagnostic.ps1'
+            'scripts/publish-codex-queue-diagnostic.ps1',
+            'scripts/test-codex-queue-worker-runtime.ps1'
           )
           foreach ($file in $files) {
             $tokens = $null
@@ -47,7 +48,8 @@ jobs:
             'scripts/install-codex-queue-task.ps1',
             'scripts/uninstall-codex-queue-task.ps1',
             'scripts/show-management-summary.ps1',
-            'scripts/publish-codex-queue-diagnostic.ps1'
+            'scripts/publish-codex-queue-diagnostic.ps1',
+            'scripts/test-codex-queue-worker-runtime.ps1'
           )
           foreach ($file in $required) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
@@ -55,3 +57,11 @@ jobs:
               exit 1
             }
           }
+
+  powershell51-runtime:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify empty ChangedPaths handling on Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\test-codex-queue-worker-runtime.ps1
