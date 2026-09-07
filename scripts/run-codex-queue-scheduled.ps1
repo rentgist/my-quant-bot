@@ -93,6 +93,8 @@ try {
     $workerExitCode = $LASTEXITCODE
 
     if ($workerExitCode -ne 0) {
+        # Publish the worker's sanitized lifecycle diagnostic first, so management has evidence even
+        # if the optional zero-change recovery path cannot produce a safe patch.
         $diagnosticPublisherPath = Join-Path $PSScriptRoot "publish-codex-queue-diagnostic.ps1"
         if (Test-Path -LiteralPath $diagnosticPublisherPath -PathType Leaf) {
             $diagnosticArguments = @(
@@ -106,6 +108,31 @@ try {
                 $diagnosticArguments += @("-WorktreeRoot", $WorktreeRoot)
             }
             & powershell @diagnosticArguments 1> $null 2> $null
+        }
+
+        # Native Windows Codex workspace-write can occasionally exit 0 without changing files.
+        # Recovery is intentionally narrow: only a lifecycle whose failure says "Codex made no changes"
+        # is eligible. Codex then runs read-only, emits a unified diff, and the host validates every
+        # path plus git apply --check before applying anything inside the dedicated task worktree.
+        $recoveryPath = Join-Path $PSScriptRoot "recover-codex-zero-change.ps1"
+        if (Test-Path -LiteralPath $recoveryPath -PathType Leaf) {
+            $recoveryArguments = @(
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", $recoveryPath,
+                "-Repository", $Repository,
+                "-QueueLabel", $QueueLabel
+            )
+            if (-not [string]::IsNullOrWhiteSpace($WorktreeRoot)) {
+                $recoveryArguments += @("-WorktreeRoot", $WorktreeRoot)
+            }
+            & powershell @recoveryArguments
+            $recoveryExitCode = $LASTEXITCODE
+            if ($recoveryExitCode -eq 0) {
+                # A validated patch was applied and the Issue was requeued. Treat this scheduled
+                # wrapper run as successfully recovered; the normal worker resumes on the next tick.
+                $workerExitCode = 0
+            }
         }
     }
 
