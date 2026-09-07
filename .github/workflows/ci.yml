@@ -23,6 +23,7 @@ jobs:
             'scripts/show-management-summary.ps1',
             'scripts/publish-codex-queue-diagnostic.ps1',
             'scripts/publish-codex-recovery-diagnostic.ps1',
+            'scripts/publish-codex-worker-heartbeat.ps1',
             'scripts/test-codex-queue-worker-runtime.ps1',
             'scripts/recover-codex-zero-change.ps1'
           )
@@ -52,6 +53,7 @@ jobs:
             'scripts/show-management-summary.ps1',
             'scripts/publish-codex-queue-diagnostic.ps1',
             'scripts/publish-codex-recovery-diagnostic.ps1',
+            'scripts/publish-codex-worker-heartbeat.ps1',
             'scripts/test-codex-queue-worker-runtime.ps1',
             'scripts/recover-codex-zero-change.ps1'
           )
@@ -75,3 +77,6 @@ jobs:
       - name: Verify recovery diagnostic sanitization on Windows PowerShell 5.1
         shell: powershell
         run: .\scripts\publish-codex-recovery-diagnostic.ps1 -SelfTest
+      - name: Verify local worker heartbeat formatting on Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\publish-codex-worker-heartbeat.ps1 -SelfTest
