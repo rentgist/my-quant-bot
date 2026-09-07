@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Beam Reducer Lens Calculator</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f5f7fb; color: #111827; }
+    main { max-width: 920px; margin: 0 auto; padding: 24px; }
+    .card { background: #fff; border: 1px solid #dbe1ea; border-radius: 18px; padding: 22px; margin-bottom: 18px; box-shadow: 0 8px 28px rgba(15,23,42,.05); }
+    h1 { margin: 0 0 8px; font-size: clamp(1.7rem, 5vw, 2.4rem); }
+    h2 { margin-top: 0; }
+    p { line-height: 1.6; }
+    .muted { color: #5f6b7a; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    label { display: block; font-weight: 700; margin-bottom: 6px; }
+    input { width: 100%; box-sizing: border-box; padding: 12px 13px; border-radius: 10px; border: 1px solid #b9c2cf; font-size: 16px; background: #fff; color: #111827; }
+    input:focus { outline: 3px solid rgba(37,99,235,.18); border-color: #2563eb; }
+    button { min-height: 44px; border: 0; border-radius: 10px; padding: 10px 16px; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .primary { background: #2563eb; color: #fff; }
+    .secondary { background: #e9eef6; color: #1f2937; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    .result { border: 1px solid #dbe1ea; border-radius: 12px; padding: 14px; background: #f8fafc; }
+    .result .label { color: #5f6b7a; font-size: .9rem; }
+    .result .value { display: block; margin-top: 4px; font-size: 1.45rem; font-weight: 800; word-break: break-word; }
+    .error { display: none; margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: #fff1f2; color: #9f1239; border: 1px solid #fecdd3; }
+    .ok { margin-top: 12px; font-size: .92rem; color: #166534; }
+    code { background: #eef2f7; border-radius: 6px; padding: 2px 6px; }
+    ul { line-height: 1.65; padding-left: 1.2rem; }
+    @media (max-width: 700px) { .grid, .results { grid-template-columns: 1fr; } main { padding: 14px; } }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0f172a; color: #e5e7eb; }
+      .card { background: #111827; border-color: #334155; box-shadow: none; }
+      .muted, .result .label { color: #a8b3c2; }
+      input { background: #0f172a; color: #f8fafc; border-color: #475569; }
+      .result { background: #0f172a; border-color: #334155; }
+      .secondary { background: #334155; color: #f8fafc; }
+      .error { background: #3f1720; color: #fecdd3; border-color: #881337; }
+      .ok { color: #86efac; }
+      code { background: #1e293b; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <h1>Beam Reducer Lens Calculator</h1>
+    <p class="muted">평행광을 두 개의 양의 렌즈로 축소하는 Keplerian telescope의 1차 설계값을 계산합니다.</p>
+
+    <form id="calculator" novalidate>
+      <div class="grid">
+        <div>
+          <label for="din">입력 빔 직경 D<sub>in</sub> (mm)</label>
+          <input id="din" name="din" type="number" min="0" step="any" value="17" inputmode="decimal">
+        </div>
+        <div>
+          <label for="dout">목표 빔 직경 D<sub>out</sub> (mm)</label>
+          <input id="dout" name="dout" type="number" min="0" step="any" value="3" inputmode="decimal">
+        </div>
+        <div>
+          <label for="f1">첫 번째 렌즈 초점거리 f<sub>1</sub> (mm)</label>
+          <input id="f1" name="f1" type="number" min="0" step="any" value="398" inputmode="decimal">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" type="submit">계산</button>
+        <button class="secondary" id="case1" type="button">예시: 17 → 3 mm</button>
+        <button class="secondary" id="case2" type="button">예시: 17 → 2.5 mm</button>
+      </div>
+      <div id="error" class="error" role="alert" aria-live="polite"></div>
+    </form>
+  </section>
+
+  <section class="card" aria-live="polite">
+    <h2>계산 결과</h2>
+    <div class="results">
+      <div class="result"><span class="label">배율 M = D<sub>out</sub>/D<sub>in</sub></span><span class="value" id="magnification">—</span></div>
+      <div class="result"><span class="label">필요한 두 번째 렌즈 f<sub>2</sub></span><span class="value" id="f2">—</span></div>
+      <div class="result"><span class="label">축소비 D<sub>in</sub>/D<sub>out</sub></span><span class="value" id="reduction">—</span></div>
+      <div class="result"><span class="label">명목 렌즈 간격 f<sub>1</sub> + f<sub>2</sub></span><span class="value" id="spacing">—</span></div>
+    </div>
+    <div id="selftest" class="ok"></div>
+  </section>
+
+  <section class="card">
+    <h2>가정과 식</h2>
+    <ul>
+      <li>얇은 렌즈, paraxial approximation</li>
+      <li>입력/출력 빔은 collimated</li>
+      <li>두 렌즈 모두 양의 초점거리인 Keplerian 구성</li>
+      <li>첫 번째(입력측) 렌즈의 초점거리 <code>f1</code>이 주어진다고 가정</li>
+    </ul>
+    <p><code>M = D_out / D_in</code>, <code>f2 = f1 × M</code>, <code>축소비 = D_in / D_out</code>, <code>간격 ≈ f1 + f2</code></p>
+    <p class="muted">실제 실험에서는 렌즈 두께, 실제 principal plane, 수차, 빔 품질과 입력 빔의 완전한 collimation 여부 때문에 최종 간격을 미세 조정해야 합니다.</p>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const form = document.getElementById('calculator');
+  const din = document.getElementById('din');
+  const dout = document.getElementById('dout');
+  const f1 = document.getElementById('f1');
+  const error = document.getElementById('error');
+  const outM = document.getElementById('magnification');
+  const outF2 = document.getElementById('f2');
+  const outReduction = document.getElementById('reduction');
+  const outSpacing = document.getElementById('spacing');
+  const selftest = document.getElementById('selftest');
+
+  function finitePositive(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  function calculateValues(dIn, dOut, focal1) {
+    const m = dOut / dIn;
+    const focal2 = focal1 * m;
+    return {
+      magnification: m,
+      focal2,
+      reduction: dIn / dOut,
+      spacing: focal1 + focal2
+    };
+  }
+
+  function fmt(value, digits = 2) {
+    return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+  }
+
+  function showError(message) {
+    error.textContent = message;
+    error.style.display = 'block';
+  }
+
+  function clearError() {
+    error.textContent = '';
+    error.style.display = 'none';
+  }
+
+  function render() {
+    clearError();
+    const dIn = finitePositive(din.value);
+    const dOut = finitePositive(dout.value);
+    const focal1 = finitePositive(f1.value);
+
+    if (dIn === null || dOut === null || focal1 === null) {
+      showError('모든 값은 0보다 큰 숫자로 입력해주세요.');
+      return false;
+    }
+    if (dOut >= dIn) {
+      showError('빔 축소 계산이므로 목표 빔 직경은 입력 빔 직경보다 작아야 합니다.');
+      return false;
+    }
+
+    const r = calculateValues(dIn, dOut, focal1);
+    outM.textContent = fmt(r.magnification, 4);
+    outF2.textContent = `${fmt(r.focal2)} mm`;
+    outReduction.textContent = `${fmt(r.reduction, 3)}×`;
+    outSpacing.textContent = `${fmt(r.spacing)} mm`;
+    return true;
+  }
+
+  function setCase(outDiameter) {
+    din.value = '17';
+    dout.value = String(outDiameter);
+    f1.value = '398';
+    render();
+  }
+
+  function approx(a, b, tolerance = 0.01) {
+    return Math.abs(a - b) <= tolerance;
+  }
+
+  function runSelfTest() {
+    const a = calculateValues(17, 3, 398);
+    const b = calculateValues(17, 2.5, 398);
+    const passed = approx(a.focal2, 70.235294, 0.01) && approx(a.spacing, 468.235294, 0.01)
+      && approx(b.focal2, 58.529412, 0.01) && approx(b.spacing, 456.529412, 0.01);
+    selftest.textContent = passed
+      ? '기준값 자체검증 통과: 17→3 mm, 17→2.5 mm 사례 일치'
+      : '기준값 자체검증 실패 — 계산식을 확인하세요.';
+  }
+
+  form.addEventListener('submit', (event) => { event.preventDefault(); render(); });
+  document.getElementById('case1').addEventListener('click', () => setCase(3));
+  document.getElementById('case2').addEventListener('click', () => setCase(2.5));
+  [din, dout, f1].forEach((el) => el.addEventListener('input', render));
+
+  runSelfTest();
+  render();
+})();
+</script>
+</body>
+</html>
