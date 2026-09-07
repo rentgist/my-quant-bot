@@ -126,12 +126,45 @@ try {
             if (-not [string]::IsNullOrWhiteSpace($WorktreeRoot)) {
                 $recoveryArguments += @("-WorktreeRoot", $WorktreeRoot)
             }
-            & powershell @recoveryArguments
-            $recoveryExitCode = $LASTEXITCODE
-            if ($recoveryExitCode -eq 0) {
-                # A validated patch was applied and the Issue was requeued. Treat this scheduled
-                # wrapper run as successfully recovered; the normal worker resumes on the next tick.
-                $workerExitCode = 0
+
+            $recoveryLogPath = [System.IO.Path]::GetTempFileName()
+            try {
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = "Continue"
+                    & powershell @recoveryArguments *> $recoveryLogPath
+                    $recoveryExitCode = $LASTEXITCODE
+                }
+                finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
+
+                if ($recoveryExitCode -eq 0) {
+                    # A validated patch was applied and the Issue was requeued. Treat this scheduled
+                    # wrapper run as successfully recovered; the normal worker resumes on the next tick.
+                    $workerExitCode = 0
+                }
+                else {
+                    # Recovery failures must also be remotely diagnosable. Publish only a sanitized,
+                    # bounded summary; the temporary raw output is removed before this run exits.
+                    $recoveryDiagnosticPublisherPath = Join-Path $PSScriptRoot "publish-codex-recovery-diagnostic.ps1"
+                    if (Test-Path -LiteralPath $recoveryDiagnosticPublisherPath -PathType Leaf) {
+                        $recoveryDiagnosticArguments = @(
+                            "-NoProfile",
+                            "-ExecutionPolicy", "Bypass",
+                            "-File", $recoveryDiagnosticPublisherPath,
+                            "-Repository", $Repository,
+                            "-RecoveryLogPath", $recoveryLogPath
+                        )
+                        if (-not [string]::IsNullOrWhiteSpace($WorktreeRoot)) {
+                            $recoveryDiagnosticArguments += @("-WorktreeRoot", $WorktreeRoot)
+                        }
+                        & powershell @recoveryDiagnosticArguments 1> $null 2> $null
+                    }
+                }
+            }
+            finally {
+                Remove-Item -LiteralPath $recoveryLogPath -Force -ErrorAction SilentlyContinue
             }
         }
     }
