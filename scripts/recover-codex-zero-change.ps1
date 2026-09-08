@@ -18,10 +18,12 @@ $BuiltInForbiddenPaths = @(
 
 function Resolve-RequiredCommand {
     param([string[]]$Names, [string]$DisplayName)
+
     foreach ($name in $Names) {
         $command = Get-Command $name -ErrorAction SilentlyContinue
         if ($null -ne $command) { return $command.Source }
     }
+
     foreach ($base in @($env:APPDATA, $env:LOCALAPPDATA)) {
         if ([string]::IsNullOrWhiteSpace($base)) { continue }
         foreach ($name in $Names) {
@@ -29,14 +31,17 @@ function Resolve-RequiredCommand {
             if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
         }
     }
+
     throw "$DisplayName command was not found."
 }
 
 function Get-IssueField {
     param([string]$Body, [string]$Label)
+
     $pattern = '(?ms)^###\s+' + [regex]::Escape($Label) + '\s*\r?\n(?<value>.*?)(?=^###\s+|\z)'
     $matchesForField = [regex]::Matches($Body, $pattern)
     if ($matchesForField.Count -ne 1) { throw "Issue must contain exactly one '$Label' field." }
+
     $value = $matchesForField[0].Groups['value'].Value.Trim()
     if ([string]::IsNullOrWhiteSpace($value)) { throw "Issue field '$Label' is empty." }
     return $value
@@ -44,6 +49,7 @@ function Get-IssueField {
 
 function ConvertTo-ValidatedPathList {
     param([string]$Value, [string]$FieldName)
+
     $paths = @()
     foreach ($line in ($Value -split "`r?`n")) {
         $path = $line.Trim().Replace('\', '/')
@@ -52,152 +58,257 @@ function ConvertTo-ValidatedPathList {
             throw "Issue field '$FieldName' contains an invalid repository-relative path."
         }
         $segments = $path.TrimEnd('/').Split('/')
-        if ($segments -contains '.' -or $segments -contains '..') { throw "Issue field '$FieldName' contains path traversal." }
+        if ($segments -contains '.' -or $segments -contains '..') {
+            throw "Issue field '$FieldName' contains path traversal."
+        }
         $paths += $path
     }
+
     if ($paths.Count -eq 0) { throw "Issue field '$FieldName' has no valid paths." }
     return @($paths | Select-Object -Unique)
 }
 
 function Test-PathRuleMatch {
     param([string]$Path, [string]$Rule)
-    $p = $Path.Replace('\', '/')
-    $r = $Rule.Replace('\', '/')
-    if ($r.EndsWith('/')) { return $p.StartsWith($r, [System.StringComparison]::OrdinalIgnoreCase) }
-    return $p.Equals($r, [System.StringComparison]::OrdinalIgnoreCase)
+
+    $normalizedPath = $Path.Replace('\', '/')
+    $normalizedRule = $Rule.Replace('\', '/')
+    if ($normalizedRule.EndsWith('/')) {
+        return $normalizedPath.StartsWith($normalizedRule, [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    return $normalizedPath.Equals($normalizedRule, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
-function Assert-SafePatchPath {
+function Assert-SafeRepositoryPath {
     param([string]$Path)
-    $p = $Path.Replace('\', '/')
-    if ($p -notmatch '^[A-Za-z0-9._/-]+$' -or $p.StartsWith('/') -or $p.Contains('//')) {
-        throw 'Patch contains an invalid repository-relative path.'
+
+    $normalized = $Path.Replace('\', '/')
+    if ($normalized -notmatch '^[A-Za-z0-9._/-]+$' -or $normalized.StartsWith('/') -or $normalized.Contains('//')) {
+        throw 'Edit plan contains an invalid repository-relative path.'
     }
-    $segments = $p.Split('/')
-    if ($segments -contains '.' -or $segments -contains '..') { throw 'Patch contains path traversal.' }
-    return $p
+    $segments = $normalized.Split('/')
+    if ($segments -contains '.' -or $segments -contains '..') {
+        throw 'Edit plan contains path traversal.'
+    }
+    return $normalized
 }
 
-function Get-PatchPaths {
-    param([string]$PatchText)
-    if ([string]::IsNullOrWhiteSpace($PatchText)) { throw 'Codex returned an empty patch.' }
-    if ($PatchText -match '(?m)^```') { throw 'Codex patch output contained Markdown fences.' }
-    if ($PatchText -match '(?m)^(rename|copy) (from|to) ') { throw 'Patch rename/copy operations are not allowed.' }
-    if ($PatchText -match '(?m)^(GIT binary patch|Binary files )') { throw 'Binary patches are not allowed.' }
-    if ($PatchText -match '(?m)^(new file mode|old file mode) (120000|160000)$') { throw 'Symlink and submodule patches are not allowed.' }
+function Assert-PathsAllowed {
+    param([string[]]$Paths, [string[]]$AllowedPaths, [string[]]$ForbiddenPaths)
 
-    $paths = @()
-    foreach ($line in ($PatchText -split "`r?`n")) {
-        if ($line -match '^diff --git a/(?<old>[A-Za-z0-9._/-]+) b/(?<new>[A-Za-z0-9._/-]+)$') {
-            $oldPath = Assert-SafePatchPath -Path $matches['old']
-            $newPath = Assert-SafePatchPath -Path $matches['new']
-            if ($oldPath -ne $newPath) { throw 'Patch path changes are not allowed.' }
-            $paths += $newPath
-            continue
+    foreach ($path in $Paths) {
+        if ($ForbiddenPaths | Where-Object { Test-PathRuleMatch -Path $path -Rule $_ }) {
+            throw "Edit plan attempted to change a forbidden path: $path"
         }
-        if ($line -match '^diff --git ') { throw 'Patch contains an unsupported or ambiguous diff path.' }
-        if ($line -match '^(---|\+\+\+) (?<target>.+)$') {
-            $target = $matches['target'].Trim()
-            if ($target -eq '/dev/null') { continue }
-            if ($target -notmatch '^[ab]/(?<path>[A-Za-z0-9._/-]+)$') { throw 'Patch header contains an unsupported path.' }
-            [void](Assert-SafePatchPath -Path $matches['path'])
+        if (-not ($AllowedPaths | Where-Object { Test-PathRuleMatch -Path $path -Rule $_ })) {
+            throw "Edit plan attempted to change a path outside the allow-list: $path"
         }
     }
-    $uniquePaths = @($paths | Select-Object -Unique)
-    if ($uniquePaths.Count -eq 0) { throw 'Codex returned no actionable unified diff.' }
-    return $uniquePaths
-}
-
-function Assert-PatchPathsAllowed {
-    param([string[]]$PatchPaths, [string[]]$AllowedPaths, [string[]]$ForbiddenPaths)
-    foreach ($patchPath in $PatchPaths) {
-        if ($ForbiddenPaths | Where-Object { Test-PathRuleMatch -Path $patchPath -Rule $_ }) {
-            throw 'Patch attempted to change a forbidden path.'
-        }
-        if (-not ($AllowedPaths | Where-Object { Test-PathRuleMatch -Path $patchPath -Rule $_ })) {
-            throw 'Patch attempted to change a path outside the allow-list.'
-        }
-    }
-}
-
-function Get-BoundedSummary {
-    param([AllowNull()][string]$Text, [int]$MaxLength = 500)
-    if ([string]::IsNullOrWhiteSpace($Text)) { return '(empty output)' }
-    $normalized = (($Text -replace "`0", '') -replace '\s+', ' ').Trim()
-    if ($normalized.Length -le $MaxLength) { return $normalized }
-    return ($normalized.Substring(0, $MaxLength) + '...')
-}
-
-function Invoke-CodexReadOnlyPatch {
-    param([string]$CodexPath, [string]$PromptPath, [string]$WorktreePath, [string]$OutputPath)
-    New-Item -ItemType Directory -Path (Split-Path -Parent $OutputPath) -Force | Out-Null
-    Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
-    $previousErrorActionPreference = $ErrorActionPreference
-    $exitCode = -1
-    try {
-        $ErrorActionPreference = 'Continue'
-        Get-Content -LiteralPath $PromptPath -Raw |
-            & $CodexPath exec --cd $WorktreePath --sandbox read-only --output-last-message $OutputPath - 1> $null 2> $null
-        $exitCode = $LASTEXITCODE
-    }
-    finally { $ErrorActionPreference = $previousErrorActionPreference }
-    if ($exitCode -ne 0) { throw "Read-only Codex patch generation failed with exit code $exitCode." }
-    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { throw 'Codex did not produce a patch output file.' }
 }
 
 function Get-ChangedPaths {
     param([string]$Path)
+
     $changed = @()
     $commands = @(
         ,@('-C', $Path, 'diff', '--name-only', '--no-ext-diff'),
         ,@('-C', $Path, 'diff', '--cached', '--name-only', '--no-ext-diff'),
         ,@('-C', $Path, 'ls-files', '--others', '--exclude-standard')
     )
-    foreach ($args in $commands) {
-        $result = & git @args
-        if ($LASTEXITCODE -ne 0) { throw 'Could not inspect changes after patch recovery.' }
+    foreach ($arguments in $commands) {
+        $result = & git @arguments
+        if ($LASTEXITCODE -ne 0) { throw 'Could not inspect changes after recovery.' }
         $changed += $result | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     }
     return @($changed | ForEach-Object { $_.Replace('\', '/') } | Select-Object -Unique)
 }
 
-function Invoke-SelfTest {
-    $allowed = @('mini_projects/beam_reducer_calculator/')
-    $forbidden = @('scripts/', 'final.py')
-    $validPatch = @'
-diff --git a/mini_projects/beam_reducer_calculator/index.html b/mini_projects/beam_reducer_calculator/index.html
-new file mode 100644
-index 0000000..1111111
---- /dev/null
-+++ b/mini_projects/beam_reducer_calculator/index.html
-@@ -0,0 +1 @@
-+ok
-'@
-    $paths = @(Get-PatchPaths -PatchText $validPatch)
-    Assert-PatchPathsAllowed -PatchPaths $paths -AllowedPaths $allowed -ForbiddenPaths $forbidden
-    if ($paths.Count -ne 1 -or $paths[0] -ne 'mini_projects/beam_reducer_calculator/index.html') {
-        throw 'Valid patch path extraction regression failed.'
+function Get-SubstringCount {
+    param([string]$Text, [string]$Needle)
+
+    if ([string]::IsNullOrEmpty($Needle)) { return 0 }
+    $count = 0
+    $offset = 0
+    while ($true) {
+        $index = $Text.IndexOf($Needle, $offset, [System.StringComparison]::Ordinal)
+        if ($index -lt 0) { break }
+        $count++
+        $offset = $index + $Needle.Length
+    }
+    return $count
+}
+
+function ConvertFrom-StrictEditPlan {
+    param([string]$JsonText)
+
+    if ([string]::IsNullOrWhiteSpace($JsonText)) { throw 'Codex returned an empty edit plan.' }
+    if ($JsonText -match '(?m)^\s*```') { throw 'Codex edit plan contained Markdown fences.' }
+
+    try {
+        $plan = $JsonText | ConvertFrom-Json
+    }
+    catch {
+        throw 'Codex edit plan was not valid JSON.'
     }
 
-    $badPatches = @(
-        "diff --git a/../final.py b/../final.py`n--- a/../final.py`n+++ b/../final.py",
-        "diff --git a/scripts/evil.ps1 b/scripts/evil.ps1`n--- a/scripts/evil.ps1`n+++ b/scripts/evil.ps1",
-        "diff --git a/a.txt b/b.txt`nrename from a.txt`nrename to b.txt",
-        "diff --git a/x b/x`nnew file mode 120000`n--- /dev/null`n+++ b/x"
-    )
-    foreach ($badPatch in $badPatches) {
-        $rejected = $false
-        try {
-            $badPaths = @(Get-PatchPaths -PatchText $badPatch)
-            Assert-PatchPathsAllowed -PatchPaths $badPaths -AllowedPaths $allowed -ForbiddenPaths $forbidden
+    if ($null -eq $plan -or $null -eq $plan.edits) { throw 'Codex edit plan did not contain an edits array.' }
+    $edits = @($plan.edits)
+    if ($edits.Count -lt 1 -or $edits.Count -gt 20) { throw 'Codex edit plan must contain between 1 and 20 edits.' }
+
+    $validated = @()
+    foreach ($edit in $edits) {
+        if ($null -eq $edit.path -or $null -eq $edit.old_text -or $null -eq $edit.new_text) {
+            throw 'Each edit must contain path, old_text, and new_text.'
         }
-        catch { $rejected = $true }
-        if (-not $rejected) { throw 'Unsafe patch regression was not rejected.' }
+
+        $path = Assert-SafeRepositoryPath -Path ([string]$edit.path)
+        $validated += [pscustomobject]@{
+            path = $path
+            old_text = [string]$edit.old_text
+            new_text = [string]$edit.new_text
+        }
     }
 
-    $summary = Get-BoundedSummary -Text ('x' * 900) -MaxLength 120
-    if ($summary.Length -gt 123) { throw 'Bounded diagnostic summary regression failed.' }
-    Write-Output 'Zero-change patch recovery self-test passed.'
+    return @($validated)
+}
+
+function Apply-ValidatedEditPlan {
+    param(
+        [string]$Root,
+        [object[]]$Edits,
+        [string[]]$AllowedPaths,
+        [string[]]$ForbiddenPaths
+    )
+
+    $paths = @($Edits | ForEach-Object { $_.path } | Select-Object -Unique)
+    Assert-PathsAllowed -Paths $paths -AllowedPaths $AllowedPaths -ForbiddenPaths $ForbiddenPaths
+
+    $contentByPath = @{}
+    foreach ($edit in $Edits) {
+        $relativePath = [string]$edit.path
+        $targetPath = Join-Path $Root ($relativePath.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+
+        if (-not $contentByPath.ContainsKey($relativePath)) {
+            if (Test-Path -LiteralPath $targetPath -PathType Leaf) {
+                $contentByPath[$relativePath] = [System.IO.File]::ReadAllText($targetPath, [System.Text.Encoding]::UTF8)
+            }
+            else {
+                $contentByPath[$relativePath] = $null
+            }
+        }
+
+        $current = $contentByPath[$relativePath]
+        $oldText = [string]$edit.old_text
+        $newText = [string]$edit.new_text
+
+        if ($null -eq $current) {
+            if (-not [string]::IsNullOrEmpty($oldText)) {
+                throw "Cannot create '$relativePath' because old_text is not empty."
+            }
+            $contentByPath[$relativePath] = $newText
+            continue
+        }
+
+        if ([string]::IsNullOrEmpty($oldText)) {
+            throw "Cannot modify existing file '$relativePath' with an empty old_text anchor."
+        }
+
+        $occurrences = Get-SubstringCount -Text $current -Needle $oldText
+        if ($occurrences -ne 1) {
+            throw "Edit anchor for '$relativePath' matched $occurrences times; exactly one match is required."
+        }
+        $contentByPath[$relativePath] = $current.Replace($oldText, $newText)
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    foreach ($relativePath in $contentByPath.Keys) {
+        $targetPath = Join-Path $Root ($relativePath.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+        $parent = Split-Path -Parent $targetPath
+        if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        [System.IO.File]::WriteAllText($targetPath, [string]$contentByPath[$relativePath], $utf8NoBom)
+    }
+}
+
+function Test-IssueEligibleForRecovery {
+    param([string]$State, [string[]]$Labels)
+
+    if ([string]::IsNullOrWhiteSpace($State) -or $State.ToLowerInvariant() -ne 'open') { return $false }
+    return ($Labels -contains $QueueLabel) -or ($Labels -contains $BlockedLabel)
+}
+
+function Invoke-CodexReadOnlyEditPlan {
+    param([string]$CodexPath, [string]$PromptPath, [string]$WorktreePath, [string]$OutputPath)
+
+    $outputParent = Split-Path -Parent $OutputPath
+    if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
+        New-Item -ItemType Directory -Path $outputParent -Force | Out-Null
+    }
+    Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $exitCode = -1
+    try {
+        $ErrorActionPreference = 'Continue'
+        Get-Content -LiteralPath $PromptPath -Raw -Encoding UTF8 |
+            & $CodexPath exec --cd $WorktreePath --sandbox read-only --output-last-message $OutputPath - 1> $null 2> $null
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) { throw "Read-only Codex edit-plan generation failed with exit code $exitCode." }
+    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { throw 'Codex did not produce an edit-plan output file.' }
+}
+
+function Invoke-SelfTest {
+    $allowed = @('scripts/', 'mini_projects/test/')
+    $forbidden = @('final.py')
+
+    if (-not (Test-IssueEligibleForRecovery -State 'OPEN' -Labels @('agent:queued'))) {
+        throw 'Open queued Issue eligibility regression failed.'
+    }
+    if (Test-IssueEligibleForRecovery -State 'CLOSED' -Labels @('agent:queued')) {
+        throw 'Closed Issue must never be eligible for recovery.'
+    }
+
+    $planText = @'
+{"edits":[{"path":"scripts/sample.ps1","old_text":"old","new_text":"new"}]}
+'@
+    $edits = @(ConvertFrom-StrictEditPlan -JsonText $planText)
+    Assert-PathsAllowed -Paths @($edits[0].path) -AllowedPaths $allowed -ForbiddenPaths $forbidden
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-recovery-selftest-" + [guid]::NewGuid().ToString('N'))
+    $scriptDir = Join-Path $tempRoot 'scripts'
+    try {
+        New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
+        $samplePath = Join-Path $scriptDir 'sample.ps1'
+        $unicodeName = ([char]0xCD5C).ToString() + [char]0xC900 + [char]0xD76C
+        $unicodeReplacement = ([char]0xC0C8).ToString() + [char]0xAC12
+        $before = 'prefix old ' + $unicodeName + ' suffix'
+        [System.IO.File]::WriteAllText($samplePath, $before, (New-Object System.Text.UTF8Encoding($false)))
+        $unicodePlan = @(
+            [pscustomobject]@{ path = 'scripts/sample.ps1'; old_text = 'old'; new_text = $unicodeReplacement }
+        )
+        Apply-ValidatedEditPlan -Root $tempRoot -Edits $unicodePlan -AllowedPaths $allowed -ForbiddenPaths $forbidden
+        $roundTrip = [System.IO.File]::ReadAllText($samplePath, [System.Text.Encoding]::UTF8)
+        $expected = 'prefix ' + $unicodeReplacement + ' ' + $unicodeName + ' suffix'
+        if ($roundTrip -ne $expected) {
+            throw 'UTF-8 edit-plan round-trip regression failed.'
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $rejected = $false
+    try { [void](ConvertFrom-StrictEditPlan -JsonText '{"edits":[{"path":"../final.py","old_text":"x","new_text":"y"}]}') }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'Unsafe path regression was not rejected.' }
+
+    Write-Output 'Zero-change edit-plan recovery self-test passed.'
 }
 
 if ($SelfTest) {
@@ -206,7 +317,9 @@ if ($SelfTest) {
 }
 
 $promptPath = $null
+$outputPath = $null
 $issueNumber = $null
+
 try {
     $repositoryRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
     if ([string]::IsNullOrWhiteSpace($WorktreeRoot)) {
@@ -218,28 +331,50 @@ try {
     $lifecycleDirectory = Join-Path $WorktreeRoot 'lifecycle'
     if (-not (Test-Path -LiteralPath $lifecycleDirectory -PathType Container)) { exit 2 }
 
-    $stateFile = Get-ChildItem -LiteralPath $lifecycleDirectory -Filter 'issue-*.json' -File |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Where-Object {
-            try {
-                $candidate = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
-                $candidate.failureReason -like '*Codex made no changes*'
-            }
-            catch { $false }
-        } |
-        Select-Object -First 1
-    if ($null -eq $stateFile) { exit 2 }
-
-    $state = Get-Content -LiteralPath $stateFile.FullName -Raw | ConvertFrom-Json
-    $issueNumber = [int]$state.issueNumber
-    $worktreePath = [string]$state.worktreePath
-    if (-not (Test-Path -LiteralPath $worktreePath -PathType Container)) { throw 'Dedicated recovery worktree was not found.' }
-
     $ghPath = Resolve-RequiredCommand -Names @('gh.exe', 'gh') -DisplayName 'GitHub CLI'
     $codexPath = Resolve-RequiredCommand -Names @('codex.exe', 'codex.cmd', 'codex') -DisplayName 'Codex'
-    $issueJson = & $ghPath issue view $issueNumber --repo $Repository --json number,title,body,url,labels
-    if ($LASTEXITCODE -ne 0) { throw 'Could not read the Issue for zero-change recovery.' }
-    $issue = $issueJson | ConvertFrom-Json
+
+    $stateFile = $null
+    $state = $null
+    $issue = $null
+
+    $candidateFiles = @(Get-ChildItem -LiteralPath $lifecycleDirectory -Filter 'issue-*.json' -File | Sort-Object LastWriteTimeUtc -Descending)
+    foreach ($candidateFile in $candidateFiles) {
+        try {
+            $candidateState = Get-Content -LiteralPath $candidateFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        }
+        catch { continue }
+
+        if ([string]$candidateState.failureReason -notlike '*Codex made no changes*') { continue }
+
+        $candidateIssueNumber = [int]$candidateState.issueNumber
+        $candidateIssueJson = & $ghPath issue view $candidateIssueNumber --repo $Repository --json number,title,body,url,state,labels 2> $null
+        if ($LASTEXITCODE -ne 0) { continue }
+
+        try { $candidateIssue = $candidateIssueJson | ConvertFrom-Json }
+        catch { continue }
+
+        $candidateLabels = @($candidateIssue.labels | ForEach-Object { $_.name })
+        if (-not (Test-IssueEligibleForRecovery -State ([string]$candidateIssue.state) -Labels $candidateLabels)) {
+            continue
+        }
+
+        $stateFile = $candidateFile
+        $state = $candidateState
+        $issue = $candidateIssue
+        break
+    }
+
+    if ($null -eq $stateFile -or $null -eq $state -or $null -eq $issue) {
+        Write-Output 'No open queued/blocked zero-change Issue is eligible for recovery.'
+        exit 2
+    }
+
+    $issueNumber = [int]$state.issueNumber
+    $worktreePath = [string]$state.worktreePath
+    if (-not (Test-Path -LiteralPath $worktreePath -PathType Container)) {
+        throw 'Dedicated recovery worktree was not found.'
+    }
 
     $allowedPaths = ConvertTo-ValidatedPathList -Value (Get-IssueField -Body $issue.body -Label 'Allowed paths') -FieldName 'Allowed paths'
     $forbiddenPaths = ConvertTo-ValidatedPathList -Value (Get-IssueField -Body $issue.body -Label 'Forbidden paths') -FieldName 'Forbidden paths'
@@ -250,9 +385,20 @@ try {
 
     $promptPath = (New-TemporaryFile).FullName
     Set-Content -LiteralPath $promptPath -Encoding utf8 -Value @"
-You are in a read-only recovery turn for a bounded implementation task. Inspect the dedicated Git worktree and return ONLY a raw unified diff that implements the requested task. Do not write files, commit, push, use Markdown fences, or add commentary. The host validates every path and runs git apply --check before applying anything.
+You are in a read-only recovery turn for a bounded implementation task on Windows.
+Inspect the dedicated Git worktree, but do not write files, commit, push, create a PR, deploy, notify, order, or access secrets.
 
-Use text-file diffs only. Do not emit renames, copies, binary patches, symlinks, submodules, absolute paths, or path traversal. New files must use /dev/null as the old path. Change only allowed paths.
+Return ONLY one strict JSON object with this shape:
+{"edits":[{"path":"repository/relative/file","old_text":"exact existing text","new_text":"replacement text"}]}
+
+Rules:
+- No Markdown fences or commentary.
+- Use only repository-relative ASCII paths from the allowed scope.
+- Prefer small exact text replacements; old_text for an existing file must match exactly once.
+- To create a new text file, use old_text as an empty string and new_text as the complete file content.
+- Do not delete files, rename files, emit binary content, symlinks, submodules, absolute paths, or path traversal.
+- Keep the plan to at most 20 edits.
+- The host validates every path and every old_text anchor before writing anything, then runs normal path enforcement and tests.
 
 Issue #$issueNumber
 $($issue.url)
@@ -273,48 +419,37 @@ Forbidden paths:
 $($effectiveForbiddenPaths -join "`n")
 "@
 
-    $patchOutputPath = Join-Path $WorktreeRoot "$issueNumber-zero-change-recovery.patch"
-    Invoke-CodexReadOnlyPatch -CodexPath $codexPath -PromptPath $promptPath -WorktreePath $worktreePath -OutputPath $patchOutputPath
-    $patchText = Get-Content -LiteralPath $patchOutputPath -Raw
+    $outputPath = Join-Path $WorktreeRoot "$issueNumber-zero-change-recovery.json"
+    Invoke-CodexReadOnlyEditPlan -CodexPath $codexPath -PromptPath $promptPath -WorktreePath $worktreePath -OutputPath $outputPath
 
-    try {
-        $patchPaths = @(Get-PatchPaths -PatchText $patchText)
-        Assert-PatchPathsAllowed -PatchPaths $patchPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
-    }
-    catch {
-        $summary = Get-BoundedSummary -Text $patchText
-        throw "Read-only Codex produced an unsafe or unusable patch. Bounded agent output: $summary"
-    }
-
-    & git -C $worktreePath apply --check --whitespace=nowarn $patchOutputPath 1> $null 2> $null
-    if ($LASTEXITCODE -ne 0) { throw 'git apply --check rejected the recovery patch.' }
-    & git -C $worktreePath apply --whitespace=nowarn $patchOutputPath 1> $null 2> $null
-    if ($LASTEXITCODE -ne 0) { throw 'git apply failed after a successful check.' }
+    $planText = [System.IO.File]::ReadAllText($outputPath, [System.Text.Encoding]::UTF8)
+    $edits = @(ConvertFrom-StrictEditPlan -JsonText $planText)
+    Apply-ValidatedEditPlan -Root $worktreePath -Edits $edits -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
 
     $changedPaths = @(Get-ChangedPaths -Path $worktreePath)
-    Assert-PatchPathsAllowed -PatchPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
+    if ($changedPaths.Count -eq 0) { throw 'Validated edit plan produced no worktree changes.' }
+    Assert-PathsAllowed -Paths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
 
     $issueLabels = @($issue.labels | ForEach-Object { $_.name })
     if ($issueLabels -contains $BlockedLabel) {
         & $ghPath issue edit $issueNumber --repo $Repository --remove-label $BlockedLabel --add-label $QueueLabel 1> $null 2> $null
-    }
-    elseif ($issueLabels -contains $RunningLabel) {
-        & $ghPath issue edit $issueNumber --repo $Repository --remove-label $RunningLabel --add-label $QueueLabel 1> $null 2> $null
+        if ($LASTEXITCODE -ne 0) { throw 'Validated changes were applied, but the Issue could not be requeued.' }
     }
     elseif (-not ($issueLabels -contains $QueueLabel)) {
         & $ghPath issue edit $issueNumber --repo $Repository --add-label $QueueLabel 1> $null 2> $null
+        if ($LASTEXITCODE -ne 0) { throw 'Validated changes were applied, but the Issue could not be queued.' }
     }
-    if ($LASTEXITCODE -ne 0) { throw 'Recovery patch was applied but the Issue could not be requeued.' }
 
-    & $ghPath issue comment $issueNumber --repo $Repository --body 'Control-plane recovery: a read-only Codex unified diff was path-validated, passed git apply --check, and was applied only inside the dedicated task worktree. The Issue is queued for the normal worker test/review/Draft-PR pipeline.' 1> $null 2> $null
-    Write-Output "Validated read-only Codex patch applied for Issue #$issueNumber."
+    & $ghPath issue comment $issueNumber --repo $Repository --body 'Control-plane zero-change recovery applied a validated exact-text edit plan inside the dedicated worktree and requeued the Issue. Closed Issues are never eligible for recovery.' 1> $null 2> $null
+
+    Write-Output "Recovered Issue #$issueNumber with a validated exact-text edit plan."
     exit 0
 }
 catch {
     if ($null -ne $issueNumber) {
         try {
             $ghForComment = Resolve-RequiredCommand -Names @('gh.exe', 'gh') -DisplayName 'GitHub CLI'
-            & $ghForComment issue comment $issueNumber --repo $Repository --body 'Control-plane patch recovery did not apply any unvalidated change. Recovery remains blocked for management review; local bounded diagnostics were preserved.' 1> $null 2> $null
+            & $ghForComment issue comment $issueNumber --repo $Repository --body 'Control-plane edit-plan recovery did not apply an unvalidated change. Recovery remains bounded and requires another safe attempt or management review.' 1> $null 2> $null
         }
         catch { }
     }
@@ -322,5 +457,7 @@ catch {
     exit 1
 }
 finally {
-    if ($null -ne $promptPath) { Remove-Item -LiteralPath $promptPath -Force -ErrorAction SilentlyContinue }
+    if ($null -ne $promptPath) {
+        Remove-Item -LiteralPath $promptPath -Force -ErrorAction SilentlyContinue
+    }
 }
