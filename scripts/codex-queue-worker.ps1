@@ -10,7 +10,11 @@ param(
     [string]$RunningLabel = "agent:running",
     [string]$BlockedLabel = "agent:blocked",
     [string]$DoneLabel = "agent:done",
-    [string]$ApprovalRequiredLabel = "agent:approval-required"
+    [string]$ApprovalRequiredLabel = "agent:approval-required",
+    [string]$DefaultCodexModel = "gpt-5.6-terra",
+    [string]$ElevatedCodexModel = "gpt-5.6-sol",
+    [string]$DefaultClaudeModel = "claude-sonnet-5",
+    [string]$ElevatedClaudeModel = "claude-opus-5"
 )
 
 Set-StrictMode -Version Latest
@@ -193,6 +197,22 @@ function Assert-AllowedValue {
     }
 }
 
+function Get-AgentModelRoute {
+    param(
+        [Parameter(Mandatory)][ValidateSet("low", "medium", "high", "critical")][string]$RiskTier,
+        [Parameter(Mandatory)][string]$DefaultModel,
+        [Parameter(Mandatory)][string]$ElevatedModel
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DefaultModel) -or [string]::IsNullOrWhiteSpace($ElevatedModel)) {
+        throw "Model routing requires explicit non-empty model identifiers."
+    }
+    if ($RiskTier -in @("high", "critical")) {
+        return $ElevatedModel
+    }
+    return $DefaultModel
+}
+
 function Test-HighRiskPathScope {
     param([Parameter(Mandatory)][string[]]$AllowedPaths)
 
@@ -370,8 +390,13 @@ function Invoke-CodexPrompt {
         [Parameter(Mandatory)][string]$CodexPath,
         [Parameter(Mandatory)][string]$PromptPath,
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][ValidateSet("workspace-write", "read-only")][string]$Sandbox
+        [Parameter(Mandatory)][ValidateSet("workspace-write", "read-only")][string]$Sandbox,
+        [Parameter(Mandatory)][string]$Model
     )
+
+    if ([string]::IsNullOrWhiteSpace($Model)) {
+        throw "Codex model must be explicit and non-empty."
+    }
 
     $codexExitCode = -1
     $previousErrorActionPreference = $ErrorActionPreference
@@ -381,7 +406,7 @@ function Invoke-CodexPrompt {
         # Judge success only by the native process exit code.
         $ErrorActionPreference = "Continue"
         Get-Content -LiteralPath $PromptPath -Raw |
-            & $CodexPath exec --cd $Path --sandbox $Sandbox - 1> $null 2> $null
+            & $CodexPath exec --model $Model --cd $Path --sandbox $Sandbox - 1> $null 2> $null
         $codexExitCode = $LASTEXITCODE
     }
     finally {
@@ -509,6 +534,10 @@ try {
         throw "High-risk path scope requires a high or critical Risk tier."
     }
 
+    $selectedCodexModel = Get-AgentModelRoute -RiskTier $riskTier -DefaultModel $DefaultCodexModel -ElevatedModel $ElevatedCodexModel
+    $selectedClaudeModel = Get-AgentModelRoute -RiskTier $riskTier -DefaultModel $DefaultClaudeModel -ElevatedModel $ElevatedClaudeModel
+    $claudeFallbackModel = $DefaultClaudeModel
+
     $slug = ($taskTitle.ToLowerInvariant() -replace "[^a-z0-9]+", "-").Trim("-")
     if ([string]::IsNullOrWhiteSpace($slug)) {
         $slug = "task"
@@ -604,7 +633,7 @@ $($forbiddenPaths -join "`n")
 Test profile: $testProfile
 "@
         Set-Content -LiteralPath $promptPath -Value ($template + $validatedFields) -Encoding utf8
-        Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $promptPath -Path $worktreePath -Sandbox "workspace-write"
+        Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $promptPath -Path $worktreePath -Sandbox "workspace-write" -Model $selectedCodexModel
         $taskPhase = "implemented"
         Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
 
@@ -627,7 +656,7 @@ Test profile: $testProfile
         $reviewStateScript = Join-Path $repositoryRoot "scripts\bounded-review-state.ps1"
         $initialReviewNeedsResolution = $false
 
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $reviewScript -WorktreePath $worktreePath -TestResultPath $testResultPath -ReviewOutputPath $reviewResultPath -BaseBranch $BaseBranch -Round initial
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $reviewScript -WorktreePath $worktreePath -TestResultPath $testResultPath -ReviewOutputPath $reviewResultPath -BaseBranch $BaseBranch -Round initial -PreferredModel $selectedClaudeModel -FallbackModel $claudeFallbackModel
         $reviewExitCode = $LASTEXITCODE
         if ($reviewExitCode -eq 10) {
             $selfReviewPromptPath = $null
@@ -646,7 +675,7 @@ $testSummary
 STAGED DIFF
 $stagedDiff
 "@
-                Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $selfReviewPromptPath -Path $worktreePath -Sandbox "read-only"
+                Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $selfReviewPromptPath -Path $worktreePath -Sandbox "read-only" -Model $selectedCodexModel
                 Set-Content -LiteralPath $reviewResultPath -Encoding utf8 -Value "reviewer: Codex self-review`nround: initial`nstatus: COMPLETED"
             }
             finally {
@@ -701,7 +730,7 @@ $claudeReview
 STAGED DIFF
 $stagedDiff
 "@
-                Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $reviewResolutionPromptPath -Path $worktreePath -Sandbox "workspace-write"
+                Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $reviewResolutionPromptPath -Path $worktreePath -Sandbox "workspace-write" -Model $selectedCodexModel
             }
             finally {
                 if ($null -ne $reviewResolutionPromptPath) {
@@ -720,7 +749,7 @@ $stagedDiff
             }
 
             $finalReviewResultPath = Join-Path $WorktreeRoot "$issueNumber-final-review.txt"
-            & powershell -NoProfile -ExecutionPolicy Bypass -File $reviewScript -WorktreePath $worktreePath -TestResultPath $testResultPath -ReviewOutputPath $finalReviewResultPath -BaseBranch $BaseBranch -Round final
+            & powershell -NoProfile -ExecutionPolicy Bypass -File $reviewScript -WorktreePath $worktreePath -TestResultPath $testResultPath -ReviewOutputPath $finalReviewResultPath -BaseBranch $BaseBranch -Round final -PreferredModel $selectedClaudeModel -FallbackModel $claudeFallbackModel
             $finalReviewExitCode = $LASTEXITCODE
             if ($finalReviewExitCode -eq 20) {
                 $finalAction = (& powershell -NoProfile -ExecutionPolicy Bypass -File $reviewStateScript -Round final -Verdict CHANGES_REQUESTED | Select-Object -Last 1).Trim()
@@ -752,7 +781,7 @@ $testSummary
 STAGED DIFF
 $stagedDiff
 "@
-                    Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $selfReviewPromptPath -Path $worktreePath -Sandbox "read-only"
+                    Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $selfReviewPromptPath -Path $worktreePath -Sandbox "read-only" -Model $selectedCodexModel
                     Set-Content -LiteralPath $finalReviewResultPath -Encoding utf8 -Value "reviewer: Codex self-review`nround: final`nstatus: COMPLETED"
                 }
                 finally {
@@ -840,6 +869,9 @@ Automated local queue run for Issue #$issueNumber.
 - Next action: $nextAction
 - Test profile: $testProfile
 - Test result: PASSED
+- Codex model route: $selectedCodexModel
+- Claude review model route: $selectedClaudeModel
+- Claude fallback model: $claudeFallbackModel
 - Review report: $([System.IO.Path]::GetFileName($reviewResultPath))
 - Merge policy: human approval required; this Draft PR is never auto-merged.
 - Approval gate: $(if ($requiresApproval) { "EXPLICIT HUMAN APPROVAL REQUIRED before marking ready for review or merging." } else { "human review and merge decision required." })
