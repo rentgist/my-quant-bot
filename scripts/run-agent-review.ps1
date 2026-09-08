@@ -62,6 +62,10 @@ function Get-BoundedText {
     }
 
     $normalized = (($Text -replace "`0", '') -replace '\r\n', "`n").Trim()
+    $normalized = [regex]::Replace($normalized, '(?im)^\s*VERDICT\s*:\s*(PASS|CHANGES_REQUESTED)\s*$', '').Trim()
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        return "(verdict only)"
+    }
     if ($normalized.Length -le $Limit) {
         return $normalized
     }
@@ -122,6 +126,10 @@ function Invoke-SelfTest {
     $bounded = Get-BoundedText -Text ('x' * 5000) -Limit 512
     if ($bounded.Length -gt 515) {
         throw "Bounded review output regression failed."
+    }
+    $summaryWithoutVerdict = Get-BoundedText -Text "VERDICT: PASS`nNo blocking findings." -Limit 512
+    if ($summaryWithoutVerdict -match '(?im)^\s*VERDICT\s*:') {
+        throw "Review summary must not duplicate the machine-readable verdict line."
     }
     Write-Output "Claude review parser self-test passed."
 }
