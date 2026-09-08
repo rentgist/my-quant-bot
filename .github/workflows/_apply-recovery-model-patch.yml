@@ -1,0 +1,28 @@
+name: Apply recovery model patch
+
+on:
+  push:
+    branches:
+      - feat/model-routing-v1
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/model-routing-v1
+          fetch-depth: 0
+      - name: Apply exact recovery patch
+        run: python scripts/_apply_recovery_model_patch.py
+      - name: Commit recovery patch only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/recover-codex-zero-change.ps1
+          git commit -m "feat(automation): pin recovery Codex model"
+          git push origin HEAD:feat/model-routing-v1
