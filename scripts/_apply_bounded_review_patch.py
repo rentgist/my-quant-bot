@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Temporary exact patch driver. It is deleted before the final PR is merged.
 worker_path = Path('scripts/codex-queue-worker.ps1')
 ci_path = Path('.github/workflows/ci.yml')
 
