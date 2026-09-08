@@ -275,7 +275,7 @@ function Invoke-SelfTest {
     }
 
     $planText = @'
-{"edits":[{"path":"scripts/sample.ps1","old_text":"old","new_text":"새값"}]}
+{"edits":[{"path":"scripts/sample.ps1","old_text":"old","new_text":"new"}]}
 '@
     $edits = @(ConvertFrom-StrictEditPlan -JsonText $planText)
     Assert-PathsAllowed -Paths @($edits[0].path) -AllowedPaths $allowed -ForbiddenPaths $forbidden
@@ -285,13 +285,17 @@ function Invoke-SelfTest {
     try {
         New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
         $samplePath = Join-Path $scriptDir 'sample.ps1'
-        [System.IO.File]::WriteAllText($samplePath, 'prefix old 최준희 suffix', (New-Object System.Text.UTF8Encoding($false)))
+        $unicodeName = ([char]0xCD5C).ToString() + [char]0xC900 + [char]0xD76C
+        $unicodeReplacement = ([char]0xC0C8).ToString() + [char]0xAC12
+        $before = 'prefix old ' + $unicodeName + ' suffix'
+        [System.IO.File]::WriteAllText($samplePath, $before, (New-Object System.Text.UTF8Encoding($false)))
         $unicodePlan = @(
-            [pscustomobject]@{ path = 'scripts/sample.ps1'; old_text = 'old'; new_text = '새값' }
+            [pscustomobject]@{ path = 'scripts/sample.ps1'; old_text = 'old'; new_text = $unicodeReplacement }
         )
         Apply-ValidatedEditPlan -Root $tempRoot -Edits $unicodePlan -AllowedPaths $allowed -ForbiddenPaths $forbidden
         $roundTrip = [System.IO.File]::ReadAllText($samplePath, [System.Text.Encoding]::UTF8)
-        if ($roundTrip -ne 'prefix 새값 최준희 suffix') {
+        $expected = 'prefix ' + $unicodeReplacement + ' ' + $unicodeName + ' suffix'
+        if ($roundTrip -ne $expected) {
             throw 'UTF-8 edit-plan round-trip regression failed.'
         }
     }
