@@ -8,6 +8,8 @@ param(
     [string]$Round = "initial",
     [ValidateRange(256, 8192)]
     [int]$MaxOutputChars = 2048,
+    [string]$PreferredModel = "claude-sonnet-5",
+    [string]$FallbackModel = "claude-sonnet-5",
     [switch]$SelfTest
 )
 
@@ -76,12 +78,14 @@ function Write-ReviewReport {
     param(
         [Parameter(Mandatory)][ValidateSet("PASS", "CHANGES_REQUESTED", "UNAVAILABLE")][string]$Verdict,
         [Parameter(Mandatory)][string]$Summary,
-        [Parameter(Mandatory)][string]$Reason
+        [Parameter(Mandatory)][string]$Reason,
+        [Parameter(Mandatory)][string]$ModelUsed
     )
 
     $report = @"
 reviewer: Claude Code
 round: $Round
+model: $ModelUsed
 VERDICT: $Verdict
 reason: $Reason
 summary:
@@ -94,20 +98,42 @@ function Exit-WithVerdict {
     param(
         [Parameter(Mandatory)][ValidateSet("PASS", "CHANGES_REQUESTED", "UNAVAILABLE")][string]$Verdict,
         [Parameter(Mandatory)][string]$Summary,
-        [Parameter(Mandatory)][string]$Reason
+        [Parameter(Mandatory)][string]$Reason,
+        [Parameter(Mandatory)][string]$ModelUsed
     )
 
-    Write-ReviewReport -Verdict $Verdict -Summary $Summary -Reason $Reason
+    Write-ReviewReport -Verdict $Verdict -Summary $Summary -Reason $Reason -ModelUsed $ModelUsed
     if ($Verdict -eq "PASS") {
-        Write-Output "Claude review: PASS ($Round)."
+        Write-Output "Claude review: PASS ($Round, $ModelUsed)."
         exit 0
     }
     if ($Verdict -eq "CHANGES_REQUESTED") {
-        Write-Output "Claude review: CHANGES_REQUESTED ($Round)."
+        Write-Output "Claude review: CHANGES_REQUESTED ($Round, $ModelUsed)."
         exit 20
     }
     Write-Output "Claude review: UNAVAILABLE ($Reason)"
     exit 10
+}
+
+function Invoke-ClaudeReadOnly {
+    param(
+        [Parameter(Mandatory)][string]$ClaudePath,
+        [Parameter(Mandatory)][string]$PromptPath,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter(Mandatory)][string]$Model
+    )
+
+    Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        Get-Content -LiteralPath $PromptPath -Raw |
+            & $ClaudePath -p --model $Model --permission-mode plan --max-turns 1 --output-format text --disallowedTools "Edit" "Write" "Bash" 1> $OutputPath 2> $null
+        return $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 }
 
 function Invoke-SelfTest {
@@ -131,7 +157,10 @@ function Invoke-SelfTest {
     if ($summaryWithoutVerdict -match '(?im)^\s*VERDICT\s*:') {
         throw "Review summary must not duplicate the machine-readable verdict line."
     }
-    Write-Output "Claude review parser self-test passed."
+    if ($PreferredModel -ne "claude-sonnet-5" -or $FallbackModel -ne "claude-sonnet-5") {
+        throw "Default Claude model routing regression failed."
+    }
+    Write-Output "Claude review parser/model self-test passed."
 }
 
 if ($SelfTest) {
@@ -144,6 +173,9 @@ if ([string]::IsNullOrWhiteSpace($WorktreePath) -or
     [string]::IsNullOrWhiteSpace($ReviewOutputPath)) {
     throw "WorktreePath, TestResultPath, and ReviewOutputPath are required outside SelfTest mode."
 }
+if ([string]::IsNullOrWhiteSpace($PreferredModel)) {
+    throw "PreferredModel must be explicit and non-empty."
+}
 
 try {
     $resolvedWorktree = (Resolve-Path -LiteralPath $WorktreePath).Path
@@ -155,7 +187,7 @@ try {
 
     $claudePath = Resolve-OptionalCommand -Names @("claude.cmd", "claude.exe", "claude")
     if ($null -eq $claudePath) {
-        Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary "Claude Code command was not found." -Reason "command-not-found"
+        Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary "Claude Code command was not found." -Reason "command-not-found" -ModelUsed $PreferredModel
     }
 
     $diff = & git -C $resolvedWorktree diff --cached --no-ext-diff --unified=80 $BaseBranch
@@ -189,15 +221,13 @@ $diff
         Set-Content -LiteralPath $tempPrompt.FullName -Value $reviewPrompt -Encoding utf8
         Push-Location -LiteralPath $tempPrompt.DirectoryName
         try {
-            $previousErrorActionPreference = $ErrorActionPreference
-            try {
-                $ErrorActionPreference = "Continue"
-                Get-Content -LiteralPath $tempPrompt.FullName -Raw |
-                    & $claudePath -p --permission-mode plan --max-turns 1 --output-format text --disallowedTools "Edit" "Write" "Bash" 1> $rawOutputPath 2> $null
-                $claudeExitCode = $LASTEXITCODE
-            }
-            finally {
-                $ErrorActionPreference = $previousErrorActionPreference
+            $modelUsed = $PreferredModel
+            $claudeExitCode = Invoke-ClaudeReadOnly -ClaudePath $claudePath -PromptPath $tempPrompt.FullName -OutputPath $rawOutputPath -Model $PreferredModel
+            if ($claudeExitCode -ne 0 -and
+                -not [string]::IsNullOrWhiteSpace($FallbackModel) -and
+                $FallbackModel -ne $PreferredModel) {
+                $modelUsed = $FallbackModel
+                $claudeExitCode = Invoke-ClaudeReadOnly -ClaudePath $claudePath -PromptPath $tempPrompt.FullName -OutputPath $rawOutputPath -Model $FallbackModel
             }
         }
         finally {
@@ -205,16 +235,16 @@ $diff
         }
 
         if ($claudeExitCode -ne 0) {
-            Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary "Claude Code did not complete the read-only review." -Reason "cli-unavailable-or-unauthenticated"
+            Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary "Claude Code did not complete the read-only review with the configured model route." -Reason "model-unavailable-or-unauthenticated" -ModelUsed $modelUsed
         }
 
         $rawOutput = Get-Content -LiteralPath $rawOutputPath -Raw -ErrorAction SilentlyContinue
         $verdict = Get-ClaudeVerdict -Output $rawOutput
         $boundedSummary = Get-BoundedText -Text $rawOutput -Limit $MaxOutputChars
         if ($verdict -eq "UNAVAILABLE") {
-            Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary $boundedSummary -Reason "missing-or-ambiguous-verdict"
+            Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary $boundedSummary -Reason "missing-or-ambiguous-verdict" -ModelUsed $modelUsed
         }
-        Exit-WithVerdict -Verdict $verdict -Summary $boundedSummary -Reason "completed-read-only"
+        Exit-WithVerdict -Verdict $verdict -Summary $boundedSummary -Reason "completed-read-only" -ModelUsed $modelUsed
     }
     finally {
         Remove-Item -LiteralPath $tempPrompt.FullName -Force -ErrorAction SilentlyContinue
@@ -222,5 +252,5 @@ $diff
     }
 }
 catch {
-    Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary "Claude review could not start safely." -Reason "safe-start-failure"
+    Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary "Claude review could not start safely." -Reason "safe-start-failure" -ModelUsed $PreferredModel
 }
