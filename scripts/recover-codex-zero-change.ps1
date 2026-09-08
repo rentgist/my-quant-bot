@@ -5,6 +5,7 @@ param(
     [string]$QueueLabel = "agent:queued",
     [string]$RunningLabel = "agent:running",
     [string]$BlockedLabel = "agent:blocked",
+    [string]$RecoveryCodexModel = "gpt-5.6-sol",
     [switch]$SelfTest
 )
 
@@ -239,7 +240,9 @@ function Test-IssueEligibleForRecovery {
 }
 
 function Invoke-CodexReadOnlyEditPlan {
-    param([string]$CodexPath, [string]$PromptPath, [string]$WorktreePath, [string]$OutputPath)
+    param([string]$CodexPath, [string]$PromptPath, [string]$WorktreePath, [string]$OutputPath, [string]$Model)
+
+    if ([string]::IsNullOrWhiteSpace($Model)) { throw 'Recovery Codex model must be explicit and non-empty.' }
 
     $outputParent = Split-Path -Parent $OutputPath
     if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
@@ -252,7 +255,7 @@ function Invoke-CodexReadOnlyEditPlan {
     try {
         $ErrorActionPreference = 'Continue'
         Get-Content -LiteralPath $PromptPath -Raw -Encoding UTF8 |
-            & $CodexPath exec --cd $WorktreePath --sandbox read-only --output-last-message $OutputPath - 1> $null 2> $null
+            & $CodexPath exec --model $Model --cd $WorktreePath --sandbox read-only --output-last-message $OutputPath - 1> $null 2> $null
         $exitCode = $LASTEXITCODE
     }
     finally {
@@ -307,6 +310,7 @@ function Invoke-SelfTest {
     try { [void](ConvertFrom-StrictEditPlan -JsonText '{"edits":[{"path":"../final.py","old_text":"x","new_text":"y"}]}') }
     catch { $rejected = $true }
     if (-not $rejected) { throw 'Unsafe path regression was not rejected.' }
+    if ($RecoveryCodexModel -ne 'gpt-5.6-sol') { throw 'Recovery model routing regression failed.' }
 
     Write-Output 'Zero-change edit-plan recovery self-test passed.'
 }
@@ -420,7 +424,7 @@ $($effectiveForbiddenPaths -join "`n")
 "@
 
     $outputPath = Join-Path $WorktreeRoot "$issueNumber-zero-change-recovery.json"
-    Invoke-CodexReadOnlyEditPlan -CodexPath $codexPath -PromptPath $promptPath -WorktreePath $worktreePath -OutputPath $outputPath
+    Invoke-CodexReadOnlyEditPlan -CodexPath $codexPath -PromptPath $promptPath -WorktreePath $worktreePath -OutputPath $outputPath -Model $RecoveryCodexModel
 
     $planText = [System.IO.File]::ReadAllText($outputPath, [System.Text.Encoding]::UTF8)
     $edits = @(ConvertFrom-StrictEditPlan -JsonText $planText)
