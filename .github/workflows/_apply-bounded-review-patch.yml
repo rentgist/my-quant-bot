@@ -19,12 +19,10 @@ jobs:
           fetch-depth: 0
       - name: Apply exact patch
         run: python scripts/_apply_bounded_review_patch.py
-      - name: Remove temporary patch machinery
-        run: git rm scripts/_apply_bounded_review_patch.py .github/workflows/_apply-bounded-review-patch.yml
-      - name: Commit patched automation
+      - name: Commit worker patch only
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scripts/codex-queue-worker.ps1 .github/workflows/ci.yml scripts/run-agent-review.ps1 scripts/bounded-review-state.ps1
+          git add scripts/codex-queue-worker.ps1
           git commit -m "feat(automation): wire bounded Claude review loop"
           git push origin HEAD:fix/bounded-review-loop-v2
