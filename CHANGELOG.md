@@ -1,3 +1,8 @@
+## [2026-09-09] Surgical zero-change observability hotfix
+
+- Captured the original workspace-write Codex turn's private last message, classified zero-change outcomes into bounded reason codes, and deleted the raw message before lifecycle reporting.
+- Added Windows PowerShell 5.1-compatible deterministic classifier self-tests to the fixed automation-smoke profile.
+
 # 퀀트 대시보드 업데이트 내역 (CHANGELOG)
 
 ## [2026-08-14] 텐배거 섹터 순환 스캔 및 14시 재검증
