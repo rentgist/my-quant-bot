@@ -1,3 +1,8 @@
+## [2026-09-09] Bounded fixed-test failure diagnostics
+
+- Classified only worker-owned fixed test-result strings into bounded lifecycle failure codes without publishing test output, stderr, paths, repository contents, or agent output.
+- Added Windows PowerShell 5.1-compatible deterministic mapping self-tests to the existing automation-smoke profile.
+
 ## [2026-09-09] Surgical zero-change observability hotfix
 
 - Captured the original workspace-write Codex turn's private last message, classified zero-change outcomes into bounded reason codes, and deleted the raw message before lifecycle reporting.
