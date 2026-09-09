@@ -106,8 +106,32 @@ try {
     $workerExitCode = $LASTEXITCODE
 
     if ($workerExitCode -ne 0) {
-        # Publish the worker's sanitized lifecycle diagnostic first, so management has evidence even
-        # if the optional zero-change recovery path cannot produce a safe patch.
+        # Diagnose zero-change before publishing the lifecycle diagnostic. The diagnosis is read-only,
+        # keeps raw Codex output private/local, and adds only a bounded reason code to failureReason.
+        $zeroChangeDiagnosisPath = Join-Path $PSScriptRoot "diagnose-codex-zero-change.ps1"
+        if (Test-Path -LiteralPath $zeroChangeDiagnosisPath -PathType Leaf) {
+            $zeroChangeDiagnosisArguments = @(
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", $zeroChangeDiagnosisPath,
+                "-Repository", $Repository
+            )
+            if (-not [string]::IsNullOrWhiteSpace($WorktreeRoot)) {
+                $zeroChangeDiagnosisArguments += @("-WorktreeRoot", $WorktreeRoot)
+            }
+            $previousDiagnosisErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                & powershell @zeroChangeDiagnosisArguments 1> $null 2> $null
+            }
+            catch { }
+            finally {
+                $ErrorActionPreference = $previousDiagnosisErrorActionPreference
+            }
+        }
+
+        # Publish the worker's sanitized lifecycle diagnostic after bounded zero-change diagnosis, so
+        # management can see the reason code without raw stderr, raw agent output, or local paths.
         $diagnosticPublisherPath = Join-Path $PSScriptRoot "publish-codex-queue-diagnostic.ps1"
         if (Test-Path -LiteralPath $diagnosticPublisherPath -PathType Leaf) {
             $diagnosticArguments = @(
@@ -124,9 +148,8 @@ try {
         }
 
         # Native Windows Codex workspace-write can occasionally exit 0 without changing files.
-        # Recovery is intentionally narrow: only a lifecycle whose failure says "Codex made no changes"
-        # is eligible. Codex then runs read-only, emits a unified diff, and the host validates every
-        # path plus git apply --check before applying anything inside the dedicated task worktree.
+        # Recovery remains intentionally narrow and validates every edit path and exact-text anchor
+        # before applying anything inside the dedicated task worktree.
         $recoveryPath = Join-Path $PSScriptRoot "recover-codex-zero-change.ps1"
         if (Test-Path -LiteralPath $recoveryPath -PathType Leaf) {
             $recoveryArguments = @(
