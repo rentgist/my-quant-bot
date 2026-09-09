@@ -350,6 +350,7 @@ function Invoke-TestProfile {
         elseif ($Profile -eq "automation-smoke") {
             $automationFiles = @(
                 (Join-Path $Path "scripts\codex-queue-worker.ps1"),
+                (Join-Path $Path "scripts\codex-zero-change-reason.ps1"),
                 (Join-Path $Path "scripts\run-agent-review.ps1"),
                 (Join-Path $Path "scripts\bounded-review-state.ps1"),
                 (Join-Path $Path "scripts\run-codex-queue-scheduled.ps1"),
@@ -372,6 +373,14 @@ function Invoke-TestProfile {
                     return $false
                 }
             }
+
+            try {
+                & (Join-Path $Path "scripts\codex-zero-change-reason.ps1") -SelfTest | Out-Null
+            }
+            catch {
+                Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (zero-change reason self-test)" -Encoding utf8
+                return $false
+            }
         }
         else {
             throw "Unsupported test profile. Shell commands from the Issue are never evaluated."
@@ -391,7 +400,8 @@ function Invoke-CodexPrompt {
         [Parameter(Mandatory)][string]$PromptPath,
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][ValidateSet("workspace-write", "read-only")][string]$Sandbox,
-        [Parameter(Mandatory)][string]$Model
+        [Parameter(Mandatory)][string]$Model,
+        [string]$LastMessagePath
     )
 
     if ([string]::IsNullOrWhiteSpace($Model)) {
@@ -405,8 +415,14 @@ function Invoke-CodexPrompt {
         # Windows PowerShell 5.1 can surface this as a native-command error.
         # Judge success only by the native process exit code.
         $ErrorActionPreference = "Continue"
-        Get-Content -LiteralPath $PromptPath -Raw |
-            & $CodexPath exec --model $Model --cd $Path --sandbox $Sandbox - 1> $null 2> $null
+        if ([string]::IsNullOrWhiteSpace($LastMessagePath)) {
+            Get-Content -LiteralPath $PromptPath -Raw |
+                & $CodexPath exec --model $Model --cd $Path --sandbox $Sandbox - 1> $null 2> $null
+        }
+        else {
+            Get-Content -LiteralPath $PromptPath -Raw |
+                & $CodexPath exec --model $Model --cd $Path --sandbox $Sandbox --output-last-message $LastMessagePath - 1> $null 2> $null
+        }
         $codexExitCode = $LASTEXITCODE
     }
     finally {
@@ -423,6 +439,7 @@ $hasMutex = $false
 $createdWorktree = $false
 $successful = $false
 $promptPath = $null
+$implementationLastMessagePath = $null
 $lifecycleStatePath = $null
 $lifecycleDirectory = $null
 $taskState = $null
@@ -601,6 +618,7 @@ try {
 
     $testResultPath = Join-Path $WorktreeRoot "$issueNumber-test-result.txt"
     $reviewResultPath = Join-Path $WorktreeRoot "$issueNumber-review.txt"
+    $zeroChangeReasonScript = Join-Path $repositoryRoot "scripts\codex-zero-change-reason.ps1"
     $taskAlreadyCommitted = Test-TaskBranchHasCommit -WorktreePath $worktreePath -BaseBranch $BaseBranch
     if (-not $taskAlreadyCommitted) {
         $templatePath = Join-Path $repositoryRoot "automation\codex-task-prompt.md"
@@ -633,12 +651,33 @@ $($forbiddenPaths -join "`n")
 Test profile: $testProfile
 "@
         Set-Content -LiteralPath $promptPath -Value ($template + $validatedFields) -Encoding utf8
-        Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $promptPath -Path $worktreePath -Sandbox "workspace-write" -Model $selectedCodexModel
+        $implementationLastMessagePath = Join-Path $WorktreeRoot "$issueNumber-implementation-last-message.txt"
+        Remove-Item -LiteralPath $implementationLastMessagePath -Force -ErrorAction SilentlyContinue
+        Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $promptPath -Path $worktreePath -Sandbox "workspace-write" -Model $selectedCodexModel -LastMessagePath $implementationLastMessagePath
+
+        $changedPaths = @(Get-ChangedPaths -Path $worktreePath)
+        if ($changedPaths.Count -eq 0) {
+            try {
+                $implementationLastMessage = if (Test-Path -LiteralPath $implementationLastMessagePath) {
+                    Get-Content -LiteralPath $implementationLastMessagePath -Raw
+                }
+                else {
+                    ""
+                }
+                $zeroChangeReason = (& $zeroChangeReasonScript -Text $implementationLastMessage | Select-Object -Last 1).Trim()
+            }
+            finally {
+                Remove-Item -LiteralPath $implementationLastMessagePath -Force -ErrorAction SilentlyContinue
+                $implementationLastMessagePath = $null
+            }
+            throw "Codex made no changes; Draft PR creation was skipped. zero_change_reason=$zeroChangeReason"
+        }
+        Remove-Item -LiteralPath $implementationLastMessagePath -Force -ErrorAction SilentlyContinue
+        $implementationLastMessagePath = $null
         $taskPhase = "implemented"
         Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
 
         $effectiveForbiddenPaths = @($BuiltInForbiddenPaths + $forbiddenPaths | Select-Object -Unique)
-        $changedPaths = @(Get-ChangedPaths -Path $worktreePath)
         Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
 
         if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
@@ -930,6 +969,9 @@ catch {
 finally {
     if ($null -ne $promptPath) {
         Remove-Item -LiteralPath $promptPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $implementationLastMessagePath) {
+        Remove-Item -LiteralPath $implementationLastMessagePath -Force -ErrorAction SilentlyContinue
     }
     if ($createdWorktree -and $successful -and -not $KeepWorktreeOnSuccess) {
         # The branch and Draft PR persist; this removes only the dedicated, clean local worktree.
