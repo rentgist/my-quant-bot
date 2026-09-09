@@ -315,6 +315,79 @@ function Assert-ChangedPathsAllowed {
     }
 }
 
+function Get-BoundedTestFailureCode {
+    param([AllowNull()][string]$ResultContent)
+
+    if ($null -eq $ResultContent) {
+        return "UNKNOWN_TEST_FAILURE"
+    }
+
+    $normalizedResult = $ResultContent.Replace("`r`n", "`n").TrimEnd([char[]]"`r`n")
+    switch -CaseSensitive ($normalizedResult) {
+        "test_profile: automation-smoke`nresult: FAILED (PowerShell parser)" {
+            return "POWERSHELL_PARSER"
+        }
+        "test_profile: automation-smoke`nresult: FAILED (zero-change reason self-test)" {
+            return "ZERO_CHANGE_REASON_SELF_TEST"
+        }
+        "test_profile: python-compile-and-pytest`nresult: FAILED (Python syntax check)" {
+            return "PYTHON_SYNTAX"
+        }
+        "test_profile: python-compile-and-pytest`nresult: FAILED (test suite)" {
+            return "TEST_SUITE"
+        }
+        "test_profile: pytest`nresult: FAILED (test suite)" {
+            return "TEST_SUITE"
+        }
+        "test_profile: automation-smoke`nresult: FAILED (test suite)" {
+            return "TEST_SUITE"
+        }
+        default {
+            return "UNKNOWN_TEST_FAILURE"
+        }
+    }
+}
+
+function Assert-BoundedTestFailureCodeSelfTest {
+    $cases = @(
+        [pscustomobject]@{
+            Result = "test_profile: automation-smoke`nresult: FAILED (PowerShell parser)`r`n"
+            Expected = "POWERSHELL_PARSER"
+        },
+        [pscustomobject]@{
+            Result = "test_profile: automation-smoke`nresult: FAILED (zero-change reason self-test)`r`n"
+            Expected = "ZERO_CHANGE_REASON_SELF_TEST"
+        },
+        [pscustomobject]@{
+            Result = "test_profile: python-compile-and-pytest`nresult: FAILED (Python syntax check)`r`n"
+            Expected = "PYTHON_SYNTAX"
+        },
+        [pscustomobject]@{
+            Result = "test_profile: python-compile-and-pytest`nresult: FAILED (test suite)`r`n"
+            Expected = "TEST_SUITE"
+        },
+        [pscustomobject]@{
+            Result = "test_profile: pytest`nresult: FAILED (test suite)`r`n"
+            Expected = "TEST_SUITE"
+        },
+        [pscustomobject]@{
+            Result = "test_profile: automation-smoke`nresult: FAILED (test suite)`r`n"
+            Expected = "TEST_SUITE"
+        },
+        [pscustomobject]@{
+            Result = "unexpected"
+            Expected = "UNKNOWN_TEST_FAILURE"
+        }
+    )
+
+    foreach ($case in $cases) {
+        $actual = Get-BoundedTestFailureCode -ResultContent $case.Result
+        if ($actual -ne $case.Expected) {
+            throw "Bounded test-failure reason-code self-test failed."
+        }
+    }
+}
+
 function Invoke-TestProfile {
     param(
         [Parameter(Mandatory)][string]$Profile,
@@ -379,6 +452,14 @@ function Invoke-TestProfile {
             }
             catch {
                 Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (zero-change reason self-test)" -Encoding utf8
+                return $false
+            }
+
+            try {
+                Assert-BoundedTestFailureCodeSelfTest
+            }
+            catch {
+                Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (test suite)" -Encoding utf8
                 return $false
             }
         }
@@ -681,7 +762,8 @@ Test profile: $testProfile
         Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $effectiveForbiddenPaths
 
         if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
-            throw "Tests failed. Default policy forbids Draft PR creation after a failed test run."
+            $testFailureCode = Get-BoundedTestFailureCode -ResultContent (Get-Content -LiteralPath $testResultPath -Raw)
+            throw $testFailureCode
         }
         $taskPhase = "tested"
         Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
@@ -784,7 +866,8 @@ $stagedDiff
                 throw "Could not stage validated review changes."
             }
             if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
-                throw "Tests failed after review resolution. Draft PR creation was blocked."
+                $testFailureCode = Get-BoundedTestFailureCode -ResultContent (Get-Content -LiteralPath $testResultPath -Raw)
+                throw $testFailureCode
             }
 
             $finalReviewResultPath = Join-Path $WorktreeRoot "$issueNumber-final-review.txt"
@@ -849,7 +932,8 @@ $stagedDiff
         # A reboot may occur after the local commit but before push/PR creation. Re-test the exact
         # committed tree and continue from that checkpoint without invoking Codex or creating another branch.
         if (-not (Invoke-TestProfile -Profile $testProfile -Path $worktreePath -ResultPath $testResultPath)) {
-            throw "Recovered task commit failed its fixed test profile; Draft PR creation was blocked."
+            $testFailureCode = Get-BoundedTestFailureCode -ResultContent (Get-Content -LiteralPath $testResultPath -Raw)
+            throw $testFailureCode
         }
         $taskPhase = "committed"
         Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
