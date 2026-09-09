@@ -1,5 +1,9 @@
 # 퀀트 대시보드 업데이트 내역 (CHANGELOG)
 
+## [2026-09-09] Temporary control-plane probe
+
+- This is a temporary control-plane existing-file write-path probe for diagnosing zero-change behavior.
+
 ## [2026-08-14] 텐배거 섹터 순환 스캔 및 14시 재검증
 
 - **단일 필터 교정:** 누락값을 0으로 취급하고 52주 고점 대비 -35% 종목을 일괄 제외하던 규칙을 폐기했습니다. 데이터 품질, 기업 규모, 성장, 수익성, 현금흐름·재무건전성, 희석, 밸류에이션과 추세를 명시적으로 분리합니다.
