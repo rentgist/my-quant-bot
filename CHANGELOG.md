@@ -1,3 +1,9 @@
+## [2026-09-10] AI Company governance consolidation
+
+- Added `.ai-company/` as a governance, permissions, workflow, state-orientation, and historical-context layer while keeping the existing PowerShell control plane as the single production execution engine.
+- Added a unified root agent guide that directs work to the current GitHub Issue, existing repository rules, CEO control-plane documentation, fixed tests, bounded review, Draft PR, and CI flow.
+- Explicitly prohibited a second worker, queue, lifecycle database, merge path, or competing source of truth; no application or investment logic was changed.
+
 ## [2026-09-09] Bounded fixed-test failure diagnostics
 
 - Classified only worker-owned fixed test-result strings into bounded lifecycle failure codes without publishing test output, stderr, paths, repository contents, or agent output.
