@@ -41,6 +41,19 @@ $SupportedTaskTypes = @("bug", "feature", "research", "maintenance", "refactor")
 $SupportedPriorities = @("P0", "P1", "P2", "P3")
 $SupportedRiskTiers = @("low", "medium", "high", "critical")
 $RequiredOwnerWorkerRole = "Owner: human; worker: local Codex queue"
+$BoundedRetryFailureCodes = @(
+    "EMPTY_LAST_MESSAGE",
+    "WRITE_BLOCKED_OR_POLICY_CONFLICT",
+    "MISSING_CONTEXT",
+    "ANALYSIS_ONLY",
+    "NO_CHANGE_NEEDED",
+    "UNKNOWN_ZERO_CHANGE",
+    "POWERSHELL_PARSER",
+    "ZERO_CHANGE_REASON_SELF_TEST",
+    "PYTHON_SYNTAX",
+    "TEST_SUITE",
+    "UNKNOWN_TEST_FAILURE"
+)
 
 function Resolve-RequiredCommand {
     param([Parameter(Mandatory)][string[]]$Names, [Parameter(Mandatory)][string]$DisplayName)
@@ -388,6 +401,79 @@ function Assert-BoundedTestFailureCodeSelfTest {
     }
 }
 
+function Get-BoundedRetryFeedbackLine {
+    param(
+        [Parameter(Mandatory)][int]$Attempt,
+        [AllowNull()][string]$FailureReason
+    )
+
+    if ($Attempt -le 1 -or [string]::IsNullOrWhiteSpace($FailureReason)) {
+        return $null
+    }
+
+    $escapedCodes = @($BoundedRetryFailureCodes | ForEach-Object { [regex]::Escape($_) })
+    $pattern = "(?<![A-Za-z0-9_])(?:" + ($escapedCodes -join "|") + ")(?![A-Za-z0-9_])"
+    $boundedMatches = [regex]::Matches($FailureReason, $pattern)
+    if ($boundedMatches.Count -ne 1) {
+        return $null
+    }
+
+    $code = $boundedMatches[0].Value
+    return "Previous bounded failure code: $code. Correct that failure before finishing."
+}
+
+function Assert-BoundedRetryFeedbackSelfTest {
+    $cases = @(
+        [pscustomobject]@{
+            Attempt = 1
+            FailureReason = "POWERSHELL_PARSER"
+            Expected = $null
+        },
+        [pscustomobject]@{
+            Attempt = 2
+            FailureReason = "POWERSHELL_PARSER"
+            Expected = "Previous bounded failure code: POWERSHELL_PARSER. Correct that failure before finishing."
+        },
+        [pscustomobject]@{
+            Attempt = 2
+            FailureReason = "raw stderr must stay private; POWERSHELL_PARSER; raw test output must stay private"
+            Expected = "Previous bounded failure code: POWERSHELL_PARSER. Correct that failure before finishing."
+        },
+        [pscustomobject]@{
+            Attempt = 2
+            FailureReason = "POWERSHELL_PARSER then POWERSHELL_PARSER"
+            Expected = $null
+        },
+        [pscustomobject]@{
+            Attempt = 2
+            FailureReason = "POWERSHELL_PARSER and TEST_SUITE"
+            Expected = $null
+        },
+        [pscustomobject]@{
+            Attempt = 2
+            FailureReason = "prefixPOWERSHELL_PARSERsuffix"
+            Expected = $null
+        },
+        [pscustomobject]@{
+            Attempt = 2
+            FailureReason = "arbitrary lifecycle failure text without a bounded code"
+            Expected = $null
+        },
+        [pscustomobject]@{
+            Attempt = 2
+            FailureReason = $null
+            Expected = $null
+        }
+    )
+
+    foreach ($case in $cases) {
+        $actual = Get-BoundedRetryFeedbackLine -Attempt $case.Attempt -FailureReason $case.FailureReason
+        if ($actual -ne $case.Expected) {
+            throw "Bounded retry-feedback self-test failed."
+        }
+    }
+}
+
 function Invoke-TestProfile {
     param(
         [Parameter(Mandatory)][string]$Profile,
@@ -457,6 +543,7 @@ function Invoke-TestProfile {
 
             try {
                 Assert-BoundedTestFailureCodeSelfTest
+                Assert-BoundedRetryFeedbackSelfTest
             }
             catch {
                 Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (test suite)" -Encoding utf8
@@ -670,6 +757,12 @@ try {
         throw "Issue #$issueNumber reached the maximum of $MaxTaskAttempts attempts and was blocked."
     }
 
+    $previousFailureReason = $null
+    if ($null -ne $taskState -and $null -ne $taskState.PSObject.Properties["failureReason"]) {
+        $previousFailureReason = [string]$taskState.failureReason
+    }
+    $retryFeedbackLine = Get-BoundedRetryFeedbackLine -Attempt $taskAttempts -FailureReason $previousFailureReason
+
     New-Item -ItemType Directory -Path $WorktreeRoot -Force | Out-Null
     Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase "worktree-preparing" -Attempts $taskAttempts
     Set-GitHubLifecycle -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -FromLabel $QueueLabel -ToLabel $RunningLabel -StatusMessage "Codex queue status: running (attempt $taskAttempts of $MaxTaskAttempts)."
@@ -731,6 +824,9 @@ $($forbiddenPaths -join "`n")
 
 Test profile: $testProfile
 "@
+        if (-not [string]::IsNullOrWhiteSpace($retryFeedbackLine)) {
+            $validatedFields += "`r`n$retryFeedbackLine"
+        }
         Set-Content -LiteralPath $promptPath -Value ($template + $validatedFields) -Encoding utf8
         $implementationLastMessagePath = Join-Path $WorktreeRoot "$issueNumber-implementation-last-message.txt"
         Remove-Item -LiteralPath $implementationLastMessagePath -Force -ErrorAction SilentlyContinue
