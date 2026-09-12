@@ -388,6 +388,236 @@ function Assert-BoundedTestFailureCodeSelfTest {
     }
 }
 
+function Get-SingleBoundedReviewField {
+    param(
+        [Parameter(Mandatory)][string]$Content,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$AllowedPattern
+    )
+
+    $pattern = "(?m)^" + [regex]::Escape($Name) + ":\s*(?<value>(" + $AllowedPattern + "))\s*\r?$"
+    $matches = [regex]::Matches($Content, $pattern)
+    if ($matches.Count -ne 1) {
+        throw "Bounded review evidence must contain exactly one valid top-level '$Name' field."
+    }
+    return $matches[0].Groups["value"].Value
+}
+
+function Get-ValidatedBoundedReviewEvidence {
+    param(
+        [Parameter(Mandatory)][string]$Content,
+        [string]$ExpectedHeadSha
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Content)) {
+        throw "Bounded review evidence is missing."
+    }
+
+    $reviewer = Get-SingleBoundedReviewField -Content $Content -Name "reviewer" -AllowedPattern "Claude Code|Codex self-review"
+    $round = Get-SingleBoundedReviewField -Content $Content -Name "round" -AllowedPattern "initial|final"
+    $verdict = Get-SingleBoundedReviewField -Content $Content -Name "VERDICT" -AllowedPattern "PASS|CHANGES_REQUESTED"
+    $reason = Get-SingleBoundedReviewField -Content $Content -Name "reason" -AllowedPattern "completed-read-only|completed-read-only-fallback"
+
+    if ($reviewer -eq "Claude Code" -and $reason -ne "completed-read-only") {
+        throw "Independent Claude evidence has invalid provenance."
+    }
+    if ($reviewer -eq "Codex self-review" -and $reason -ne "completed-read-only-fallback") {
+        throw "Codex fallback evidence has invalid provenance."
+    }
+
+    $headMatches = [regex]::Matches($Content, '(?m)^reviewed_head_sha:\s*(?<value>[0-9a-f]{40})\s*\r?$')
+    $headSha = $null
+    if ([string]::IsNullOrWhiteSpace($ExpectedHeadSha)) {
+        if ($headMatches.Count -ne 0) {
+            throw "Unbound review evidence unexpectedly contains a reviewed head SHA."
+        }
+    }
+    else {
+        if ($ExpectedHeadSha -notmatch '^[0-9a-f]{40}$' -or $headMatches.Count -ne 1) {
+            throw "Bounded review evidence is missing a valid reviewed head SHA."
+        }
+        $headSha = $headMatches[0].Groups["value"].Value
+        if ($headSha -cne $ExpectedHeadSha) {
+            throw "Bounded review evidence is stale for the current task head."
+        }
+    }
+
+    return [pscustomobject]@{
+        Reviewer = $reviewer
+        Round = $round
+        Verdict = $verdict
+        Reason = $reason
+        HeadSha = $headSha
+    }
+}
+
+function ConvertTo-CodexSelfReviewReport {
+    param(
+        [Parameter(Mandatory)][string]$RawOutput,
+        [Parameter(Mandatory)][ValidateSet("initial", "final")][string]$Round
+    )
+
+    $verdict = Get-SingleBoundedReviewField -Content $RawOutput -Name "VERDICT" -AllowedPattern "PASS|CHANGES_REQUESTED"
+    return @"
+reviewer: Codex self-review
+round: $Round
+VERDICT: $verdict
+reason: completed-read-only-fallback
+"@
+}
+
+function Get-BoundedReviewEvidenceMarker {
+    param(
+        [Parameter(Mandatory)][int]$IssueNumber,
+        [Parameter(Mandatory)][int]$PullRequestNumber,
+        [Parameter(Mandatory)][string]$HeadSha,
+        [Parameter(Mandatory)][string]$Reviewer,
+        [Parameter(Mandatory)][string]$Verdict
+    )
+
+    if ($IssueNumber -le 0 -or $PullRequestNumber -le 0 -or $HeadSha -notmatch '^[0-9a-f]{40}$' -or $Verdict -notin @("PASS", "CHANGES_REQUESTED")) {
+        throw "Cannot construct an idempotency marker from invalid review evidence."
+    }
+    $reviewerKey = switch ($Reviewer) {
+        "Claude Code" { "claude-read-only" }
+        "Codex self-review" { "codex-self-review" }
+        default { throw "Cannot publish an unknown reviewer identity." }
+    }
+    return "<!-- codex-bounded-review-evidence:v1 issue=$IssueNumber pr=$PullRequestNumber head=$HeadSha reviewer=$reviewerKey verdict=$Verdict -->"
+}
+
+function New-BoundedReviewEvidenceBody {
+    param(
+        [Parameter(Mandatory)][int]$IssueNumber,
+        [Parameter(Mandatory)][int]$PullRequestNumber,
+        [Parameter(Mandatory)]$Evidence
+    )
+
+    $reviewerDisplay = switch ($Evidence.Reviewer) {
+        "Claude Code" { "Independent Claude read-only review" }
+        "Codex self-review" { "Codex self-review" }
+        default { throw "Cannot publish an unknown reviewer identity." }
+    }
+    if ($Evidence.Round -notin @("initial", "final") -or $Evidence.Verdict -notin @("PASS", "CHANGES_REQUESTED")) {
+        throw "Cannot publish malformed bounded review evidence."
+    }
+    $marker = Get-BoundedReviewEvidenceMarker -IssueNumber $IssueNumber -PullRequestNumber $PullRequestNumber -HeadSha $Evidence.HeadSha -Reviewer $Evidence.Reviewer -Verdict $Evidence.Verdict
+    return @"
+$marker
+Bounded reviewer verdict
+
+- Reviewer: $reviewerDisplay
+- Reviewed head SHA: `$($Evidence.HeadSha)`
+- Verdict: $($Evidence.Verdict)
+- Provenance: bounded $($Evidence.Round) review; an initial PASS ends review, otherwise the existing control plane permits at most one minimal-correction turn and one final review.
+"@
+}
+
+function Publish-BoundedReviewEvidence {
+    param(
+        [Parameter(Mandatory)][string]$GhPath,
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][int]$IssueNumber,
+        [Parameter(Mandatory)][int]$PullRequestNumber,
+        [Parameter(Mandatory)]$Evidence
+    )
+
+    $marker = Get-BoundedReviewEvidenceMarker -IssueNumber $IssueNumber -PullRequestNumber $PullRequestNumber -HeadSha $Evidence.HeadSha -Reviewer $Evidence.Reviewer -Verdict $Evidence.Verdict
+    $commentsJson = & $GhPath api --paginate --slurp "repos/$Repository/issues/$PullRequestNumber/comments?per_page=100" 2> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not inspect existing durable reviewer evidence."
+    }
+    try {
+        $commentPages = $commentsJson | ConvertFrom-Json
+    }
+    catch {
+        throw "Existing GitHub reviewer evidence could not be validated."
+    }
+    $existingBodies = @($commentPages | ForEach-Object {
+        foreach ($comment in @($_)) {
+            $comment.body
+        }
+    })
+    if ($existingBodies | Where-Object { $null -ne $_ -and $_.Contains($marker) }) {
+        return
+    }
+
+    $bodyPath = (New-TemporaryFile).FullName
+    try {
+        Set-Content -LiteralPath $bodyPath -Value (New-BoundedReviewEvidenceBody -IssueNumber $IssueNumber -PullRequestNumber $PullRequestNumber -Evidence $Evidence) -Encoding utf8
+        & $GhPath pr comment $PullRequestNumber --repo $Repository --body-file $bodyPath 1> $null 2> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not publish durable bounded reviewer evidence."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $bodyPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-BoundedReviewEvidenceSelfTest {
+    $headSha = "0123456789abcdef0123456789abcdef01234567"
+    $passArtifact = "reviewer: Claude Code`nround: initial`nVERDICT: PASS`nreason: completed-read-only`nreviewed_head_sha: $headSha"
+    $passEvidence = Get-ValidatedBoundedReviewEvidence -Content $passArtifact -ExpectedHeadSha $headSha
+    if ($passEvidence.Verdict -ne "PASS" -or $passEvidence.Reviewer -ne "Claude Code") {
+        throw "PASS review evidence parsing self-test failed."
+    }
+
+    $changesArtifact = "reviewer: Claude Code`nround: final`nVERDICT: CHANGES_REQUESTED`nreason: completed-read-only`nreviewed_head_sha: $headSha"
+    if ((Get-ValidatedBoundedReviewEvidence -Content $changesArtifact -ExpectedHeadSha $headSha).Verdict -ne "CHANGES_REQUESTED") {
+        throw "CHANGES_REQUESTED review evidence parsing self-test failed."
+    }
+
+    foreach ($invalidArtifact in @(
+        "reviewer: Claude Code`nround: initial`nreason: completed-read-only`nreviewed_head_sha: $headSha",
+        "reviewer: Claude Code`nround: initial`nVERDICT: PASS`nVERDICT: CHANGES_REQUESTED`nreason: completed-read-only`nreviewed_head_sha: $headSha",
+        "reviewer: Claude Code`nround: initial`n VERDICT: PASS`nreason: completed-read-only`nreviewed_head_sha: $headSha"
+    )) {
+        $rejected = $false
+        try {
+            Get-ValidatedBoundedReviewEvidence -Content $invalidArtifact -ExpectedHeadSha $headSha | Out-Null
+        }
+        catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw "Malformed review evidence must fail closed."
+        }
+    }
+
+    $staleRejected = $false
+    try {
+        Get-ValidatedBoundedReviewEvidence -Content $passArtifact -ExpectedHeadSha "fedcba9876543210fedcba9876543210fedcba98" | Out-Null
+    }
+    catch {
+        $staleRejected = $true
+    }
+    if (-not $staleRejected) {
+        throw "Stale review evidence must fail closed."
+    }
+
+    $fallbackArtifact = "reviewer: Codex self-review`nround: final`nVERDICT: PASS`nreason: completed-read-only-fallback`nreviewed_head_sha: $headSha"
+    $fallbackEvidence = Get-ValidatedBoundedReviewEvidence -Content $fallbackArtifact -ExpectedHeadSha $headSha
+    $fallbackBody = New-BoundedReviewEvidenceBody -IssueNumber 69 -PullRequestNumber 70 -Evidence $fallbackEvidence
+    if (-not $fallbackBody.Contains("Reviewer: Codex self-review") -or $fallbackBody.Contains("Independent Claude")) {
+        throw "Codex fallback labeling self-test failed."
+    }
+
+    $unsafeArtifact = $passArtifact + "`nsummary:`nC:\Users\worker\repo`nTOKEN=secret`nraw agent output"
+    $safeEvidence = Get-ValidatedBoundedReviewEvidence -Content $unsafeArtifact -ExpectedHeadSha $headSha
+    $safeBody = New-BoundedReviewEvidenceBody -IssueNumber 69 -PullRequestNumber 70 -Evidence $safeEvidence
+    if ($safeBody.Contains("C:\Users") -or $safeBody.Contains("TOKEN=secret") -or $safeBody.Contains("raw agent output")) {
+        throw "Published review evidence sanitization self-test failed."
+    }
+
+    $markerOne = Get-BoundedReviewEvidenceMarker -IssueNumber 69 -PullRequestNumber 70 -HeadSha $headSha -Reviewer "Claude Code" -Verdict "PASS"
+    $markerTwo = Get-BoundedReviewEvidenceMarker -IssueNumber 69 -PullRequestNumber 70 -HeadSha $headSha -Reviewer "Claude Code" -Verdict "PASS"
+    $markerMovedHead = Get-BoundedReviewEvidenceMarker -IssueNumber 69 -PullRequestNumber 70 -HeadSha "fedcba9876543210fedcba9876543210fedcba98" -Reviewer "Claude Code" -Verdict "PASS"
+    if ($markerOne -cne $markerTwo -or $markerOne -ceq $markerMovedHead) {
+        throw "Review evidence idempotency self-test failed."
+    }
+}
+
 function Invoke-TestProfile {
     param(
         [Parameter(Mandatory)][string]$Profile,
@@ -457,6 +687,7 @@ function Invoke-TestProfile {
 
             try {
                 Assert-BoundedTestFailureCodeSelfTest
+                Assert-BoundedReviewEvidenceSelfTest
             }
             catch {
                 Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (test suite)" -Encoding utf8
@@ -699,6 +930,8 @@ try {
 
     $testResultPath = Join-Path $WorktreeRoot "$issueNumber-test-result.txt"
     $reviewResultPath = Join-Path $WorktreeRoot "$issueNumber-review.txt"
+    $publishableReviewPath = Join-Path $WorktreeRoot "$issueNumber-publishable-review.txt"
+    $selectedReviewResultPath = $reviewResultPath
     $zeroChangeReasonScript = Join-Path $repositoryRoot "scripts\codex-zero-change-reason.ps1"
     $taskAlreadyCommitted = Test-TaskBranchHasCommit -WorktreePath $worktreePath -BaseBranch $BaseBranch
     if (-not $taskAlreadyCommitted) {
@@ -788,7 +1021,7 @@ Test profile: $testProfile
                 Set-Content -LiteralPath $selfReviewPromptPath -Encoding utf8 -Value @"
 Perform a read-only self-review of the supplied staged diff and test summary. Do not edit files,
 run shell commands, use Git write commands, deploy, order, notify, or access secrets. Return concise
-findings with severity and file path, or state that no blocking finding exists.
+findings and exactly one top-level verdict line: VERDICT: PASS or VERDICT: CHANGES_REQUESTED.
 
 TEST SUMMARY
 $testSummary
@@ -796,8 +1029,11 @@ $testSummary
 STAGED DIFF
 $stagedDiff
 "@
-                Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $selfReviewPromptPath -Path $worktreePath -Sandbox "read-only" -Model $selectedCodexModel
-                Set-Content -LiteralPath $reviewResultPath -Encoding utf8 -Value "reviewer: Codex self-review`nround: initial`nstatus: COMPLETED"
+                $selfReviewRawPath = Join-Path $WorktreeRoot "$issueNumber-initial-codex-self-review.txt"
+                Remove-Item -LiteralPath $selfReviewRawPath -Force -ErrorAction SilentlyContinue
+                Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $selfReviewPromptPath -Path $worktreePath -Sandbox "read-only" -Model $selectedCodexModel -LastMessagePath $selfReviewRawPath
+                $selfReviewReport = ConvertTo-CodexSelfReviewReport -RawOutput (Get-Content -LiteralPath $selfReviewRawPath -Raw) -Round "initial"
+                Set-Content -LiteralPath $reviewResultPath -Encoding utf8 -Value $selfReviewReport
             }
             finally {
                 if ($null -ne $selfReviewPromptPath) {
@@ -871,6 +1107,7 @@ $stagedDiff
             }
 
             $finalReviewResultPath = Join-Path $WorktreeRoot "$issueNumber-final-review.txt"
+            $selectedReviewResultPath = $finalReviewResultPath
             & powershell -NoProfile -ExecutionPolicy Bypass -File $reviewScript -WorktreePath $worktreePath -TestResultPath $testResultPath -ReviewOutputPath $finalReviewResultPath -BaseBranch $BaseBranch -Round final -PreferredModel $selectedClaudeModel -FallbackModel $claudeFallbackModel
             $finalReviewExitCode = $LASTEXITCODE
             if ($finalReviewExitCode -eq 20) {
@@ -894,8 +1131,8 @@ $stagedDiff
                     Set-Content -LiteralPath $selfReviewPromptPath -Encoding utf8 -Value @"
 Perform a final read-only self-review because Claude was unavailable after a bounded resolution turn.
 Review the supplied staged diff and test summary. Do not edit files, run shell commands, use Git write
-commands, deploy, order, notify, or access secrets. Return concise findings with severity and file path,
-or state that no blocking finding exists.
+commands, deploy, order, notify, or access secrets. Return concise findings and exactly one top-level
+verdict line: VERDICT: PASS or VERDICT: CHANGES_REQUESTED.
 
 TEST SUMMARY
 $testSummary
@@ -903,8 +1140,11 @@ $testSummary
 STAGED DIFF
 $stagedDiff
 "@
-                    Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $selfReviewPromptPath -Path $worktreePath -Sandbox "read-only" -Model $selectedCodexModel
-                    Set-Content -LiteralPath $finalReviewResultPath -Encoding utf8 -Value "reviewer: Codex self-review`nround: final`nstatus: COMPLETED"
+                    $selfReviewRawPath = Join-Path $WorktreeRoot "$issueNumber-final-codex-self-review.txt"
+                    Remove-Item -LiteralPath $selfReviewRawPath -Force -ErrorAction SilentlyContinue
+                    Invoke-CodexPrompt -CodexPath $codexPath -PromptPath $selfReviewPromptPath -Path $worktreePath -Sandbox "read-only" -Model $selectedCodexModel -LastMessagePath $selfReviewRawPath
+                    $selfReviewReport = ConvertTo-CodexSelfReviewReport -RawOutput (Get-Content -LiteralPath $selfReviewRawPath -Raw) -Round "final"
+                    Set-Content -LiteralPath $finalReviewResultPath -Encoding utf8 -Value $selfReviewReport
                 }
                 finally {
                     if ($null -ne $selfReviewPromptPath) {
@@ -921,6 +1161,11 @@ $stagedDiff
             else {
                 throw "Final review script failed unexpectedly. Draft PR creation was blocked."
             }
+        }
+
+        $reviewEvidence = Get-ValidatedBoundedReviewEvidence -Content (Get-Content -LiteralPath $selectedReviewResultPath -Raw)
+        if ($reviewEvidence.Verdict -ne "PASS") {
+            throw "The bounded reviewer did not produce a PASS verdict. Draft PR creation was blocked."
         }
 
         $changedPaths = @(Get-ChangedPaths -Path $worktreePath)
@@ -952,6 +1197,25 @@ $stagedDiff
         $taskPhase = "committed"
         Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
     }
+
+    $reviewedHeadSha = (& git -C $worktreePath rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $reviewedHeadSha -notmatch '^[0-9a-f]{40}$') {
+        throw "Could not bind bounded reviewer evidence to the committed task head."
+    }
+    if (-not $taskAlreadyCommitted) {
+        Set-Content -LiteralPath $publishableReviewPath -Encoding utf8 -Value @"
+reviewer: $($reviewEvidence.Reviewer)
+round: $($reviewEvidence.Round)
+VERDICT: $($reviewEvidence.Verdict)
+reason: $($reviewEvidence.Reason)
+reviewed_head_sha: $reviewedHeadSha
+"@
+    }
+    $reviewEvidence = Get-ValidatedBoundedReviewEvidence -Content (Get-Content -LiteralPath $publishableReviewPath -Raw) -ExpectedHeadSha $reviewedHeadSha
+    if ($reviewEvidence.Verdict -ne "PASS") {
+        throw "The head-bound reviewer evidence is not a PASS verdict. Draft PR creation was blocked."
+    }
+
     $gitPushExitCode = -1
     $previousErrorActionPreference = $ErrorActionPreference
     try {
@@ -995,7 +1259,7 @@ Automated local queue run for Issue #$issueNumber.
 - Codex model route: $selectedCodexModel
 - Claude review model route: $selectedClaudeModel
 - Claude fallback model: $claudeFallbackModel
-- Review report: $([System.IO.Path]::GetFileName($reviewResultPath))
+- Reviewer evidence: published separately as a sanitized, SHA-bound Draft PR comment.
 - Merge policy: human approval required; this Draft PR is never auto-merged.
 - Approval gate: $(if ($requiresApproval) { "EXPLICIT HUMAN APPROVAL REQUIRED before marking ready for review or merging." } else { "human review and merge decision required." })
 "@
@@ -1008,6 +1272,22 @@ Automated local queue run for Issue #$issueNumber.
             Remove-Item -LiteralPath $prBodyPath -Force -ErrorAction SilentlyContinue
         }
     }
+
+    $prDetailsJson = & $ghPath pr list --repo $Repository --head $branchName --state open --limit 1 --json number,isDraft,headRefOid
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not resolve the Draft PR for reviewer evidence publication."
+    }
+    $prDetailsList = @($prDetailsJson | ConvertFrom-Json)
+    if ($prDetailsList.Count -ne 1 -or -not [bool]$prDetailsList[0].isDraft) {
+        throw "Reviewer evidence publication requires exactly one open Draft PR."
+    }
+    $prDetails = $prDetailsList[0]
+    if ([string]$prDetails.headRefOid -cne $reviewedHeadSha) {
+        throw "The Draft PR head moved after review; stale reviewer evidence was not published."
+    }
+    Publish-BoundedReviewEvidence -GhPath $ghPath -Repository $Repository -IssueNumber $issueNumber -PullRequestNumber ([int]$prDetails.number) -Evidence $reviewEvidence
+    $taskPhase = "review-evidence-published"
+    Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "running" -Phase $taskPhase -Attempts $taskAttempts
 
     $successful = $true
     $taskPhase = "done"

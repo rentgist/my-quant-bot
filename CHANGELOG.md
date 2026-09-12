@@ -1,3 +1,9 @@
+## [2026-09-12] Durable bounded reviewer evidence
+
+- Validated explicit bounded reviewer verdicts, bound them to the exact reviewed task head SHA, and failed closed for missing, malformed, ambiguous, or stale evidence.
+- Published a sanitized, idempotent Draft PR comment that distinguishes independent Claude read-only review from Codex self-review without exposing local diagnostics or transcripts.
+- Added deterministic automation-smoke coverage for parsing, SHA binding, sanitization, fallback labeling, idempotency, and fail-closed behavior.
+
 ## [2026-09-09] Bounded fixed-test failure diagnostics
 
 - Classified only worker-owned fixed test-result strings into bounded lifecycle failure codes without publishing test output, stderr, paths, repository contents, or agent output.
