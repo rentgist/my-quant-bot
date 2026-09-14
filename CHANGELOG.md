@@ -1,3 +1,8 @@
+## [2026-09-10] Bounded retry feedback hotfix
+
+- Added retry-only Codex prompt feedback sourced exclusively from one unambiguous allow-listed lifecycle failure code, without forwarding raw lifecycle text or diagnostics.
+- Added deterministic Windows PowerShell 5.1-compatible extraction and omission self-tests to the fixed automation-smoke profile.
+
 ## [2026-09-09] Bounded fixed-test failure diagnostics
 
 - Classified only worker-owned fixed test-result strings into bounded lifecycle failure codes without publishing test output, stderr, paths, repository contents, or agent output.
