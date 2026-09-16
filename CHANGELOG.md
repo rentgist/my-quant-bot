@@ -1,3 +1,10 @@
+## [2026-09-16] AI Company governance consolidation
+
+- Recreated `.ai-company/` as a governance, permissions, workflow, state-orientation, and historical-context layer while keeping the existing PowerShell control plane as the single production execution engine.
+- Added a unified root agent guide that directs work to the current GitHub Issue, existing repository rules, CEO control-plane documentation, fixed tests, bounded review, Draft PR, and CI flow.
+- Required durable GitHub-visible review evidence with an explicit top-level verdict and honest identification of any automation-permitted Codex self-review fallback.
+- Explicitly prohibited a second worker, queue, lifecycle database, merge path, scheduler, or competing source of truth; no application or investment logic was changed.
+
 ## [2026-09-16] Stable UTF-8 staged review input
 
 - Constructed every bounded reviewer prompt from the task worktree's staged changes relative to its stable HEAD instead of the moving configured base-branch ref.
