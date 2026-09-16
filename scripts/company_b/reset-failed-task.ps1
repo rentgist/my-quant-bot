@@ -1,6 +1,7 @@
-[CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
+[CmdletBinding()]
 param(
-    [string]$TaskId = 'B-TASK-001'
+    [string]$TaskId = 'B-TASK-001',
+    [switch]$Force
 )
 
 Set-StrictMode -Version Latest
@@ -8,6 +9,9 @@ $ErrorActionPreference = 'Stop'
 
 if ($TaskId -notmatch '^B-TASK-[0-9]{3,}$') {
     throw 'TaskId must match B-TASK-NNN.'
+}
+if (-not $Force) {
+    throw 'Company B reset is destructive within the isolated task scope. Re-run with -Force.'
 }
 
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -28,11 +32,9 @@ Write-Output "  worktree: $worktreePath"
 Write-Output "  runtime: $taskRuntime"
 
 if (Test-Path -LiteralPath $worktreePath) {
-    if ($PSCmdlet.ShouldProcess($worktreePath, 'Remove failed Company B task worktree')) {
-        & git -C $repositoryRoot worktree remove $worktreePath --force
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not remove the failed Company B task worktree.'
-        }
+    & git -C $repositoryRoot worktree remove $worktreePath --force
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not remove the failed Company B task worktree.'
     }
 }
 
@@ -40,18 +42,14 @@ if (Test-Path -LiteralPath $worktreePath) {
 
 & git -C $repositoryRoot show-ref --verify --quiet "refs/heads/$branchName"
 if ($LASTEXITCODE -eq 0) {
-    if ($PSCmdlet.ShouldProcess($branchName, 'Delete failed local Company B task branch')) {
-        & git -C $repositoryRoot branch -D $branchName
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not delete the failed local Company B task branch.'
-        }
+    & git -C $repositoryRoot branch -D $branchName
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not delete the failed local Company B task branch.'
     }
 }
 
 if (Test-Path -LiteralPath $taskRuntime) {
-    if ($PSCmdlet.ShouldProcess($taskRuntime, 'Remove failed Company B task runtime')) {
-        Remove-Item -LiteralPath $taskRuntime -Recurse -Force
-    }
+    Remove-Item -LiteralPath $taskRuntime -Recurse -Force
 }
 
 Write-Output 'Company B failed-task reset complete.'
