@@ -41,6 +41,48 @@ function Resolve-OptionalCommand {
     return $null
 }
 
+function Get-TaskStagedDiffUtf8 {
+    param([Parameter(Mandatory)][string]$WorktreePath)
+
+    $resolvedWorktree = (Resolve-Path -LiteralPath $WorktreePath).Path
+    $gitPath = Resolve-OptionalCommand -Names @("git.exe", "git")
+    if ($null -eq $gitPath) {
+        throw "Git command was not found."
+    }
+
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $gitPath
+    $startInfo.WorkingDirectory = $resolvedWorktree
+    $startInfo.Arguments = "-c core.quotepath=false diff --cached --no-ext-diff --unified=80 HEAD --"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $strictUtf8
+    $startInfo.StandardErrorEncoding = $strictUtf8
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start Git while reading the staged diff for review."
+        }
+        $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
+        $standardErrorTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $diff = $standardOutputTask.GetAwaiter().GetResult()
+        $standardError = $standardErrorTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw "Could not read the staged diff for review."
+        }
+        return $diff
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Get-ClaudeVerdict {
     param([AllowNull()][string]$Output)
 
@@ -160,7 +202,80 @@ function Invoke-SelfTest {
     if ($PreferredModel -ne "claude-sonnet-5" -or $FallbackModel -ne "claude-sonnet-5") {
         throw "Default Claude model routing regression failed."
     }
-    Write-Output "Claude review parser/model self-test passed."
+
+    $gitPath = Resolve-OptionalCommand -Names @("git.exe", "git")
+    if ($null -eq $gitPath) {
+        throw "Git is required for the staged-diff self-test."
+    }
+    $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $tempContainer = Join-Path $tempRoot ("codex-review-diff-self-test-" + [Guid]::NewGuid().ToString("N"))
+    $tempRepository = Join-Path $tempContainer "repository"
+    $taskWorktree = Join-Path $tempContainer "task-worktree"
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $invokeGit = {
+        param([string]$RepositoryPath, [string[]]$Arguments)
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $nativeOutput = & $gitPath -C $RepositoryPath @Arguments 2> $null
+            $nativeExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($nativeExitCode -ne 0) {
+            throw "Git command failed during the staged-diff self-test."
+        }
+        return ((@($nativeOutput) | ForEach-Object { [string]$_ }) -join "`n")
+    }
+
+    New-Item -ItemType Directory -Path $tempRepository -Force | Out-Null
+    try {
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("init") | Out-Null
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("branch", "-M", "main") | Out-Null
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("config", "user.name", "Review Diff Self-Test") | Out-Null
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("config", "user.email", "review-diff-self-test@example.invalid") | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $tempRepository "base.txt"), "base`n", $strictUtf8)
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("add", "--", "base.txt") | Out-Null
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("-c", "commit.gpgSign=false", "commit", "--no-verify", "-m", "base") | Out-Null
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("worktree", "add", "-b", "task", $taskWorktree, "main") | Out-Null
+
+        $taskMarker = "검토 입력"
+        [System.IO.File]::WriteAllText((Join-Path $taskWorktree "task.txt"), "$taskMarker`n", $strictUtf8)
+        & $invokeGit -RepositoryPath $taskWorktree -Arguments @("add", "--", "task.txt") | Out-Null
+        $originalTaskHead = (& $invokeGit -RepositoryPath $taskWorktree -Arguments @("rev-parse", "HEAD")).Trim()
+
+        $mainDriftMarker = "unrelated-main-drift"
+        [System.IO.File]::WriteAllText((Join-Path $tempRepository "main-only.txt"), "$mainDriftMarker`n", $strictUtf8)
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("add", "--", "main-only.txt") | Out-Null
+        & $invokeGit -RepositoryPath $tempRepository -Arguments @("-c", "commit.gpgSign=false", "commit", "--no-verify", "-m", "advance main") | Out-Null
+        $advancedMainHead = (& $invokeGit -RepositoryPath $tempRepository -Arguments @("rev-parse", "main")).Trim()
+        $currentTaskHead = (& $invokeGit -RepositoryPath $taskWorktree -Arguments @("rev-parse", "HEAD")).Trim()
+        if ($advancedMainHead -ceq $originalTaskHead -or $currentTaskHead -cne $originalTaskHead) {
+            throw "Base-branch drift self-test setup failed."
+        }
+
+        $stagedDiff = Get-TaskStagedDiffUtf8 -WorktreePath $taskWorktree
+        if (-not $stagedDiff.Contains($taskMarker)) {
+            throw "UTF-8 staged-diff round-trip self-test failed."
+        }
+        if ($stagedDiff.Contains($mainDriftMarker)) {
+            throw "Base-branch drift contaminated the task-relative staged diff."
+        }
+        if ($stagedDiff.Contains([char]0xfffd) -or $stagedDiff.Contains("????")) {
+            throw "Staged-diff capture produced invalid UTF-8 reviewer input."
+        }
+    }
+    finally {
+        $resolvedTempContainer = [System.IO.Path]::GetFullPath($tempContainer)
+        if (-not $resolvedTempContainer.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Staged-diff self-test cleanup path escaped the temporary directory."
+        }
+        Remove-Item -LiteralPath $resolvedTempContainer -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Output "Claude review parser/model and staged-diff self-tests passed."
 }
 
 if ($SelfTest) {
@@ -190,10 +305,7 @@ try {
         Exit-WithVerdict -Verdict "UNAVAILABLE" -Summary "Claude Code command was not found." -Reason "command-not-found" -ModelUsed $PreferredModel
     }
 
-    $diff = & git -C $resolvedWorktree diff --cached --no-ext-diff --unified=80 $BaseBranch
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not read the staged diff for review."
-    }
+    $diff = Get-TaskStagedDiffUtf8 -WorktreePath $resolvedWorktree
     $testSummary = Get-Content -LiteralPath $resolvedTestResult -Raw
     $reviewPrompt = @"
 You are an independent read-only senior code reviewer performing the $Round review round.

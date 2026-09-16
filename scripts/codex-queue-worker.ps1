@@ -67,6 +67,44 @@ function Resolve-RequiredCommand {
     throw "$DisplayName command was not found. No repository files were changed."
 }
 
+function Get-TaskStagedDiffUtf8 {
+    param([Parameter(Mandatory)][string]$WorktreePath)
+
+    $resolvedWorktree = (Resolve-Path -LiteralPath $WorktreePath).Path
+    $gitPath = Resolve-RequiredCommand -Names @("git.exe", "git") -DisplayName "Git"
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $gitPath
+    $startInfo.WorkingDirectory = $resolvedWorktree
+    $startInfo.Arguments = "-c core.quotepath=false diff --cached --no-ext-diff --unified=80 HEAD --"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $strictUtf8
+    $startInfo.StandardErrorEncoding = $strictUtf8
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start Git while reading the staged diff for review."
+        }
+        $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
+        $standardErrorTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $diff = $standardOutputTask.GetAwaiter().GetResult()
+        $standardError = $standardErrorTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw "Could not read the staged diff for review."
+        }
+        return $diff
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Get-LifecycleStatePath {
     param(
         [Parameter(Mandatory)][string]$Directory,
@@ -686,6 +724,10 @@ function Invoke-TestProfile {
             }
 
             try {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Path "scripts\run-agent-review.ps1") -SelfTest 1> $null 2> $null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Reviewer staged-diff self-test failed."
+                }
                 Assert-BoundedTestFailureCodeSelfTest
                 Assert-BoundedReviewEvidenceSelfTest
             }
@@ -1016,7 +1058,7 @@ Test profile: $testProfile
             $selfReviewPromptPath = $null
             try {
                 $selfReviewPromptPath = (New-TemporaryFile).FullName
-                $stagedDiff = & git -C $worktreePath diff --cached --no-ext-diff --unified=80 $BaseBranch
+                $stagedDiff = Get-TaskStagedDiffUtf8 -WorktreePath $worktreePath
                 $testSummary = Get-Content -LiteralPath $testResultPath -Raw
                 Set-Content -LiteralPath $selfReviewPromptPath -Encoding utf8 -Value @"
 Perform a read-only self-review of the supplied staged diff and test summary. Do not edit files,
@@ -1062,7 +1104,7 @@ $stagedDiff
             $reviewResolutionPromptPath = $null
             try {
                 $reviewResolutionPromptPath = (New-TemporaryFile).FullName
-                $stagedDiff = & git -C $worktreePath diff --cached --no-ext-diff --unified=80 $BaseBranch
+                $stagedDiff = Get-TaskStagedDiffUtf8 -WorktreePath $worktreePath
                 $testSummary = Get-Content -LiteralPath $testResultPath -Raw
                 $claudeReview = Get-Content -LiteralPath $reviewResultPath -Raw
                 Set-Content -LiteralPath $reviewResolutionPromptPath -Encoding utf8 -Value @"
@@ -1126,7 +1168,7 @@ $stagedDiff
                 $selfReviewPromptPath = $null
                 try {
                     $selfReviewPromptPath = (New-TemporaryFile).FullName
-                    $stagedDiff = & git -C $worktreePath diff --cached --no-ext-diff --unified=80 $BaseBranch
+                    $stagedDiff = Get-TaskStagedDiffUtf8 -WorktreePath $worktreePath
                     $testSummary = Get-Content -LiteralPath $testResultPath -Raw
                     Set-Content -LiteralPath $selfReviewPromptPath -Encoding utf8 -Value @"
 Perform a final read-only self-review because Claude was unavailable after a bounded resolution turn.
