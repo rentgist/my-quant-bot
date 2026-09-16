@@ -1,3 +1,8 @@
+## [2026-09-16] Stable UTF-8 staged review input
+
+- Constructed every bounded reviewer prompt from the task worktree's staged changes relative to its stable HEAD instead of the moving configured base-branch ref.
+- Added a strict UTF-8 native Git capture boundary for Windows PowerShell 5.1 and deterministic regression coverage for base-branch drift and Korean `검토 입력` round-tripping.
+
 ## [2026-09-12] Durable bounded reviewer evidence
 
 - Validated explicit bounded reviewer verdicts, bound them to the exact reviewed task head SHA, and failed closed for missing, malformed, ambiguous, or stale evidence.
