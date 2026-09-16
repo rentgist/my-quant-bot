@@ -24,7 +24,7 @@ function Resolve-ClaudeCommand {
 }
 
 function Get-SafeText {
-    param([AllowNull()][string]$Text)
+    param([AllowNull()][AllowEmptyString()][string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return "(empty)" }
     $safe = $Text
     if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
@@ -37,7 +37,7 @@ function Get-SafeText {
 }
 
 function Write-ProbeLine {
-    param([Parameter(Mandatory)][string]$Text)
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
     [Console]::Out.WriteLine($Text)
 }
 
