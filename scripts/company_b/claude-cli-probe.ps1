@@ -48,14 +48,18 @@ function Invoke-Probe {
     try {
         "Reply with exactly: COMPANY_B_CLAUDE_OK" |
             & $ClaudePath @Arguments 1> $outPath 2> $errPath
-        $exitCode = $LASTEXITCODE
+        $exitCode = [int]$LASTEXITCODE
         $stdout = Get-Content -LiteralPath $outPath -Raw -ErrorAction SilentlyContinue
         $stderr = Get-Content -LiteralPath $errPath -Raw -ErrorAction SilentlyContinue
-        Write-Output "=== $Name ==="
-        Write-Output "exit_code: $exitCode"
-        Write-Output ("stdout: " + (Get-SafeText -Text $stdout))
-        Write-Output ("stderr: " + (Get-SafeText -Text $stderr))
-        Write-Output ""
+
+        # Use Write-Host so diagnostics are visible but are not captured into the
+        # function's pipeline return value. The function returns only the exit code.
+        Write-Host "=== $Name ==="
+        Write-Host "exit_code: $exitCode"
+        Write-Host ("stdout: " + (Get-SafeText -Text $stdout))
+        Write-Host ("stderr: " + (Get-SafeText -Text $stderr))
+        Write-Host ""
+
         return $exitCode
     }
     finally {
@@ -64,13 +68,13 @@ function Invoke-Probe {
 }
 
 $claudePath = Resolve-ClaudeCommand
-Write-Output "Claude path: $claudePath"
+Write-Host "Claude path: $claudePath"
 & $claudePath --version
-Write-Output ""
+Write-Host ""
 
-$basic = Invoke-Probe -Name "BASIC_PRINT" -ClaudePath $claudePath -Arguments @("-p", "--output-format", "text")
-$model = Invoke-Probe -Name "SONNET5_PRINT" -ClaudePath $claudePath -Arguments @("-p", "--model", "claude-sonnet-5", "--output-format", "text")
-$plan = Invoke-Probe -Name "SONNET5_PLAN_READONLY" -ClaudePath $claudePath -Arguments @("-p", "--model", "claude-sonnet-5", "--permission-mode", "plan", "--max-turns", "1", "--output-format", "text", "--disallowedTools", "Edit", "Write", "Bash")
+$basic = [int](Invoke-Probe -Name "BASIC_PRINT" -ClaudePath $claudePath -Arguments @("-p", "--output-format", "text"))
+$model = [int](Invoke-Probe -Name "SONNET5_PRINT" -ClaudePath $claudePath -Arguments @("-p", "--model", "claude-sonnet-5", "--output-format", "text"))
+$plan = [int](Invoke-Probe -Name "SONNET5_PLAN_READONLY" -ClaudePath $claudePath -Arguments @("-p", "--model", "claude-sonnet-5", "--permission-mode", "plan", "--max-turns", "1", "--output-format", "text", "--disallowedTools", "Edit", "Write", "Bash"))
 
 if ($basic -eq 0 -and $model -eq 0 -and $plan -eq 0) {
     Write-Output "Company B Claude CLI probe: PASS"
