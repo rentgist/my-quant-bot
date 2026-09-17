@@ -71,12 +71,54 @@ function Write-RunDiagnostics {
 
 try {
     $content = Get-Content -LiteralPath $sourceWorker -Raw
-    $needle = '--permission-mode plan --max-turns 1 --output-format text'
-    $replacement = '--permission-mode plan --max-turns 12 --output-format text'
-    if (-not $content.Contains($needle)) {
+
+    $planNeedle = '--permission-mode plan --max-turns 1 --output-format text'
+    $planReplacement = '--permission-mode plan --max-turns 12 --output-format text'
+    if (-not $content.Contains($planNeedle)) {
         throw "Company B bootstrap wrapper could not find the expected planning-turn limit. Refusing to run an unknown worker shape."
     }
-    $patched = $content.Replace($needle, $replacement)
+    $patched = $content.Replace($planNeedle, $planReplacement)
+
+    $codexNeedle = @'
+    Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+    Get-Content -LiteralPath $PromptPath -Raw |
+        & $CodexPath exec --model $Model --cd $WorktreePath --sandbox read-only --output-last-message $OutputPath - 1> $null 2> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Codex could not complete the Company B read-only challenger/reviewer turn."
+    }
+'@
+
+    $codexReplacement = @'
+    Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+    $codexStdoutPath = "$OutputPath.stdout.log"
+    $codexStderrPath = "$OutputPath.stderr.log"
+    Remove-Item -LiteralPath $codexStdoutPath, $codexStderrPath -Force -ErrorAction SilentlyContinue
+
+    $codexArguments = @(
+        "exec",
+        "--model", $Model,
+        "--cd", $WorktreePath,
+        "--sandbox", "read-only",
+        "--output-last-message", $OutputPath,
+        "-"
+    )
+
+    $codexProcess = Start-Process -FilePath $CodexPath -ArgumentList $codexArguments -PassThru -NoNewWindow -Wait `
+        -RedirectStandardInput $PromptPath -RedirectStandardOutput $codexStdoutPath -RedirectStandardError $codexStderrPath
+
+    if ($codexProcess.ExitCode -ne 0) {
+        $detail = ""
+        if (Test-Path -LiteralPath $codexStderrPath -PathType Leaf) {
+            $detail = ((Get-Content -LiteralPath $codexStderrPath -ErrorAction SilentlyContinue | Select-Object -Last 20) -join " | ")
+        }
+        throw "Codex could not complete the Company B read-only challenger/reviewer turn. Exit code: $($codexProcess.ExitCode). $detail"
+    }
+'@
+
+    if (-not $patched.Contains($codexNeedle)) {
+        throw "Company B bootstrap wrapper could not find the expected Codex invocation. Refusing to run an unknown worker shape."
+    }
+    $patched = $patched.Replace($codexNeedle, $codexReplacement)
     Set-Content -LiteralPath $runtimeWorker -Value $patched -Encoding utf8
 
     $argumentList = @(
@@ -112,14 +154,17 @@ try {
         }
     }
 
+    if (-not $timedOut) {
+        $process.WaitForExit()
+    }
+
     Write-RunDiagnostics
 
     if ($timedOut) {
         throw "Company B bootstrap timed out after $TimeoutMinutes minute(s)."
     }
 
-    $process.Refresh()
-    $exitCode = $process.ExitCode
+    $exitCode = [int]$process.ExitCode
     if ($exitCode -ne 0) {
         throw "Company B bootstrap worker exited with code $exitCode."
     }
