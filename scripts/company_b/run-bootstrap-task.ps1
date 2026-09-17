@@ -2,7 +2,8 @@
 param(
     [string]$TaskSpec = "companies/company-b/tasks/B-TASK-001.json",
     [string]$BaseRef = "origin/company-b/bootstrap-claude-led-v0.1",
-    [switch]$PushOnPass
+    [switch]$PushOnPass,
+    [ValidateRange(1, 60)][int]$TimeoutMinutes = 15
 )
 
 Set-StrictMode -Version Latest
@@ -31,9 +32,42 @@ $runtimeRoot = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
 } else {
     Join-Path ([System.IO.Path]::GetTempPath()) "AICompany\company-b\my-quant-bot"
 }
+New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
 $taskRuntime = Join-Path $runtimeRoot $taskId
 
 $runtimeWorker = Join-Path $PSScriptRoot (".company-b-worker.bootstrap.{0}.ps1" -f ([guid]::NewGuid().ToString("N")))
+$stdoutPath = Join-Path $runtimeRoot ("bootstrap-{0}.stdout.log" -f $taskId.ToLowerInvariant())
+$stderrPath = Join-Path $runtimeRoot ("bootstrap-{0}.stderr.log" -f $taskId.ToLowerInvariant())
+Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+
+function Write-RunDiagnostics {
+    if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) {
+        Write-Output "--- Company B bootstrap stdout ---"
+        Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue | Select-Object -Last 120 | Write-Output
+        Write-Output "--- end bootstrap stdout ---"
+    }
+    if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+        $stderrLines = @(Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue)
+        if ($stderrLines.Count -gt 0) {
+            Write-Output "--- Company B bootstrap stderr ---"
+            $stderrLines | Select-Object -Last 120 | Write-Output
+            Write-Output "--- end bootstrap stderr ---"
+        }
+    }
+
+    $planPath = Join-Path $taskRuntime "claude-plan.txt"
+    $statePath = Join-Path $taskRuntime "state.json"
+    if (Test-Path -LiteralPath $planPath -PathType Leaf) {
+        Write-Output "--- Company B Claude planning output ---"
+        Get-Content -LiteralPath $planPath -ErrorAction SilentlyContinue | Select-Object -First 120 | Write-Output
+        Write-Output "--- end planning output ---"
+    }
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+        Write-Output "--- Company B runtime state ---"
+        Get-Content -LiteralPath $statePath -ErrorAction SilentlyContinue | Write-Output
+        Write-Output "--- end runtime state ---"
+    }
+}
 
 try {
     $content = Get-Content -LiteralPath $sourceWorker -Raw
@@ -45,32 +79,48 @@ try {
     $patched = $content.Replace($needle, $replacement)
     Set-Content -LiteralPath $runtimeWorker -Value $patched -Encoding utf8
 
-    $args = @(
+    $argumentList = @(
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
-        '-File', $runtimeWorker,
-        '-TaskSpec', $TaskSpec,
-        '-BaseRef', $BaseRef
+        '-File', ('"{0}"' -f $runtimeWorker),
+        '-TaskSpec', ('"{0}"' -f $TaskSpec),
+        '-BaseRef', ('"{0}"' -f $BaseRef)
     )
     if ($PushOnPass) {
-        $args += '-PushOnPass'
+        $argumentList += '-PushOnPass'
     }
 
-    & powershell @args
-    $exitCode = $LASTEXITCODE
+    Write-Output "Company B bootstrap started. Hard timeout: $TimeoutMinutes minute(s)."
+    $process = Start-Process -FilePath "powershell.exe" -ArgumentList $argumentList -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $startedAt = Get-Date
+    $timedOut = $false
+
+    while (-not $process.HasExited) {
+        Start-Sleep -Seconds 15
+        $process.Refresh()
+        $elapsed = (Get-Date) - $startedAt
+        if ($process.HasExited) {
+            break
+        }
+        Write-Output ("Company B bootstrap running... {0:N1}/{1} min" -f $elapsed.TotalMinutes, $TimeoutMinutes)
+        if ($elapsed.TotalMinutes -ge $TimeoutMinutes) {
+            $timedOut = $true
+            Write-Output "Company B bootstrap exceeded the hard timeout. Terminating only this worker process tree."
+            & taskkill.exe /PID $process.Id /T /F 1> $null 2> $null
+            Start-Sleep -Seconds 2
+            break
+        }
+    }
+
+    Write-RunDiagnostics
+
+    if ($timedOut) {
+        throw "Company B bootstrap timed out after $TimeoutMinutes minute(s)."
+    }
+
+    $process.Refresh()
+    $exitCode = $process.ExitCode
     if ($exitCode -ne 0) {
-        $planPath = Join-Path $taskRuntime "claude-plan.txt"
-        $statePath = Join-Path $taskRuntime "state.json"
-        if (Test-Path -LiteralPath $planPath -PathType Leaf) {
-            Write-Output "--- Company B Claude planning output ---"
-            Get-Content -LiteralPath $planPath -ErrorAction SilentlyContinue | Select-Object -First 80 | Write-Output
-            Write-Output "--- end planning output ---"
-        }
-        if (Test-Path -LiteralPath $statePath -PathType Leaf) {
-            Write-Output "--- Company B runtime state ---"
-            Get-Content -LiteralPath $statePath -ErrorAction SilentlyContinue | Write-Output
-            Write-Output "--- end runtime state ---"
-        }
         throw "Company B bootstrap worker exited with code $exitCode."
     }
 }
