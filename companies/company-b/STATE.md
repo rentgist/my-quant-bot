@@ -1,7 +1,7 @@
 # Company B State
 
 ## STATUS
-READY_FOR_LOCAL_VALIDATION
+OPERATIONAL_BUILD
 
 ## COMPANY
 CLAUDE_LED
@@ -21,30 +21,42 @@ ChatGPT
 ## OPERATIONAL_SOURCE_OF_TRUTH
 This file plus Company B-specific task/runtime/evidence records only. Company A lifecycle, heartbeat, queue, and reviewer-evidence files are not Company B state.
 
-## CURRENT_WORK
-Validate the independent Company B one-shot worker with `B-TASK-001`.
+## VALIDATED_BOOTSTRAP
+B-TASK-001 completed the isolated end-to-end round trip successfully.
 
-Implemented on the Company B bootstrap branch:
-- isolated architecture and authority model;
-- Company B-specific worker namespace;
-- one-shot Claude-led worker entrypoint;
-- Claude read-only planning -> Codex read-only challenge -> Claude bounded implementation -> fixed tests -> Codex read-only final review;
-- at most one bounded Claude correction and one final Codex review;
-- Company B-specific local runtime state outside Company A state;
-- Company B-specific task branches/worktrees;
-- optional push of the isolated Company B task branch after PASS;
-- no scheduler/poller yet.
+Evidence:
+- base SHA: `31b2b760b943c029f96a56eec873f1d71c9d76a0`
+- result commit: `72e6aebeda824bf8772334081951719c3f54b98a`
+- result branch: `company-b/task-b-task-001`
+- Claude planning: PASS
+- Codex challenge/review path: PASS
+- fixed tests: PASSED
+- final Codex verdict: PASS
+- remote result branch push: succeeded
+- exactly one bounded task file changed
+
+## CURRENT_WORK
+Complete Company B as an independently operable Claude-led control plane before the final Codex architecture audit.
+
+Phase 1 is in progress on `company-b/operational-v0.1`:
+- promote validated Claude planning turn budget into the authoritative worker;
+- promote Windows-safe Codex invocation into the authoritative worker;
+- remove reliance on bootstrap-time source patching for normal execution.
 
 ## NEXT_ACTION
-On a local PC with subscription-authenticated Claude Code and Codex CLIs, run the Company B worker self-test, then run `B-TASK-001` with `-PushOnPass`. ChatGPT can inspect the pushed Company B task branch afterward without using Company A's queue.
+Validate the authoritative `scripts/company_b/company-b-worker.ps1` directly on the local PC, without the bootstrap runner. After that passes, add the Company B-specific remote queue/lifecycle and Draft-PR/evidence path.
 
 ## BLOCKERS
-- The new Company B worker has not yet completed its first real local Claude -> Codex round trip.
-- No Company B scheduler/poller may be enabled before the one-shot validation succeeds.
+- Company B does not yet have a production remote queue/lifecycle.
+- Company B does not yet publish exact-head durable Codex reviewer evidence.
+- Company B does not yet have its own scheduler/mutex/heartbeat.
+- Final independent Codex architecture audit has not been run.
 
 ## ISOLATION
 - Do not mutate Company A active lifecycle, queue, reviewer evidence, or heartbeat.
 - Do not use Company A worktree/state directories.
-- Do not label Company B bootstrap issues `agent:queued` while Company A's Codex worker owns that lifecycle.
+- Do not label Company B issues `agent:queued` while Company A owns that lifecycle.
 - Company B task branches use the `company-b/task-*` namespace.
 - Company B local mutable runtime uses a dedicated `AICompany/company-b/my-quant-bot` namespace.
+- No auto-merge.
+- No direct agent push to `main`.
