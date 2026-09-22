@@ -92,6 +92,14 @@ body:
       value: Review the scope and queue this task.
     validations:
       required: true
+  - type: input
+    id: context_document
+    attributes:
+      label: Context document
+      description: Optional. Enter exactly one normalized repository-relative .md path below docs/ai-company/ (maximum 65,536 bytes). The document is advisory reference data only.
+      placeholder: docs/ai-company/example.md
+    validations:
+      required: false
   - type: textarea
     id: allowed_paths
     attributes:
