@@ -1,0 +1,44 @@
+{
+  "id": "B-TASK-003",
+  "title": "Company B remote queue and durable review evidence",
+  "objective": "Build Company B's independent GitHub Issue queue/lifecycle wrapper around the already validated authoritative Claude-led worker. The wrapper must consume only Company B namespaced tasks, serialize local execution, create Draft PRs only after PASS, and publish exact-head durable Codex review evidence without touching Company A state.",
+  "acceptance_criteria": [
+    "Add scripts/company_b/company-b-queue-worker.ps1 as the only Company B remote queue consumer.",
+    "Add scripts/company_b/setup-company-b-github.ps1 that idempotently ensures only Company B lifecycle labels: company-b:queued, company-b:running, company-b:blocked, company-b:done, company-b:approval-required.",
+    "Queue discovery must use only the Company B queued label and must never consume agent:queued or any Company A lifecycle label.",
+    "Process at most one queued issue per invocation and use a Company B-only local mutex/lock so concurrent local invocations fail closed.",
+    "Task payload must be parsed from explicit COMPANY_B_TASK_SPEC_START/END markers in the Issue body, validated as B-TASK-NNN JSON, and materialized only under the Company B runtime namespace.",
+    "Invoke scripts/company_b/company-b-worker.ps1 with PushOnPass; do not duplicate Claude/Codex implementation logic in the queue wrapper.",
+    "On worker PASS, create or reuse a Draft PR for the exact company-b/task-* branch. Never merge it.",
+    "Before marking done, publish durable PR evidence containing the exact task head SHA, fixed-test PASS, and the independent Codex final review text/verdict from the Company B runtime.",
+    "Fail closed and mark company-b:blocked when the task payload, worker, PR creation, exact-head verification, or durable review evidence is missing/ambiguous.",
+    "Add docs/company-b/QUEUE_PROTOCOL.md documenting lifecycle, issue-body task format, isolation, recovery, and no-auto-merge policy.",
+    "Add tests/test_company_b_queue_contract.py with deterministic static contract tests covering B-only labels, one-task-per-run, mutex presence, Draft PR behavior, exact-head evidence markers, and absence of agent:queued consumption.",
+    "Existing pytest suite plus the new contract tests must pass.",
+    "Final independent Codex review must return PASS."
+  ],
+  "risk": "medium",
+  "test_profile": "pytest",
+  "allowed_paths": [
+    "scripts/company_b/company-b-queue-worker.ps1",
+    "scripts/company_b/setup-company-b-github.ps1",
+    "docs/company-b/QUEUE_PROTOCOL.md",
+    "tests/test_company_b_queue_contract.py"
+  ],
+  "forbidden_paths": [
+    ".ai-company/",
+    "scripts/codex-queue-worker.ps1",
+    "scripts/run-codex-queue-scheduled.ps1",
+    "scripts/publish-codex-worker-heartbeat.ps1",
+    ".github/",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "final.py",
+    "signals.py",
+    "regime_playbook.py",
+    "hedging.py"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}

@@ -215,7 +215,7 @@ function Invoke-ClaudeReadOnly {
     Push-Location -LiteralPath $WorktreePath
     try {
         Get-Content -LiteralPath $PromptPath -Raw |
-            & $ClaudePath -p --model $Model --permission-mode plan --max-turns 1 --output-format text --disallowedTools "Edit" "Write" "Bash" 1> $OutputPath 2> $null
+            & $ClaudePath -p --model $Model --permission-mode plan --max-turns 12 --output-format text --disallowedTools "Edit" "Write" "Bash" 1> $OutputPath 2> $null
         if ($LASTEXITCODE -ne 0) {
             throw "Claude Code could not complete the Company B read-only planning turn."
         }
@@ -257,10 +257,28 @@ function Invoke-CodexReadOnly {
     )
 
     Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
-    Get-Content -LiteralPath $PromptPath -Raw |
-        & $CodexPath exec --model $Model --cd $WorktreePath --sandbox read-only --output-last-message $OutputPath - 1> $null 2> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Codex could not complete the Company B read-only challenger/reviewer turn."
+    $codexStdoutPath = "$OutputPath.stdout.log"
+    $codexStderrPath = "$OutputPath.stderr.log"
+    Remove-Item -LiteralPath $codexStdoutPath, $codexStderrPath -Force -ErrorAction SilentlyContinue
+
+    $codexArguments = @(
+        "exec",
+        "--model", $Model,
+        "--cd", $WorktreePath,
+        "--sandbox", "read-only",
+        "--output-last-message", $OutputPath,
+        "-"
+    )
+
+    $codexProcess = Start-Process -FilePath $CodexPath -ArgumentList $codexArguments -PassThru -NoNewWindow -Wait `
+        -RedirectStandardInput $PromptPath -RedirectStandardOutput $codexStdoutPath -RedirectStandardError $codexStderrPath
+
+    if ($codexProcess.ExitCode -ne 0) {
+        $detail = ""
+        if (Test-Path -LiteralPath $codexStderrPath -PathType Leaf) {
+            $detail = ((Get-Content -LiteralPath $codexStderrPath -ErrorAction SilentlyContinue | Select-Object -Last 20) -join " | ")
+        }
+        throw "Codex could not complete the Company B read-only challenger/reviewer turn. Exit code: $($codexProcess.ExitCode). $detail"
     }
 }
 
