@@ -1,3 +1,9 @@
+## [2026-09-23] Company A 스마트스토어 상품 입력 검증 사양
+
+- Company A 전용의 최소 상품 입력·출력 계약과 사실, 시각 관찰, 미검증 추론, 누락, 모순 및 출처·검증 상태 분리 규칙을 문서화했습니다.
+- 가상 생활용 수납용품의 네 가지 합성 fixture와 향후 결정론적 validator 수용 사례, 공개 차단 및 Company B 격리 경계를 정의했습니다.
+- commerce 코드의 저장소 배치는 사전 저장소 검사 후 결정하도록 남기고, quant 애플리케이션의 runtime·의존성·운영 제어면은 변경하지 않았습니다.
+
 ## [2026-09-22] CRLF-safe zero-change recovery edit plans
 
 - Normalize LF edit-plan anchors and replacements to the consistent CRLF style of existing Windows worktree targets before exact-one-anchor validation, while rejecting mixed line endings before any write.
