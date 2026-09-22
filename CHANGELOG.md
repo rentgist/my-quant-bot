@@ -1,3 +1,10 @@
+## [2026-09-22] Validated advisory context document
+
+- Added one optional structured `Context document` field restricted to a normalized repository-relative Markdown file below `docs/ai-company/`.
+- Validate containment, existence, regular-file and non-symlink status, UTF-8 readability, and a documented 65,536-byte limit only against the dedicated task worktree, failing closed before Codex invocation.
+- Append validated content inside an explicit advisory-data boundary that preserves live GitHub Issue, PR, CI, lifecycle, path, and worker authority.
+- Extend deterministic automation-smoke coverage for empty, valid, traversal, URL, absolute, non-Markdown, missing, oversized, and prompt-boundary cases.
+
 ## [2026-09-22] CRLF-safe zero-change recovery edit plans
 
 - Normalize LF edit-plan anchors and replacements to the consistent CRLF style of existing Windows worktree targets before exact-one-anchor validation, while rejecting mixed line endings before any write.
