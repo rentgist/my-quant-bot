@@ -139,6 +139,28 @@ function Get-SubstringCount {
     return $count
 }
 
+function Get-ConsistentLineEndingStyle {
+    param([string]$Text, [string]$Path)
+
+    $withoutCrLf = $Text.Replace("`r`n", '')
+    $styles = @()
+    if ($Text.Contains("`r`n")) { $styles += 'CRLF' }
+    if ($withoutCrLf.Contains("`n")) { $styles += 'LF' }
+    if ($withoutCrLf.Contains("`r")) { $styles += 'CR' }
+
+    if ($styles.Count -gt 1) {
+        throw "Target file '$Path' contains mixed line-ending styles."
+    }
+    if ($styles.Count -eq 0) { return 'None' }
+    return [string]$styles[0]
+}
+
+function ConvertTo-ConsistentCrLf {
+    param([string]$Text)
+
+    return $Text.Replace("`r`n", "`n").Replace("`r", "`n").Replace("`n", "`r`n")
+}
+
 function ConvertFrom-StrictEditPlan {
     param([string]$JsonText)
 
@@ -201,6 +223,11 @@ function Apply-ValidatedEditPlan {
         $current = $contentByPath[$relativePath]
         $oldText = [string]$edit.old_text
         $newText = [string]$edit.new_text
+        $lineEndingStyle = Get-ConsistentLineEndingStyle -Text $current -Path $relativePath
+        if ($lineEndingStyle -eq 'CRLF') {
+            $oldText = ConvertTo-ConsistentCrLf -Text $oldText
+            $newText = ConvertTo-ConsistentCrLf -Text $newText
+        }
 
         if ($null -eq $current) {
             if (-not [string]::IsNullOrEmpty($oldText)) {
@@ -304,6 +331,89 @@ function Invoke-SelfTest {
     }
     finally {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $lineEndingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-recovery-line-ending-selftest-" + [guid]::NewGuid().ToString('N'))
+    $lineEndingScriptDir = Join-Path $lineEndingRoot 'scripts'
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    try {
+        New-Item -ItemType Directory -Path $lineEndingScriptDir -Force | Out-Null
+
+        $crlfPath = Join-Path $lineEndingScriptDir 'crlf.ps1'
+        $crlfBefore = "header`r`nold first`r`nold second`r`nfooter`r`n"
+        [System.IO.File]::WriteAllText($crlfPath, $crlfBefore, $utf8NoBom)
+        $crlfPlan = @(
+            [pscustomobject]@{ path = 'scripts/crlf.ps1'; old_text = "old first`nold second"; new_text = "new first`nnew second" }
+        )
+        Apply-ValidatedEditPlan -Root $lineEndingRoot -Edits $crlfPlan -AllowedPaths $allowed -ForbiddenPaths $forbidden
+        $crlfRoundTrip = [System.IO.File]::ReadAllText($crlfPath, [System.Text.Encoding]::UTF8)
+        $crlfExpected = "header`r`nnew first`r`nnew second`r`nfooter`r`n"
+        if ($crlfRoundTrip -ne $crlfExpected) {
+            throw 'LF edit-plan to CRLF target regression failed.'
+        }
+
+        $lfPath = Join-Path $lineEndingScriptDir 'lf.ps1'
+        $lfBefore = "header`nold first`nold second`nfooter`n"
+        [System.IO.File]::WriteAllText($lfPath, $lfBefore, $utf8NoBom)
+        $lfPlan = @(
+            [pscustomobject]@{ path = 'scripts/lf.ps1'; old_text = "old first`nold second"; new_text = "new first`nnew second" }
+        )
+        Apply-ValidatedEditPlan -Root $lineEndingRoot -Edits $lfPlan -AllowedPaths $allowed -ForbiddenPaths $forbidden
+        $lfRoundTrip = [System.IO.File]::ReadAllText($lfPath, [System.Text.Encoding]::UTF8)
+        $lfExpected = "header`nnew first`nnew second`nfooter`n"
+        if ($lfRoundTrip -ne $lfExpected) {
+            throw 'LF target behavior regression failed.'
+        }
+
+        $unchangedPath = Join-Path $lineEndingScriptDir 'unchanged.ps1'
+        $unchangedBefore = "keep old`r`n"
+        [System.IO.File]::WriteAllText($unchangedPath, $unchangedBefore, $utf8NoBom)
+        $mixedPath = Join-Path $lineEndingScriptDir 'mixed.ps1'
+        $mixedBefore = "first`r`nsecond`nthird"
+        [System.IO.File]::WriteAllText($mixedPath, $mixedBefore, $utf8NoBom)
+        $mixedPlan = @(
+            [pscustomobject]@{ path = 'scripts/unchanged.ps1'; old_text = 'old'; new_text = 'new' },
+            [pscustomobject]@{ path = 'scripts/mixed.ps1'; old_text = "second`nthird"; new_text = 'changed' }
+        )
+        $mixedRejected = $false
+        try { Apply-ValidatedEditPlan -Root $lineEndingRoot -Edits $mixedPlan -AllowedPaths $allowed -ForbiddenPaths $forbidden }
+        catch { $mixedRejected = $true }
+        if (-not $mixedRejected) { throw 'Mixed line-ending target was not rejected.' }
+        if ([System.IO.File]::ReadAllText($unchangedPath, [System.Text.Encoding]::UTF8) -ne $unchangedBefore -or
+            [System.IO.File]::ReadAllText($mixedPath, [System.Text.Encoding]::UTF8) -ne $mixedBefore) {
+            throw 'Mixed line-ending rejection wrote a file before validation completed.'
+        }
+
+        $incorrectPath = Join-Path $lineEndingScriptDir 'incorrect.ps1'
+        $incorrectBefore = "first`r`nsecond`r`n"
+        [System.IO.File]::WriteAllText($incorrectPath, $incorrectBefore, $utf8NoBom)
+        $incorrectPlan = @(
+            [pscustomobject]@{ path = 'scripts/incorrect.ps1'; old_text = "missing`nanchor"; new_text = 'changed' }
+        )
+        $incorrectRejected = $false
+        try { Apply-ValidatedEditPlan -Root $lineEndingRoot -Edits $incorrectPlan -AllowedPaths $allowed -ForbiddenPaths $forbidden }
+        catch { $incorrectRejected = $true }
+        if (-not $incorrectRejected) { throw 'Incorrect edit anchor was not rejected.' }
+        if ([System.IO.File]::ReadAllText($incorrectPath, [System.Text.Encoding]::UTF8) -ne $incorrectBefore) {
+            throw 'Incorrect edit-anchor rejection modified the target.'
+        }
+
+        $duplicatePath = Join-Path $lineEndingScriptDir 'duplicate.ps1'
+        $duplicateBefore = "duplicate`r`nduplicate`r`n"
+        [System.IO.File]::WriteAllText($duplicatePath, $duplicateBefore, $utf8NoBom)
+        $duplicatePlan = @(
+            [pscustomobject]@{ path = 'scripts/duplicate.ps1'; old_text = 'duplicate'; new_text = 'changed' }
+        )
+        $duplicateRejected = $false
+        try { Apply-ValidatedEditPlan -Root $lineEndingRoot -Edits $duplicatePlan -AllowedPaths $allowed -ForbiddenPaths $forbidden }
+        catch { $duplicateRejected = $true }
+        if (-not $duplicateRejected) { throw 'Multiply occurring edit anchor was not rejected.' }
+        if ([System.IO.File]::ReadAllText($duplicatePath, [System.Text.Encoding]::UTF8) -ne $duplicateBefore) {
+            throw 'Multiply occurring edit-anchor rejection modified the target.'
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $lineEndingRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     $rejected = $false
