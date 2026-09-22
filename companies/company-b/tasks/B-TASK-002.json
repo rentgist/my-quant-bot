@@ -1,0 +1,31 @@
+{
+  "id": "B-TASK-002",
+  "title": "Authoritative Company B worker validation",
+  "objective": "Validate that the authoritative Company B worker completes a real Claude-led, Codex-reviewed round trip without the bootstrap runner. Create one bounded validation note and do not modify Company A state or Company B control-plane code.",
+  "acceptance_criteria": [
+    "Create only docs/company-b/DIRECT_WORKER_VALIDATION.md.",
+    "Include the exact markers COMPANY: B, EXECUTION: authoritative-worker, DIRECTOR: Claude Code, REVIEWER: Codex / GPT, STATUS: validation-pass.",
+    "State that run-bootstrap-task.ps1 is not part of the execution path for this validation.",
+    "State that Company A mutable queue, lifecycle, heartbeat, runtime, branches, and worktrees are out of scope and must remain untouched.",
+    "The fixed pytest profile must pass.",
+    "The final independent Codex review must return PASS."
+  ],
+  "risk": "low",
+  "test_profile": "pytest",
+  "allowed_paths": [
+    "docs/company-b/DIRECT_WORKER_VALIDATION.md"
+  ],
+  "forbidden_paths": [
+    "companies/company-b/",
+    "scripts/company_b/",
+    ".github/",
+    "scripts/codex-queue-worker.ps1",
+    "scripts/run-codex-queue-scheduled.ps1",
+    "scripts/publish-codex-worker-heartbeat.ps1",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}
