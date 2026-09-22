@@ -689,12 +689,13 @@ function New-BoundedReviewEvidenceBody {
         throw "Cannot publish malformed bounded review evidence."
     }
     $marker = Get-BoundedReviewEvidenceMarker -IssueNumber $IssueNumber -PullRequestNumber $PullRequestNumber -HeadSha $Evidence.HeadSha -Reviewer $Evidence.Reviewer -Verdict $Evidence.Verdict
+    $reviewedHeadDisplay = "{0}{1}{0}" -f [char]96, $Evidence.HeadSha
     return @"
 $marker
 Bounded reviewer verdict
 
 - Reviewer: $reviewerDisplay
-- Reviewed head SHA: `$($Evidence.HeadSha)`
+- Reviewed head SHA: $reviewedHeadDisplay
 - Verdict: $($Evidence.Verdict)
 - Provenance: bounded $($Evidence.Round) review; an initial PASS ends review, otherwise the existing control plane permits at most one minimal-correction turn and one final review.
 "@
@@ -748,6 +749,18 @@ function Assert-BoundedReviewEvidenceSelfTest {
     $passEvidence = Get-ValidatedBoundedReviewEvidence -Content $passArtifact -ExpectedHeadSha $headSha
     if ($passEvidence.Verdict -ne "PASS" -or $passEvidence.Reviewer -ne "Claude Code") {
         throw "PASS review evidence parsing self-test failed."
+    }
+
+    $passBody = New-BoundedReviewEvidenceBody -IssueNumber 69 -PullRequestNumber 70 -Evidence $passEvidence
+    $expectedMarker = "<!-- codex-bounded-review-evidence:v1 issue=69 pr=70 head=$headSha reviewer=claude-read-only verdict=PASS -->"
+    $expectedVisibleHead = "- Reviewed head SHA: $([char]96)$headSha$([char]96)"
+    if (-not $passBody.StartsWith($expectedMarker) -or
+        -not $passBody.Contains($expectedVisibleHead) -or
+        -not $passBody.Contains("- Reviewer: Independent Claude read-only review") -or
+        -not $passBody.Contains("- Verdict: PASS") -or
+        -not $passBody.Contains("- Provenance: bounded initial review;") -or
+        $passBody.Contains('$(')) {
+        throw "Published review evidence rendering self-test failed."
     }
 
     $changesArtifact = "reviewer: Claude Code`nround: final`nVERDICT: CHANGES_REQUESTED`nreason: completed-read-only`nreviewed_head_sha: $headSha"
