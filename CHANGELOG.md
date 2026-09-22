@@ -1,3 +1,8 @@
+## [2026-09-22] CRLF-safe zero-change recovery edit plans
+
+- Normalize LF edit-plan anchors and replacements to the consistent CRLF style of existing Windows worktree targets before exact-one-anchor validation, while rejecting mixed line endings before any write.
+- Extend deterministic automation-smoke coverage for LF-plan-to-CRLF success, unchanged LF behavior, mixed-style rejection, and incorrect or multiply occurring anchor rejection.
+
 ## [2026-09-16] AI Company governance consolidation
 
 - Recreated `.ai-company/` as a governance, permissions, workflow, state-orientation, and historical-context layer while keeping the existing PowerShell control plane as the single production execution engine.
