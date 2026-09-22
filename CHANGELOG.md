@@ -1,3 +1,8 @@
+## [2026-09-23] Exact reviewed head SHA rendering
+
+- Render the validated 40-character reviewed head SHA as readable Markdown code while preserving the exact hidden idempotency marker and reviewer provenance.
+- Extend deterministic automation-smoke coverage for the visible SHA, marker, reviewer, verdict, provenance, and absence of unevaluated PowerShell expressions.
+
 ## [2026-09-22] Validated advisory context document
 
 - Added one optional structured `Context document` field restricted to a normalized repository-relative Markdown file below `docs/ai-company/`.
