@@ -609,7 +609,7 @@ $diff
     Save-CompanyBState -StatePath $statePath -TaskId $taskId -Status "RUNNING" -Phase "LOCAL_COMMIT" -BaseSha $baseSha -Branch $branchName -ReviewVerdict "PASS"
     $changedPaths = Get-ChangedPaths -WorktreePath $worktreePath
     Assert-ChangedPathsAllowed -ChangedPaths $changedPaths -AllowedPaths $allowedPaths -ForbiddenPaths $forbiddenPaths
-    & git -C $worktreePath add -- @changedPaths
+    & git -C $worktreePath add -A -- .
     if ($LASTEXITCODE -ne 0) {
         throw "Company B could not stage its bounded changes."
     }
