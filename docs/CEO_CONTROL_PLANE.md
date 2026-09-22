@@ -118,7 +118,7 @@ If Round 1 is `CHANGES_REQUESTED`, Codex may apply only the smallest justified c
 
 If the final review remains `CHANGES_REQUESTED`, automatic model-to-model iteration stops and the task is escalated to the PM. There is no unbounded peer-review loop.
 
-The implementation of this bounded second-review behavior is tracked through the repository task system; documentation must not be used as evidence that code has already implemented a behavior that current scripts do not yet contain.
+This one-correction / final-review behavior is implemented and covered by deterministic self-tests. The executable worker and reviewer scripts remain authoritative, and documentation does not grant behavior that those scripts do not enforce.
 
 If Claude is unavailable or unauthenticated, the existing safe Codex read-only self-review fallback may be used as defined by the automation. The fallback should remain visible in evidence rather than being mistaken for independent peer review.
 

@@ -2,7 +2,7 @@
 
 ## 결론
 
-이 구조는 GitHub Issue의 제한된 구조화 필드만 데이터로 읽고, 로컬의 전용 Git worktree에서 Codex를 실행한 뒤, 테스트와 읽기 전용 리뷰를 거쳐 **Draft PR만** 만듭니다. `main` 브랜치를 체크아웃·수정·푸시·병합하는 자동 경로는 없습니다.
+이 AI Company / Codex-Claude 제어 구조는 GitHub Issue의 제한된 구조화 필드만 데이터로 읽고, 로컬의 전용 Git worktree에서 Codex를 실행한 뒤, 테스트와 읽기 전용 리뷰를 거쳐 **Draft PR만** 만듭니다. 이 제어 구조에는 `main` 브랜치를 체크아웃·수정·푸시·병합하는 자동 경로가 없습니다.
 
 ## 전체 흐름
 
@@ -20,7 +20,9 @@ GitHub Issue (`agent:queued`)
   -> human review and explicit merge
 ```
 
-이것은 self-hosted GitHub Actions runner가 아닙니다. GitHub Actions의 CI는 PR 이벤트에서 읽기 권한으로만 실행되며, worker는 개발자 컴퓨터에서 수동 실행하거나 로컬 스케줄러로 실행합니다.
+이것은 self-hosted GitHub Actions runner가 아닙니다. AI Company 제어 구조가 사용하는 일반 PR CI는 PR 이벤트에서 읽기 권한으로만 실행되고 merge나 deploy를 수행하지 않으며, worker는 개발자 컴퓨터에서 수동 실행하거나 로컬 스케줄러로 실행합니다.
+
+별도로 `.github/workflows/tenbagger-sector-cycle.yml`은 AI Company 실행 평면 밖의 결정론적·비에이전트 데이터 갱신 워크플로입니다. 이 워크플로는 `contents: write` 권한을 가지며, 변경이 있을 때 `data/tenbagger_scan_state.json`과 `data/tenbagger_final_candidates.json`만 커밋해 `main`에 직접 push할 수 있습니다.
 
 ## Issue 입력 계약
 
@@ -28,7 +30,7 @@ GitHub Issue (`agent:queued`)
 
 - Title, Objective, Acceptance criteria
 - Allowed paths, Forbidden paths
-- Test command (`python-compile-and-pytest` 또는 `pytest`라는 고정 프로필)
+- Test command (`python-compile-and-pytest`, `pytest`, 또는 `automation-smoke`라는 고정 프로필)
 
 worker는 Issue 본문에서 이 markdown 헤더를 정확히 한 번씩 읽습니다. 경로는 repository-relative 형식과 path traversal 여부를 검사합니다. 테스트는 자유 입력 명령을 호출하지 않고, 선택된 프로필을 고정된 Python 명령에 매핑합니다. `Invoke-Expression`, `cmd /c`, shell 문자열 평가를 사용하지 않습니다.
 
@@ -49,7 +51,7 @@ worker는 기본 worktree가 `main`에 있고 tracked/staged 변경이 없을 �
 
 ## 테스트 및 PR 정책
 
-기본 테스트 프로필은 `python-compile-and-pytest`입니다. 이는 저장소 최상위와 `tests/`의 Python 파일을 컴파일한 뒤 `python -m pytest`를 실행합니다. CI도 동일하게 Python 문법 검사와 현재 pytest suite를 실행합니다.
+현재 구현된 고정 테스트 프로필은 `python-compile-and-pytest`, `pytest`, `automation-smoke`이며, 기본값은 `python-compile-and-pytest`입니다. 기본 프로필은 저장소 최상위와 `tests/`의 Python 파일을 컴파일한 뒤 `python -m pytest`를 실행합니다. CI도 동일하게 Python 문법 검사와 현재 pytest suite를 실행합니다.
 
 테스트가 한 번이라도 실패하면 기본 정책은 **Draft PR을 만들지 않는 것**입니다. 실패한 전용 worktree는 삭제하지 않아 원인 확인에 사용할 수 있지만, `main`과 기존 작업 폴더는 변경되지 않습니다. 테스트 출력은 토큰이나 환경값이 로그에 노출되지 않도록 worker가 요약 상태만 보관합니다.
 

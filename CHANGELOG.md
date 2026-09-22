@@ -1,3 +1,8 @@
+## [2026-09-22] Control-plane documentation alignment
+
+- Scoped the no-direct-main-write boundary to the AI Company / Codex-Claude control plane and documented the separate deterministic Tenbagger workflow's two-file direct-main data refresh.
+- Listed all implemented fixed test profiles and updated the bounded one-correction / final-review wording to match the self-tested scripts; no executable behavior changed.
+
 ## [2026-09-16] AI Company governance consolidation
 
 - Recreated `.ai-company/` as a governance, permissions, workflow, state-orientation, and historical-context layer while keeping the existing PowerShell control plane as the single production execution engine.
