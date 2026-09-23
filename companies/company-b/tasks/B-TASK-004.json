@@ -1,0 +1,42 @@
+{
+  "id": "B-TASK-004",
+  "title": "Stabilize Company B queue recovery before integration",
+  "objective": "Correct the post-PASS publication recovery contract in the new Company B queue worker before it is integrated into the operational branch. Preserve fail-closed blocked labeling while making a bounded rerun able to resume only a previously validated PASS/DONE worker result. Also make the normal queue base default to the Company B operational branch rather than the bootstrap branch.",
+  "acceptance_criteria": [
+    "A publication failure may remain visibly company-b:blocked, but a later invocation must be able to identify and resume that blocked Issue only when its local queue state exists and the authoritative worker state validates as the same task/branch with status PASS, phase DONE, and reviewVerdict PASS.",
+    "Blocked Issues whose worker state is absent, malformed, non-PASS, or does not match the saved queue state must never be auto-resumed.",
+    "Recovery must never re-invoke Claude implementation or Codex review after a validated PASS/DONE worker result; it may only retry remote branch/PR/evidence/lifecycle publication.",
+    "Queued tasks with an existing task runtime must still fail closed rather than being treated as recovery.",
+    "The default BaseRef for the production queue wrapper must be company-b/operational-v0.1, not company-b/bootstrap-claude-led-v0.1.",
+    "Update QUEUE_PROTOCOL.md so its recovery description exactly matches executable behavior.",
+    "Extend deterministic queue contract tests to cover blocked publication recovery, rejection of non-PASS blocked runtimes, no worker reinvocation on recovery, and the operational default BaseRef.",
+    "Do not broaden scope into scheduler/heartbeat yet.",
+    "Existing pytest suite plus the updated queue contract tests must pass.",
+    "Final independent Codex review must return PASS."
+  ],
+  "risk": "medium",
+  "test_profile": "pytest",
+  "allowed_paths": [
+    "scripts/company_b/company-b-queue-worker.ps1",
+    "docs/company-b/QUEUE_PROTOCOL.md",
+    "tests/test_company_b_queue_contract.py"
+  ],
+  "forbidden_paths": [
+    ".ai-company/",
+    "scripts/company_b/company-b-worker.ps1",
+    "scripts/company_b/setup-company-b-github.ps1",
+    "scripts/codex-queue-worker.ps1",
+    "scripts/run-codex-queue-scheduled.ps1",
+    "scripts/publish-codex-worker-heartbeat.ps1",
+    ".github/",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "final.py",
+    "signals.py",
+    "regime_playbook.py",
+    "hedging.py"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}
