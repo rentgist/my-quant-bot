@@ -1,0 +1,48 @@
+{
+  "id": "B-TASK-005",
+  "title": "Make Company B publication recovery transactional and bounded",
+  "objective": "Starting from the clean B-TASK-003 queue implementation, fix the complete post-PASS publication/lifecycle recovery contract identified by PM inspection and the failed B-TASK-004 Codex review. A rerun may resume remote publication only from a validated PASS/DONE worker result and valid evidence; no partial lifecycle failure may strand an Issue or leave stale automatic-recovery eligibility.",
+  "acceptance_criteria": [
+    "Preserve visible fail-closed company-b:blocked status for recoverable publication failures, but make a later invocation resume only when saved queue state and authoritative worker state match the same task/branch and the worker state is status PASS, phase DONE, reviewVerdict PASS.",
+    "Blocked Issues with absent, malformed, mismatched, non-PASS worker state, or missing/invalid fixed-test or Codex evidence must never be automatically resumed.",
+    "Recovery after a validated PASS/DONE worker result must never re-invoke Claude implementation or Codex review; it may retry only remote branch, Draft PR, exact-head evidence, and lifecycle publication.",
+    "Make the final running/blocked -> done lifecycle completion recoverable as one bounded state machine: if label mutation succeeds but the completion comment fails, a subsequent run must deterministically discover and finish or safely block the same Issue rather than strand it as undiscoverable done.",
+    "Any evidence-validation failure must explicitly revoke/clear automatic publication-recovery eligibility before or while moving the Issue to its safe visible state; stale eligibility must not survive.",
+    "Queued tasks that merely have an existing runtime, without a matching saved recovery state proving a prior validated PASS/DONE result, must still fail closed.",
+    "The production queue default BaseRef must be company-b/operational-v0.1 rather than the bootstrap branch.",
+    "Update QUEUE_PROTOCOL.md so the documented recovery state machine exactly matches executable behavior, including partial final lifecycle failures and evidence invalidation.",
+    "Extend deterministic tests to simulate/contract-check: publication failure -> blocked recovery; partial final label success/comment failure; invalid evidence after prior publication failure; rejection of non-PASS/mismatched recovery state; no Claude/Codex reinvocation during publication-only recovery; and operational default BaseRef.",
+    "Do not broaden scope into scheduler/heartbeat.",
+    "Existing pytest suite plus updated queue tests must pass.",
+    "Final independent Codex review must return PASS."
+  ],
+  "risk": "medium",
+  "test_profile": "pytest",
+  "allowed_paths": [
+    "scripts/company_b/company-b-queue-worker.ps1",
+    "docs/company-b/QUEUE_PROTOCOL.md",
+    "tests/test_company_b_queue_contract.py"
+  ],
+  "forbidden_paths": [
+    ".ai-company/",
+    "scripts/company_b/company-b-worker.ps1",
+    "scripts/company_b/setup-company-b-github.ps1",
+    "scripts/codex-queue-worker.ps1",
+    "scripts/run-codex-queue-scheduled.ps1",
+    "scripts/publish-codex-worker-heartbeat.ps1",
+    ".github/",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "final.py",
+    "signals.py",
+    "regime_playbook.py",
+    "hedging.py",
+    "fix_ai.py",
+    "fix_fallback.py",
+    "fix_final4.py",
+    "fix_signals4.py"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}
