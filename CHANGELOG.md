@@ -1,3 +1,9 @@
+## [2026-09-23] Company A 스마트스토어 상품 접수 검증 명세
+
+- Company A 전용 상품 접수 입력·출력 계약, 사실·관찰·추론·누락·충돌 분류와 게시 차단 경계를 문서화했습니다.
+- 가상 생활수납 제품군의 네 합성 JSON 픽스처와 향후 순수 결정론적 검증기의 인수 사례를 추가했습니다.
+- Company B와 퀀트 애플리케이션은 변경하지 않으며, 상거래 런타임 구현과 외부 부작용은 이번 범위에서 제외했습니다.
+
 ## [2026-09-23] Exact reviewed head SHA rendering
 
 - Render the validated 40-character reviewed head SHA as readable Markdown code while preserving the exact hidden idempotency marker and reviewer provenance.
