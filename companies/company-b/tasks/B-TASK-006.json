@@ -1,0 +1,47 @@
+{
+  "id": "B-TASK-006",
+  "title": "Fix Company B publication recovery state machine",
+  "objective": "Fix only the executable Company B queue recovery state machine identified by PM and Codex. Start from the clean B-TASK-003 result. Do not reuse B-TASK-004 or B-TASK-005 worktrees. Make post-PASS publication recovery transactional, bounded, and fail-closed, and add deterministic regression tests. Documentation and scheduler work are explicitly deferred.",
+  "acceptance_criteria": [
+    "Recoverable publication failures may be visibly company-b:blocked, but automatic resume is allowed only when saved queue state matches the same task/branch and the authoritative worker state is status PASS, phase DONE, reviewVerdict PASS.",
+    "Before publication-only recovery proceeds, fixed-test evidence and Codex review evidence must be revalidated; absent, malformed, mismatched, non-PASS, or invalid evidence revokes recovery eligibility and must not remain an automatic recovery candidate.",
+    "Recovery after validated PASS/DONE must never invoke company-b-worker.ps1 again; it may retry only remote branch, Draft PR, exact-head evidence, and lifecycle publication.",
+    "The final lifecycle completion must tolerate partial failure: if the done label mutation succeeds but the completion comment fails, the next invocation must deterministically rediscover that saved recovery transaction and finish safely rather than strand an undiscoverable done Issue.",
+    "Queued Issues with an existing task runtime but without a matching saved validated publication-recovery transaction must still fail closed.",
+    "Set the production queue wrapper default BaseRef to company-b/operational-v0.1.",
+    "Add deterministic regression tests covering blocked publication recovery, partial final label-success/comment-failure recovery, stale recovery eligibility after evidence invalidation, rejection of non-PASS or mismatched state, no worker reinvocation during publication-only recovery, and the operational default BaseRef.",
+    "Do not modify QUEUE_PROTOCOL.md in this task; documentation alignment is a separate follow-up after executable behavior passes.",
+    "Do not add scheduler or heartbeat behavior.",
+    "Existing pytest suite plus updated queue contract tests must pass.",
+    "Final independent Codex review must return PASS."
+  ],
+  "risk": "medium",
+  "test_profile": "pytest",
+  "allowed_paths": [
+    "scripts/company_b/company-b-queue-worker.ps1",
+    "tests/test_company_b_queue_contract.py"
+  ],
+  "forbidden_paths": [
+    ".ai-company/",
+    "docs/company-b/QUEUE_PROTOCOL.md",
+    "scripts/company_b/company-b-worker.ps1",
+    "scripts/company_b/setup-company-b-github.ps1",
+    "scripts/codex-queue-worker.ps1",
+    "scripts/run-codex-queue-scheduled.ps1",
+    "scripts/publish-codex-worker-heartbeat.ps1",
+    ".github/",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "final.py",
+    "signals.py",
+    "regime_playbook.py",
+    "hedging.py",
+    "fix_ai.py",
+    "fix_fallback.py",
+    "fix_final4.py",
+    "fix_signals4.py"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}
