@@ -1,3 +1,8 @@
+## [2026-09-28] Windows scheduled worker Git path decoding
+
+- Resolve each primary clone's Git common directory as the relative ASCII `.git` value, preserving the independent full-clone guard when the scheduled account's Unicode path output is misdecoded.
+- Exercise separate full clones beneath a Korean-named fixture directory in the Windows PowerShell 5.1 isolation test.
+
 ## [2026-09-27] Shared scheduler with isolated company runtimes
 
 - Retain one production worker/scheduler and add opt-in local clone, base, worktree/state and log binding with Company B disabled during development.

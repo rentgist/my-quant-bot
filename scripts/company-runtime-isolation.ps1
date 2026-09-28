@@ -78,9 +78,12 @@ function Get-CompanyRuntimeBinding {
         $dotGit = Join-Path $root '.git'
         if (-not (Test-Path -LiteralPath $dotGit -PathType Container)) { throw 'Primary runtimes must be independent full clones, not linked worktrees.' }
         [void](Get-IsolatedRuntimePath $dotGit)
-        $common = @(& git -C $root rev-parse --path-format=absolute --git-common-dir)
+        # Git's absolute output can be misdecoded under Windows Scheduled Task S4U
+        # when the user profile path contains non-ASCII characters. The relative
+        # result is ASCII for a primary full clone and must be exactly .git.
+        $common = @(& git -C $root rev-parse --path-format=relative --git-common-dir)
         if ($LASTEXITCODE -ne 0 -or $common.Count -ne 1) { throw 'Cannot resolve primary Git common directory.' }
-        if (-not (Get-IsolatedRuntimePath $common[0]).Equals($dotGit, [StringComparison]::OrdinalIgnoreCase)) { throw 'Shared Git common directory is forbidden.' }
+        if ($common[0] -cne '.git') { throw 'Shared Git common directory is forbidden.' }
         if (Test-Path -LiteralPath (Join-Path $dotGit 'objects/info/alternates')) { throw 'Shared alternate Git object stores are forbidden.' }
     }
     $branch = @(& git -C $actualRoot branch --show-current)

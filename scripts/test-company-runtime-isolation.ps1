@@ -19,13 +19,16 @@ function Expect-Rejection {
     try { & $Action | Out-Null } catch { $caught = $_.Exception.Message }
     if ($null -eq $caught -or $caught -notlike "*$Expected*") { throw "Expected rejection '$Expected'; received '$caught'." }
 }
-$seed = Join-Path $testRoot 'seed'
+$unicodeName = ([string][char]0xD68C) + ([string][char]0xC0AC)
+$unicodeRoot = Join-Path $testRoot $unicodeName
+New-Item -ItemType Directory -Path $unicodeRoot | Out-Null
+$seed = Join-Path $unicodeRoot 'seed'
 [void](Git-Test @('init', '-b', 'main', $seed))
 Set-Content -LiteralPath (Join-Path $seed 'fixture.txt') -Value 'fixture'
 [void](Git-Test @('-C', $seed, 'add', 'fixture.txt'))
 [void](Git-Test @('-C', $seed, '-c', 'user.name=Isolation Test', '-c', 'user.email=isolation@example.invalid', 'commit', '-m', 'fixture'))
-$a = Join-Path $testRoot 'a'
-$b = Join-Path $testRoot 'b'
+$a = Join-Path $unicodeRoot 'a'
+$b = Join-Path $unicodeRoot 'b'
 [void](Git-Test @('clone', '--no-hardlinks', $seed, $a))
 [void](Git-Test @('clone', '--no-hardlinks', $seed, $b))
 $config = [ordered]@{
