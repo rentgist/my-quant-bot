@@ -1,3 +1,9 @@
+## [2026-09-27] Shared scheduler with isolated company runtimes
+
+- Retain one production worker/scheduler and add opt-in local clone, base, worktree/state and log binding with Company B disabled during development.
+- Reject mixed-company queue labels before lifecycle changes and suppress recovery writers for isolation rejection.
+- Add Windows PowerShell 5.1 clone/HEAD isolation, wrong-root/base/company, and real duplicate-invocation regressions with a preservation-first rollout guide.
+
 ## [2026-09-23] Company A 스마트스토어 상품 접수 검증 명세
 
 - Company A 전용 상품 접수 입력·출력 계약, 사실·관찰·추론·누락·충돌 분류와 게시 차단 경계를 문서화했습니다.

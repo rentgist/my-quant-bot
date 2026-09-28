@@ -4,6 +4,8 @@ param(
     [string]$QueueLabel = "agent:queued",
     [string]$BaseBranch = "main",
     [string]$WorktreeRoot,
+    [string]$RuntimeConfigPath,
+    [ValidateSet('A', 'B')][string]$Company = 'A',
     [ValidateRange(1, 10)]
     [int]$MaxTaskAttempts = 3,
     [ValidateRange(1, 2147483647)]
@@ -70,6 +72,9 @@ function Sync-BaseBranchIfSafe {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'company-runtime-isolation.ps1')
+$runtimeBinding = Get-CompanyRuntimeBinding -RepositoryRoot $repositoryRoot -RuntimeConfigPath $RuntimeConfigPath -Company $Company -Repository $Repository -BaseBranch $BaseBranch -QueueLabel $QueueLabel -WorktreeRoot $WorktreeRoot
+if ($null -ne $runtimeBinding) { $WorktreeRoot = $runtimeBinding.WorktreeRoot }
 $syncStatus = "not-run"
 $workerExitCode = -1
 $mutex = [System.Threading.Mutex]::new($false, "Global\rentgist-my-quant-bot-codex-queue-scheduled")
@@ -80,6 +85,13 @@ try {
     if (-not $hasMutex) {
         Write-Output "A scheduled queue wrapper is already running; this invocation exits without overlap."
         exit 0
+    }
+
+    $transcriptStarted = $false
+    if ($null -ne $runtimeBinding) {
+        New-Item -ItemType Directory -Path $runtimeBinding.LogRoot -Force | Out-Null
+        Start-Transcript -LiteralPath (Join-Path $runtimeBinding.LogRoot ((Get-Date -Format 'yyyyMMdd-HHmmss') + "-$PID.log")) | Out-Null
+        $transcriptStarted = $true
     }
 
     $syncStatus = Sync-BaseBranchIfSafe -RepositoryRoot $repositoryRoot -BaseBranch $BaseBranch
@@ -101,11 +113,12 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($WorktreeRoot)) {
         $workerArguments += @("-WorktreeRoot", $WorktreeRoot)
     }
+    if ($null -ne $runtimeBinding) { $workerArguments += @('-RuntimeConfigPath', $runtimeBinding.ConfigPath, '-Company', 'A') }
 
     & powershell @workerArguments
     $workerExitCode = $LASTEXITCODE
 
-    if ($workerExitCode -ne 0) {
+    if ($workerExitCode -ne 0 -and $workerExitCode -ne 4) {
         # Publish the worker's sanitized lifecycle diagnostic first, so management has evidence even
         # if the optional zero-change recovery path cannot produce a safe patch.
         $diagnosticPublisherPath = Join-Path $PSScriptRoot "publish-codex-queue-diagnostic.ps1"
@@ -214,6 +227,7 @@ finally {
         }
 
         $mutex.ReleaseMutex()
+        if ($transcriptStarted) { Stop-Transcript | Out-Null }
     }
     $mutex.Dispose()
 }

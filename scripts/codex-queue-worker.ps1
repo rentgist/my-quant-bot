@@ -4,6 +4,8 @@ param(
     [string]$QueueLabel = "agent:queued",
     [string]$BaseBranch = "main",
     [string]$WorktreeRoot,
+    [string]$RuntimeConfigPath,
+    [ValidateSet('A', 'B')][string]$Company = 'A',
     [switch]$KeepWorktreeOnSuccess,
     [ValidateRange(1, 10)]
     [int]$MaxTaskAttempts = 3,
@@ -19,6 +21,15 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot 'company-runtime-isolation.ps1')
+$runtimeBinding = Get-CompanyRuntimeBinding -RepositoryRoot (Split-Path -Parent $PSScriptRoot) -RuntimeConfigPath $RuntimeConfigPath -Company $Company -Repository $Repository -BaseBranch $BaseBranch -QueueLabel $QueueLabel -WorktreeRoot $WorktreeRoot
+if ($null -ne $runtimeBinding) {
+    $WorktreeRoot = $runtimeBinding.WorktreeRoot
+    if ($RunningLabel -cne 'agent:running' -or $BlockedLabel -cne 'agent:blocked' -or $DoneLabel -cne 'agent:done' -or $ApprovalRequiredLabel -cne 'agent:approval-required') {
+        throw 'Isolated Company A lifecycle labels cannot be overridden.'
+    }
+}
 
 $BuiltInForbiddenPaths = @(
     "final.py",
@@ -974,6 +985,8 @@ function Invoke-TestProfile {
                 Assert-BoundedTestFailureCodeSelfTest
                 Assert-BoundedReviewEvidenceSelfTest
                 Assert-ContextDocumentSelfTest
+                & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Path 'scripts\test-company-runtime-isolation.ps1') -SkipLiveMutexTests 1> $null 2> $null
+                if ($LASTEXITCODE -ne 0) { throw 'Company runtime isolation self-test failed.' }
             }
             catch {
                 Set-Content -LiteralPath $ResultPath -Value "test_profile: $Profile`nresult: FAILED (test suite)" -Encoding utf8
@@ -1080,17 +1093,19 @@ try {
     $lifecycleDirectory = Join-Path $WorktreeRoot "lifecycle"
     New-Item -ItemType Directory -Path $lifecycleDirectory -Force | Out-Null
 
-    $queueJson = & $ghPath issue list --repo $Repository --label $QueueLabel --state open --limit 100 --json number,title,url
+    $queueJson = & $ghPath issue list --repo $Repository --label $QueueLabel --state open --limit 100 --json number,title,url,labels
     if ($LASTEXITCODE -ne 0) {
         throw "Could not query the GitHub Issue queue."
     }
     $parsedQueuedIssues = $queueJson | ConvertFrom-Json
+    foreach ($candidate in @($parsedQueuedIssues)) { Assert-CompanyAQueueLabels -Labels @($candidate.labels | ForEach-Object { $_.name }) }
     $queuedIssues = @($parsedQueuedIssues | Sort-Object number)
-    $runningJson = & $ghPath issue list --repo $Repository --label $RunningLabel --state open --limit 100 --json number,title,url
+    $runningJson = & $ghPath issue list --repo $Repository --label $RunningLabel --state open --limit 100 --json number,title,url,labels
     if ($LASTEXITCODE -ne 0) {
         throw "Could not query running GitHub Issues for interruption recovery."
     }
     $parsedRunningIssues = $runningJson | ConvertFrom-Json
+    foreach ($candidate in @($parsedRunningIssues)) { Assert-CompanyAQueueLabels -Labels @($candidate.labels | ForEach-Object { $_.name }) }
     $runningIssues = @($parsedRunningIssues | Sort-Object number)
     $recoverableIssues = @($runningIssues | Where-Object {
         $candidateState = Get-LifecycleState -StatePath (Get-LifecycleStatePath -Directory $lifecycleDirectory -IssueNumber ([int]$_.number))
@@ -1122,6 +1137,8 @@ try {
     }
     $issue = $issueJson | ConvertFrom-Json
     $issueLabels = @($issue.labels | ForEach-Object { $_.name })
+    try { Assert-CompanyAQueueLabels -Labels $issueLabels }
+    catch { $issueNumber = $null; throw }
     if (-not ($issueLabels -contains $QueueLabel) -and -not ($issueLabels -contains $RunningLabel)) {
         throw "Selected Issue no longer has a queue lifecycle label."
     }
@@ -1598,6 +1615,10 @@ Automated local queue run for Issue #$issueNumber.
     Write-Output "Draft PR created for Issue #$issueNumber on branch $branchName. Human approval is required before merge."
 }
 catch {
+    if ($_.Exception.Data['CompanyIsolation']) {
+        Write-Output 'Company isolation rejected the queue; no lifecycle or recovery mutation is allowed.'
+        exit 4
+    }
     if ($null -ne $lifecycleStatePath -and $null -ne $issueNumber -and $null -ne $branchName -and $null -ne $worktreePath) {
         if ($taskPhase -eq "final-review-blocked") {
             Save-LifecycleState -StatePath $lifecycleStatePath -IssueNumber $issueNumber -BranchName $branchName -WorktreePath $worktreePath -Status "blocked" -Phase $taskPhase -Attempts $taskAttempts -FailureReason $_.Exception.Message

@@ -16,6 +16,8 @@ jobs:
         run: |
           $files = @(
             'scripts/codex-queue-worker.ps1',
+            'scripts/company-runtime-isolation.ps1',
+            'scripts/test-company-runtime-isolation.ps1',
             'scripts/run-agent-review.ps1',
             'scripts/bounded-review-state.ps1',
             'scripts/run-codex-queue-scheduled.ps1',
@@ -73,6 +75,9 @@ jobs:
       - name: Verify empty ChangedPaths handling on Windows PowerShell 5.1
         shell: powershell
         run: .\scripts\test-codex-queue-worker-runtime.ps1
+      - name: Verify company isolation and duplicate invocation on Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\test-company-runtime-isolation.ps1
       - name: Verify bounded Claude verdict parser on Windows PowerShell 5.1
         shell: powershell
         run: .\scripts\run-agent-review.ps1 -SelfTest
