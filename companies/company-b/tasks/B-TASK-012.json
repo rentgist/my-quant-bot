@@ -1,0 +1,37 @@
+{
+  "id": "B-TASK-012",
+  "title": "Make Company B PowerShell test decoding deterministic",
+  "objective": "Make the Python subprocess helper used by Company B PowerShell runtime tests decode PowerShell output deterministically on Windows, including user profiles with non-ASCII paths. This is a test-harness-only change.",
+  "acceptance_criteria": [
+    "Modify only tests/test_company_b_queue_contract.py.",
+    "The shared PowerShell subprocess helper must explicitly decode captured stdout and stderr as UTF-8 instead of relying on the Windows locale encoding.",
+    "Malformed output bytes must remain diagnostically visible without crashing the subprocess reader thread.",
+    "Do not weaken return-code assertions, skip behavior, timeouts, or any Company B safety contract test.",
+    "Do not modify production scripts, documentation, scheduler, heartbeat, Company A files, or trading code.",
+    "Full pytest suite must pass.",
+    "Final independent Codex review must return PASS."
+  ],
+  "risk": "low",
+  "test_profile": "pytest",
+  "allowed_paths": [
+    "tests/test_company_b_queue_contract.py"
+  ],
+  "forbidden_paths": [
+    ".ai-company/",
+    "scripts/company_b/",
+    "scripts/codex-queue-worker.ps1",
+    "scripts/run-codex-queue-scheduled.ps1",
+    "scripts/publish-codex-worker-heartbeat.ps1",
+    ".github/",
+    "docs/",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "final.py",
+    "signals.py",
+    "regime_playbook.py",
+    "hedging.py"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}
