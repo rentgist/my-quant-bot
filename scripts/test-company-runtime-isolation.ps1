@@ -166,3 +166,4 @@ if (-not $SkipLiveMutexTests) {
 }
 }
 Write-Output "Company isolation passed: independent clones/HEAD, root/base/queue rejection, B disabled, distinct state roots; live mutex checks skipped=$SkipLiveMutexTests. Fixtures retained for inspection."
+exit 0
