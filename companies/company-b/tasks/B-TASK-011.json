@@ -1,0 +1,47 @@
+{
+  "id": "B-TASK-011",
+  "title": "Add fail-closed Company B recovery primitives",
+  "objective": "Starting only from the clean B-TASK-003 queue worker, add the small, independently testable primitives needed for a later revoke-first recovery state machine. This task does not wire the primitives into the main queue lifecycle. Treat B-TASK-009 and B-TASK-010 only as failure evidence; do not copy or salvage their worktree changes.",
+  "acceptance_criteria": [
+    "Add one queue-state revocation helper whose successful return guarantees the target recovery-eligibility file is absent.",
+    "Revocation is idempotent when the file is already absent, but a deletion failure or still-present file must throw before any caller could publish GitHub lifecycle state.",
+    "Add strict save/load validation primitives for a versioned queue-state record containing issueNumber, taskId, derived task branch, phase, pullRequestNumber, and headSha.",
+    "Support only explicit phases needed by later integration: WORKER_PASS and PUBLISHED. WORKER_PASS must not accept a PR number or head marker; PUBLISHED must require a positive PR number and a 40-character lowercase hexadecimal head SHA.",
+    "Validation must reject invalid JSON, missing fields, schema mismatch, issue mismatch, malformed task id, task/branch mismatch, unknown phase, and phase-inconsistent PR/head fields.",
+    "Add executable regression tests using temporary local files for successful revocation, idempotent absence, locked-file deletion failure, and valid/invalid state records. Tests must not call GitHub, invoke company-b-worker.ps1, or alter persistent runtime state.",
+    "PowerShell self-test cleanup must use valid PowerShell syntax and must restore any temporary environment state it changes.",
+    "Do not change main queue discovery, lifecycle transitions, worker invocation, PR publication, evidence publication, documentation, scheduler, heartbeat, authoritative company-b-worker.ps1, Company A files, or trading code.",
+    "Keep the change small and localized; do not broadly rewrite company-b-queue-worker.ps1.",
+    "Full pytest suite and the queue worker -SelfTest must pass.",
+    "Final independent Codex review must return PASS."
+  ],
+  "risk": "medium",
+  "test_profile": "pytest",
+  "allowed_paths": [
+    "scripts/company_b/company-b-queue-worker.ps1",
+    "tests/test_company_b_queue_contract.py"
+  ],
+  "forbidden_paths": [
+    ".ai-company/",
+    "docs/company-b/QUEUE_PROTOCOL.md",
+    "scripts/company_b/company-b-worker.ps1",
+    "scripts/company_b/setup-company-b-github.ps1",
+    "scripts/codex-queue-worker.ps1",
+    "scripts/run-codex-queue-scheduled.ps1",
+    "scripts/publish-codex-worker-heartbeat.ps1",
+    ".github/",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "final.py",
+    "signals.py",
+    "regime_playbook.py",
+    "hedging.py",
+    "fix_ai.py",
+    "fix_fallback.py",
+    "fix_final4.py",
+    "fix_signals4.py"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}
