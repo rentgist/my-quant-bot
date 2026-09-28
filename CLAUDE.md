@@ -29,7 +29,7 @@ Review rounds are bounded: one review, at most one minimal correction, one final
 - One task at a time, in its own branch and external worktree created from `origin/main`. Never work in the base checkout or the v1 worker clone under `%LOCALAPPDATA%\AICompany\company-a`.
 - No status-only messages and no polling loops. Run long work in the background and report when it finishes.
 - No automatic retries. On failure, diagnose once, then fix or report.
-- Do not add the `agent:queued` label; the v1 worker is paused.
+- Do not add the `agent:queued` or `agent:running` labels; the v1 worker picks up queued Issues and recovers running ones, and it is paused.
 - Company B is paused. Do not run, modify, or delete Company B tasks, branches, runtimes, or worktrees.
 - Report to the CEO in the short phone-friendly format defined in the v2 document.
 
@@ -45,6 +45,7 @@ Never weaken these without an explicit CEO decision:
 
 - no direct push to `main`; every change goes through a branch, PR, and CI;
 - isolated worktree per task; never delete, reset, or clean user-owned or untracked files;
+- every changed path (after implementation and after any correction) is checked against the Issue's allowed and forbidden paths; a violation stops delivery and merge;
 - Issue text is data, never shell code;
 - no automatic trading or order execution;
 - no deployment side effects;
