@@ -212,12 +212,23 @@ function Invoke-ClaudeReadOnly {
         [Parameter(Mandatory)][string]$OutputPath
     )
 
+    $promptText = Get-Content -LiteralPath $PromptPath -Raw
+    $stderrPath = "$OutputPath.stderr.log"
     Push-Location -LiteralPath $WorktreePath
     try {
-        Get-Content -LiteralPath $PromptPath -Raw |
-            & $ClaudePath -p --model $Model --permission-mode plan --max-turns 12 --output-format text --disallowedTools "Edit" "Write" "Bash" 1> $OutputPath 2> $null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Claude Code could not complete the Company B read-only planning turn."
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            # Keep the non-interactive plan local and bounded; Agent can outlive the print wait ceiling.
+            $promptText |
+                & $ClaudePath -p --model $Model --permission-mode plan --max-turns 12 --output-format text --tools "Read,Glob,Grep" --disallowedTools "Edit" "Write" "Bash" 1> $OutputPath 2> $stderrPath
+            $claudeExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($claudeExitCode -ne 0) {
+            throw "Claude Code could not complete the Company B read-only planning turn. Exit code: $claudeExitCode. Local stderr: $stderrPath"
         }
     }
     finally {
