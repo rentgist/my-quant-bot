@@ -1,0 +1,53 @@
+{
+  "id": "B-TASK-010",
+  "title": "Enforce revoke-first Company B recovery",
+  "objective": "Starting only from the clean B-TASK-003 result, make queue-state.json a fail-closed publication-recovery capability: whenever a candidate becomes non-recoverable, revoke the local queue-state file before any fallible GitHub lifecycle/comment operation. Preserve the file only for explicitly recoverable publication failures. Treat B-TASK-009 only as failure evidence; do not copy or salvage its worktree changes.",
+  "acceptance_criteria": [
+    "Treat existence of the per-Issue queue-state.json as recovery eligibility; do not introduce a second eligibility flag.",
+    "For CLOSED Issue, invalid local queue state, WORKER_FAILED, WORKER_NOT_PASS, EVIDENCE_INVALID, worker-state validation failure, task-spec validation failure, task/branch mismatch, and PUBLISHED completion revalidation failure: remove queue-state.json before attempting any GitHub label/comment status publication.",
+    "If the subsequent GitHub blocked/status publication fails after local revocation, queue-state.json must remain absent and the Issue must not be eligible for publication recovery on the next invocation.",
+    "Retain queue-state.json only for a validated PASS/DONE worker result whose failure is limited to recoverable remote publication/completion work.",
+    "Recovery from a retained state must revalidate same task/branch, worker PASS/DONE/review PASS, fixed-test PASS, Codex PASS evidence, Draft PR/exact-head conditions as appropriate before continuing.",
+    "A PUBLISHED completion-only recovery must revoke local recovery eligibility if its saved PR/head/evidence marker cannot be revalidated; it must not retry forever as a valid recovery candidate.",
+    "Publication-only recovery must never invoke company-b-worker.ps1, Claude implementation, or Codex review again.",
+    "Queued Issues with an existing runtime but without a valid retained recovery transaction must fail closed.",
+    "Set the queue wrapper default BaseRef to company-b/operational-v0.1.",
+    "Keep the implementation minimal: modify existing recovery/lifecycle flow rather than broadly rewriting the queue worker.",
+    "Replace brittle fixed-character-window assertions with structural assertions that inspect the relevant branch or function body without depending on comments or exact character distance.",
+    "Assertions about forbidden executable operations must ignore comments and prose; a comment containing a command name must not fail the test.",
+    "Any PowerShell environment-variable cleanup used by self-tests must use valid PowerShell syntax and the queue worker -SelfTest invocation must exit successfully.",
+    "Regression tests must cover revoke-before-GitHub ordering for each non-recoverable class, validation exceptions, PUBLISHED revalidation failure, retained PUBLISH_FAILED recovery, no worker reinvocation, and operational BaseRef.",
+    "Do not modify documentation, scheduler, heartbeat, authoritative company-b-worker.ps1, Company A files, or trading code.",
+    "Full pytest suite must pass.",
+    "Final independent Codex review must return PASS."
+  ],
+  "risk": "medium",
+  "test_profile": "pytest",
+  "allowed_paths": [
+    "scripts/company_b/company-b-queue-worker.ps1",
+    "tests/test_company_b_queue_contract.py"
+  ],
+  "forbidden_paths": [
+    ".ai-company/",
+    "docs/company-b/QUEUE_PROTOCOL.md",
+    "scripts/company_b/company-b-worker.ps1",
+    "scripts/company_b/setup-company-b-github.ps1",
+    "scripts/codex-queue-worker.ps1",
+    "scripts/run-codex-queue-scheduled.ps1",
+    "scripts/publish-codex-worker-heartbeat.ps1",
+    ".github/",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "final.py",
+    "signals.py",
+    "regime_playbook.py",
+    "hedging.py",
+    "fix_ai.py",
+    "fix_fallback.py",
+    "fix_final4.py",
+    "fix_signals4.py"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}
