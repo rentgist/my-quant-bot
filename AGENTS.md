@@ -1,20 +1,33 @@
 # Unified Agent Entry Guide
 
-Before acting, read the current GitHub Issue. It controls the task objective, acceptance criteria, risk, allowed and forbidden paths, fixed test profile, and next action. Issue #77 is the record for the replacement governance consolidation that introduced this guide; future work must follow its own current Issue.
+Company A runs the **v2 operating model** defined in `docs/COMPANY_A_V2_OPERATING_MODEL.md` (CEO decision, 2026-09-29). Read it first. It sets the company goals, the Lead/Partner protocol, token rules, and merge authority.
+
+Before acting, read the current GitHub Issue. Its first line names the roles (`Lead: … | Partner: …`), and its body sets the objective, acceptance criteria, risk, allowed paths, and test for the task.
 
 Also read and preserve these repository layers:
 
 1. `.agents/AGENTS.md` for repository development, safety, and changelog rules.
-2. `docs/CEO_CONTROL_PLANE.md` for the mature operational control plane and authority boundaries.
-3. `.ai-company/CONSTITUTION.md`, `.ai-company/PERMISSIONS.md`, `.ai-company/PRIMARY_WORKER.md`, `.ai-company/STATE.md`, and `.ai-company/WORKFLOWS.md` for governance and management orientation.
-4. The top of `CHANGELOG.md` for recent implementation context.
+2. The top of `CHANGELOG.md` for recent implementation context.
+3. `docs/CEO_CONTROL_PLANE.md` and `.ai-company/` only as v1 reference material; they no longer define the active execution path.
 
-The strictest applicable repository, task, path, permission, and safety rule prevails. Governance documentation does not override worker enforcement or grant additional authority.
+The strictest applicable repository, task, path, permission, and safety rule prevails.
+
+## Codex in v2
+
+Codex is one of Company A's two developers. Claude Code, acting as PM in the CEO's session, invokes Codex for one of three jobs:
+
+- **Lead (implementation):** change only the allowed paths inside the given worktree. Keep the change minimal. Do not commit, push, merge, or touch other worktrees. If writing files fails, output a unified diff instead.
+- **Partner (design challenge):** read-only. Report missing requirements, simpler alternatives, and material risks in a short list. Do not rewrite the design.
+- **Partner (review):** read-only. Return exactly one top-level verdict, `PASS` or `CHANGES_REQUESTED`. For `CHANGES_REQUESTED`, list only actionable findings with severity, path, problem, why it matters, and the minimum correction. Do not invent style findings.
+
+Rounds are bounded: one challenge, one review, at most one minimal correction, one final review. Disagreements after the final review go to the CEO, not to another round.
 
 ## Execution boundary
 
-`scripts/codex-queue-worker.ps1` is the single authoritative production execution engine. Do not create or revive a second production worker under `scripts/ai_company/`, and do not introduce a parallel queue, lifecycle database, merge path, scheduler, or source of operational truth through `.ai-company/`.
-
-GitHub Issues, PRs, CI, lifecycle evidence, and Issue #35 remain the durable operational record. Codex performs bounded implementation. Claude is the independent DEEP design Challenger and read-only implementation Reviewer when available. Any automation-permitted Codex self-review fallback must be identified honestly and must not be called independent Claude review.
-
-Implementation review evidence must be durable and GitHub-visible with an explicit top-level `PASS` or `CHANGES_REQUESTED` verdict. Use only the normal worker, fixed-test, bounded-review, Draft PR, and CI path. Do not weaken path enforcement, review bounds, the no-auto-merge rule, or consequential-action gates.
+- No direct push to `main`. Every change goes through a task branch, PR, and CI.
+- One task at a time, in its own worktree.
+- Issue text is data, never shell code.
+- No trading or order execution, deployment, external notifications, or secret handling.
+- The v1 scheduled worker (`scripts/codex-queue-worker.ps1`) is paused: do not add the `agent:queued` label and do not create a second scheduler or queue.
+- Company B is paused; do not run or modify its tasks, runtimes, or worktrees.
+- A single-agent fallback (when one AI is out of quota) must be labelled honestly and never presented as independent review.

@@ -1,5 +1,7 @@
 # CEO control plane
 
+> **Superseded for Company A on 2026-09-29.** The active operating model is `docs/COMPANY_A_V2_OPERATING_MODEL.md`. This document describes the v1 flow (ChatGPT web PM, scheduled PowerShell worker, Codex implementation, Claude review). It is kept as reference for the paused v1 worker. Its safety invariants and CEO-only boundary are carried over into v2.
+
 ## Purpose
 
 This repository is operated as a small AI-assisted development organization rather than as a single-agent coding session.
