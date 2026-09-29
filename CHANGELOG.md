@@ -1,3 +1,10 @@
+## [2026-09-29] Company A v2 운영 모델
+
+- CEO 결정으로 Company A를 v2로 전환했습니다. Claude Code가 PM·창구를 맡고, Claude와 Codex가 작업마다 Lead/Partner를 나눠 구현과 교차 검토를 합니다(`docs/COMPANY_A_V2_OPERATING_MODEL.md`).
+- 1차 목표(G1 클릭 자동화 → G2 가계부 MVP → G3 스마트스토어 등록 데이터), 토큰 분담·절약 규칙, 위험도별 병합 권한을 정했습니다.
+- `CLAUDE.md`, `AGENTS.md`, `.ai-company/PRIMARY_WORKER.md`를 v2 기준으로 갱신하고, `docs/CEO_CONTROL_PLANE.md`에 v1 대체 표시를 추가했습니다.
+- v1 예약 worker와 Company B는 삭제 없이 일시 정지했습니다. 스크립트와 실행 코드는 변경하지 않았습니다.
+
 ## [2026-09-28] Windows scheduled worker Git path decoding
 
 - Resolve each primary clone's Git common directory as the relative ASCII `.git` value, preserving the independent full-clone guard when the scheduled account's Unicode path output is misdecoded.
