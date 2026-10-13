@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from indicators import calc_rsi, calc_macd, get_rolling_rsi
 import streamlit as st
+from kr_market_data import valid_flow
 
 # ═════════════════════════════════════════
 # 공용 상수 (실시간 & 백테스트가 반드시 같은 값 사용)
@@ -1511,8 +1512,8 @@ def analyze_macro_flow(macro_data, flow_data, extra_data=None):
         
     foreigner, institutional, retail = flow_data
     
-    # 수급 데이터 유효성 체크 (KRX 서버 점검 시 모두 0)
-    flow_valid = not (foreigner == 0 and institutional == 0 and retail == 0)
+    # 실제 0원은 유효하며 결측·비유한 값만 제외한다.
+    flow_valid = valid_flow(flow_data)
     
     # 시나리오 기계적 판별
     if flow_valid:
@@ -1532,7 +1533,7 @@ def analyze_macro_flow(macro_data, flow_data, extra_data=None):
     # 수급 라벨: 양수→순매수, 음수→순매도
     def _flow_label(val):
         if not flow_valid:
-            return "⚠️ 점검 중"
+            return "⚠️ 수급 미확인"
         if val >= 0:
             return f"+{val:,}억원"
         else:
@@ -1542,15 +1543,15 @@ def analyze_macro_flow(macro_data, flow_data, extra_data=None):
     ed = extra_data or {}
     cnn_score = ed.get('cnn_score')
     cnn_rating = ed.get('cnn_rating', 'N/A')
-    flow_1m = ed.get('flow_1m', (0, 0, 0))
+    flow_1m = ed.get('flow_1m', (None, None, None))
     f_1m, i_1m, r_1m = flow_1m
     
     # 1개월 수급 유효성 체크
-    flow_1m_valid = not (f_1m == 0 and i_1m == 0 and r_1m == 0)
+    flow_1m_valid = valid_flow(flow_1m)
     
     def _flow_label_1m(val):
         if not flow_1m_valid:
-            return "⚠️ 점검 중"
+            return "⚠️ 수급 미확인"
         if val >= 0:
             return f"+{val:,}억원"
         else:
@@ -1572,6 +1573,8 @@ def analyze_macro_flow(macro_data, flow_data, extra_data=None):
         "Institutional_1m": _flow_label_1m(i_1m),
         "Retail_1m": _flow_label_1m(r_1m),
         "flow_1m_valid": flow_1m_valid,
+        "flow_metadata": ed.get("flow_metadata", {}),
+        "flow_1m_metadata": ed.get("flow_1m_metadata", {}),
         
         # 추가 지표
         "VIX": f"{vix_current:.2f} (전일대비 {vix_change:+.2f})",
@@ -1599,19 +1602,19 @@ def generate_economic_commentary(summary_dict, phase):
     
     if flow_valid or flow_1m_valid:
         flow_section = f"""[코스피 투자자별 수급 (양수=순매수, 음수=순매도)]
-    (1) 오늘(당일) 수급
+    (1) 최근 거래일 수급 (기준: {summary_dict.get("flow_metadata", {}).get("as_of", "미확인")})
     - 외국인: {summary_dict['Foreigner']}
     - 기관합계: {summary_dict['Institutional']}
     - 개인: {summary_dict['Retail']}
     
-    (2) 최근 1개월(30일) 누적 수급
+    (2) 최근 30일 조회기간의 완료 거래일 누적 (기준: {summary_dict.get("flow_1m_metadata", {}).get("as_of", "미확인")})
     - 외국인: {summary_dict.get('Foreigner_1m', 'N/A')}
     - 기관합계: {summary_dict.get('Institutional_1m', 'N/A')}
     - 개인: {summary_dict.get('Retail_1m', 'N/A')}"""
-        flow_instruction = "당일의 단기적 수급과 1개월의 중기적 누적 수급 트렌드를 비교하여 굵직한 돈의 흐름을 분석해라."
+        flow_instruction = "확인된 수급만 분석하고 기준일 차이와 장중 잠정 여부를 명시해라. 미확인 수급은 추정하지 마라."
     else:
-        flow_section = "[코스피 투자자별 수급]\n    - ⚠️ KRX 서버 점검 중으로 당일 및 1개월 수급 데이터 미수신 (0원 표시는 실제 거래량이 아님)"
-        flow_instruction = "수급 데이터가 점검 중이므로 투자자 매매 관련 해설은 생략하고, 매크로 지표 해설에 집중해라."
+        flow_section = "[코스피 투자자별 수급]\n    - ⚠️ 당일 및 누적 수급 데이터 미확인. 서버 점검으로 단정할 근거 없음."
+        flow_instruction = "수급 데이터가 미확인이므로 투자자 매매 관련 해설은 생략하고, 매크로 지표 해설에 집중해라."
     
     prompt = f"""너는 최고재무책임자(CFO)이자 전술적 자산배분 전문가다.
 아래 전달받은 데이터(수치)와 시스템이 판정한 시장 국면을 바탕으로 가장 날카롭고 입체적인 브리핑을 작성하라.
