@@ -442,83 +442,28 @@ def get_macro_charts():
 
     return result
 
-@st.cache_data(ttl=598)
-def get_investor_flow():
-    """
-    네이버 금융을 이용하여 최근 거래일 코스피 투자자별 순매수(단위: 억원)를 반환.
-    반환값: (외국인, 기관, 개인)
-    pykrx의 잦은 구조변경(에러)을 회피하기 위해 네이버 금융 HTML 파싱을 기본으로 사용.
-    """
-    try:
-        import requests
-        from bs4 import BeautifulSoup
-        import re
-        url = 'https://finance.naver.com/sise/sise_index.naver?code=KOSPI'
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        res = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(res.content.decode('euc-kr', 'replace'), 'html.parser')
-        dl = soup.find('dl', class_='lst_kos_info')
-        
-        foreigner = 0
-        institutional = 0
-        retail = 0
-        
-        if dl:
-            for dd in dl.find_all('dd'):
-                text = dd.text.strip()
-                sign = 1
-                if '+' in text:
-                    sign = 1
-                elif '-' in text:
-                    sign = -1
-                
-                digits = re.sub(r'[^0-9]', '', text)
-                if not digits:
-                    continue
-                value = int(digits) * sign
-                
-                if text.startswith('외국인'):
-                    foreigner = value
-                elif text.startswith('기관'):
-                    institutional = value
-                elif text.startswith('개인'):
-                    retail = value
-                    
-        if foreigner == 0 and institutional == 0 and retail == 0:
-            return 0, 0, 0
-            
-        return foreigner, institutional, retail
-    except Exception as e:
-        print(f"Error fetching investor flow: {e}")
-        # 임시 조치: 크롤링 실패 시 점검 중 UI를 막기 위해 가장 최근의 전형적인 수급 데이터를 반환합니다.
-        return -3524, 1205, 2319
+@st.cache_data(ttl=300)
+def get_kr_market_snapshot():
+    """수급과 시장 폭에 같은 응답·기준시각을 사용한다."""
+    from kr_market_data import fetch_naver_snapshot
+    return fetch_naver_snapshot(get_kst_now())
 
-@st.cache_data(ttl=3600)
+
+def get_investor_flow():
+    """최근 거래일 외국인·기관·개인 순매수(억원). 조회 실패는 None."""
+    return get_kr_market_snapshot()["values"]
+
+
+@st.cache_data(ttl=300)
+def get_1m_investor_flow_snapshot():
+    """최근 30일 조회기간의 완료 거래일 누적과 출처를 반환한다."""
+    from kr_market_data import fetch_monthly_flow
+    return fetch_monthly_flow(get_kst_now())
+
+
 def get_1m_investor_flow():
-    """
-    pykrx를 이용하여 최근 1개월(30일)간의 코스피 투자자별 누적 순매수액(단위: 억 원)을 반환.
-    반환값: (외국인, 기관, 개인)
-    """
-    try:
-        from pykrx import stock
-        import datetime
-        now = get_kst_now()
-        to_date = now.strftime('%Y%m%d')
-        from_date = (now - datetime.timedelta(days=30)).strftime('%Y%m%d')
-        
-        df = stock.get_market_trading_value_by_investor(from_date, to_date, "KOSPI")
-        if not df.empty and '순매수거래대금' in df.columns:
-            foreigner = int(df.loc['외국인', '순매수거래대금'] / 100000000) if '외국인' in df.index else 0
-            institutional = int(df.loc['기관합계', '순매수거래대금'] / 100000000) if '기관합계' in df.index else 0
-            retail = int(df.loc['개인', '순매수거래대금'] / 100000000) if '개인' in df.index else 0
-            
-            return foreigner, institutional, retail
-    except Exception as e:
-        print(f"pykrx 1m error: {e}")
-        pass
-    return 0, 0, 0
+    """외국인·기관·개인 누적 순매수(억원). 조회 실패는 None."""
+    return get_1m_investor_flow_snapshot()["values"]
 
 
 @st.cache_data(ttl=1800)

@@ -52,6 +52,8 @@ from data_loader import (
     get_upcoming_events,
     get_investor_flow,
     get_1m_investor_flow,
+    get_kr_market_snapshot,
+    get_1m_investor_flow_snapshot,
     get_us_flow_snapshot,
 )
 import sys
@@ -154,57 +156,9 @@ try:
 except ImportError:
     HAS_STATSMODELS = False
 
-@st.cache_data(ttl=300)
 def get_intraday_market_internals():
-    """5분(300초) 캐싱: KOSPI 상승/하락 종목수(Breadth) 및 프로그램 순매매 크롤링"""
-    data = {
-        "advancing": None,
-        "declining": None,
-        "program_net": None,
-        "adr": None,
-        "breadth_status": "unavailable",
-        "program_status": "unavailable",
-    }
-    try:
-        # 프로그램 매매 스크래핑 (단위: 백만원)
-        res_prog = requests.get('https://finance.naver.com/sise/sise_program.naver', headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
-        res_prog.encoding = 'euc-kr'
-        soup_p = BeautifulSoup(res_prog.text, 'html.parser')
-        # 최상단 차익+비차익 합계 (순매수) - 에러 대비용으로 단순 패스 가능성 열어둠
-        # Naver Finance 프로그램 종합 순매수 텍스트 크롤링 (불안정할 수 있으므로 try-except)
-        
-        # 프로그램 수급은 DOM 파서가 구현되기 전까지 결측으로 유지한다.
-        # 0은 실제 중립 수급으로 오인되므로 신호 점수에 포함하면 안 된다.
-        
-        # Breadth 스크래핑
-        res_idx = requests.get('https://finance.naver.com/sise/sise_index.naver?code=KOSPI', headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
-        res_idx.encoding = 'euc-kr'
-        soup_i = BeautifulSoup(res_idx.text, 'html.parser')
-        
-        # <dl class="lst_kos_info"> 내의 상승, 하락 찾기
-        dl = soup_i.find('dl', class_='lst_kos_info')
-        if dl:
-            for dd in dl.find_all('dd'):
-                text = dd.text.replace(',', '').strip()
-                if '상승' in text:
-                    nums = [int(s) for s in text.split() if s.isdigit()]
-                    if nums:
-                        data["advancing"] = nums[0]
-                elif '하락' in text:
-                    nums = [int(s) for s in text.split() if s.isdigit()]
-                    if nums:
-                        data["declining"] = nums[0]
-
-        if (
-            data["advancing"] is not None
-            and data["declining"] is not None
-            and data["declining"] > 0
-        ):
-            data["adr"] = data["advancing"] / data["declining"]
-            data["breadth_status"] = "ok"
-    except Exception as e:
-        pass # 크롤링 에러 시 대시보드 중단 방지
-    return data
+    """공유 검증 응답의 시장 폭. 프로그램 데이터는 미구현 결측 유지."""
+    return get_kr_market_snapshot()
 
 @st.cache_data(ttl=86400)
 def get_daily_spread_adf(kospi_df, kosdaq_df):
@@ -636,14 +590,18 @@ with tab_orion_kr:
     st.markdown("### 💡 글로벌 매크로 & 수급 통합 지표")
     
     # 데이터 수집
-    flow_data = get_investor_flow()  # (외국인, 기관, 개인)
-    flow_1m = get_1m_investor_flow()
+    flow_metadata = get_kr_market_snapshot()
+    flow_1m_metadata = get_1m_investor_flow_snapshot()
+    flow_data = flow_metadata["values"]
+    flow_1m = flow_1m_metadata["values"]
     
     # AI 브리핑을 위한 추가 데이터 구성
     extra_data = {
         'cnn_score': cnn_score,
         'cnn_rating': cnn_rating,
         'flow_1m': flow_1m,
+        'flow_metadata': flow_metadata,
+        'flow_1m_metadata': flow_1m_metadata,
     }
     
     phase, summary_dict = analyze_macro_flow(macro_charts, flow_data, extra_data=extra_data)
@@ -706,11 +664,19 @@ with tab_orion_kr:
                       summary_dict['Retail'], 
                       _get_metric_args(summary_dict['Retail_raw'])['delta'])
     else:
-        # 데이터가 모두 0일 때 (KRX 시스템 점검 등)
-        f_col1.metric("👤 외국인 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
-        f_col2.metric("🏢 기관 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
-        f_col3.metric("🧑 개인 수급", "⚠️ 점검 중", "데이터 없음", delta_color="off")
+        # 조회 실패는 실제 0원과 구분한다.
+        f_col1.metric("👤 외국인 수급", "⚠️ 수급 미확인", "데이터 없음", delta_color="off")
+        f_col2.metric("🏢 기관 수급", "⚠️ 수급 미확인", "데이터 없음", delta_color="off")
+        f_col3.metric("🧑 개인 수급", "⚠️ 수급 미확인", "데이터 없음", delta_color="off")
     
+    st.caption(
+        f"수급 출처: 네이버 금융 · 기준 {flow_metadata.get('as_of') or '미확인'} · "
+        f"{flow_metadata['reason']} · 조회 {flow_metadata['fetched_at']}"
+    )
+    st.caption(
+        f"누적 수급: KRX/pykrx · 조회기간 {flow_1m_metadata.get('requested_period', '미확인')} · "
+        f"마지막 거래일 {flow_1m_metadata.get('as_of') or '미확인'} · {flow_1m_metadata['reason']}"
+    )
     st.markdown("<br>", unsafe_allow_html=True)
     
     if "cfo_report_cache" not in st.session_state:
@@ -866,6 +832,10 @@ with tab_orion_kr:
             rsp_change_pct=rsp_change_pct,
         )
 
+        st.caption(
+            f"시장 폭: 네이버 금융 · 기준 {market_internals.get('as_of') or '미확인'} · "
+            f"{market_internals['breadth_reason']}"
+        )
         st.markdown(f"**상태:** {kr_flow_status}")
         for icon, msg in kr_flow_details:
             st.write(f"{icon} {msg}")
