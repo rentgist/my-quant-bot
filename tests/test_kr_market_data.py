@@ -97,6 +97,22 @@ class KoreanFlowTests(unittest.TestCase):
         self.assertEqual(self.parse()["status"], "ok")
         self.assertIn("2026-10-09", self.parse()["as_of"])
 
+    def test_prior_close_is_not_scored_after_weekday_open(self):
+        self.basic.update(marketStatus="CLOSE", localTradedAt="2026-10-12T15:30:00+09:00")
+        self.integration["dealTrendInfo"]["bizdate"] = "20261012"
+        data = self.parse()
+        self.assertEqual(data["status"], "unavailable")
+        self.assertEqual(data["values"], (None, None, None))
+        self.assertEqual(data["breadth_status"], "unavailable")
+        self.assertIn("2026-10-12", data["as_of"])
+        self.assertIn("전 거래일 종가", data["reason"])
+
+    def test_prior_close_is_reference_before_weekday_open(self):
+        self.basic.update(marketStatus="CLOSE", localTradedAt="2026-10-12T15:30:00+09:00")
+        self.integration["dealTrendInfo"]["bizdate"] = "20261012"
+        self.now = dt.datetime(2026, 10, 13, 8, 30, tzinfo=KST)
+        self.assertEqual(self.parse()["status"], "ok")
+
     def test_malformed_and_negative_breadth_are_unknown(self):
         for value in (None, "N/A", "-2", "3.5"):
             with self.subTest(value=value):

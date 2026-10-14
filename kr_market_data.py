@@ -59,14 +59,23 @@ def parse_naver_snapshot(integration, basic, now):
         if age.total_seconds() < -300 or age > dt.timedelta(days=10):
             result["reason"] = result["breadth_reason"] = "오래되었거나 미래 기준시각인 응답"
             return result
+        result["as_of"] = traded_at.isoformat()
+        result["market_status"] = basic.get("marketStatus")
         if basic.get("marketStatus") == "OPEN" and (
                 traded_at.date() != now.date() or age > dt.timedelta(minutes=15)):
             result["reason"] = result["breadth_reason"] = "장중 시세 기준시각 지연"
             return result
         if basic.get("marketStatus") not in ("OPEN", "CLOSE", "CLOSED"):
             return result
-        result["as_of"] = traded_at.isoformat()
-        result["market_status"] = basic["marketStatus"]
+        # 평일 장 개시 이후에는 전 거래일 종가 응답을 현재 수급으로 점수화하지 않는다.
+        # 휴장일 여부를 별도 캘린더 없이 단정할 수 없으므로 기준시각은 표시하되 값은
+        # unavailable로 유지한다. 주말과 평일 개장 전에는 최근 종가를 참고용으로 허용한다.
+        if (basic.get("marketStatus") in ("CLOSE", "CLOSED")
+                and now.weekday() < 5 and now.time() >= dt.time(9)
+                and traded_at.date() != now.date()):
+            result["reason"] = result["breadth_reason"] = (
+                "현재 세션 데이터 미확인: 최근 응답은 전 거래일 종가")
+            return result
         trend = integration.get("dealTrendInfo") or {}
         # 시장 폭에는 별도 기준일이 없으므로 같은 integration 응답의 수급일을 확인한다.
         bizdate = dt.datetime.strptime(trend["bizdate"], "%Y%m%d").date()
