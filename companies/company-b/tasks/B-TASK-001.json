@@ -1,0 +1,28 @@
+{
+  "id": "B-TASK-001",
+  "title": "Company B bootstrap probe",
+  "objective": "Prove that the independent Company B execution path can run Claude Code as the primary director/implementer and Codex/GPT as the independent read-only challenger/reviewer without touching Company A operational state. Create one small probe document only.",
+  "acceptance_criteria": [
+    "Create docs/company-b/BOOTSTRAP_PROBE.md and no other repository file.",
+    "The probe contains the exact markers COMPANY: B, DIRECTOR: Claude Code, REVIEWER: Codex / GPT, and STATUS: bootstrap-probe.",
+    "The document briefly states that Company B is operationally isolated from Company A.",
+    "The fixed company-b-bootstrap test passes.",
+    "The independent Codex/GPT final review returns PASS, or the task stops safely after the single allowed correction round."
+  ],
+  "risk": "low",
+  "test_profile": "company-b-bootstrap",
+  "allowed_paths": [
+    "docs/company-b/BOOTSTRAP_PROBE.md"
+  ],
+  "forbidden_paths": [
+    "companies/company-b/",
+    "scripts/company_b/",
+    "automation/",
+    ".github/",
+    "CHANGELOG.md",
+    "AGENTS.md",
+    "README.md"
+  ],
+  "claude_model": "claude-sonnet-5",
+  "codex_model": "gpt-5.6-sol"
+}
