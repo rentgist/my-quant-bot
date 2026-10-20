@@ -1,6 +1,6 @@
 # CURRENT_PORTFOLIO
 
-Updated: 2026-08-13
+Updated: 2026-10-20
 
 ## Korea
 - LS ELECTRIC: 14 shares, avg 263,857 KRW
@@ -14,7 +14,7 @@ Updated: 2026-08-13
 - Syswork: 50 shares, avg 2,187 KRW
 
 ## US
-- Alphabet A: 4 shares, avg 483,141 KRW
+- Alphabet A: 5 shares, avg 478,253 KRW
 - Microsoft: 3 shares, avg 606,839 KRW
 - IEF: 11 shares, avg 139,229 KRW
 - NVIDIA: 3 shares, avg 273,054 KRW
@@ -24,5 +24,6 @@ Updated: 2026-08-13
 - TSMC: 1 share, avg 412.0
 
 Recent trades:
+- 2026-10-19 Alphabet A +1 @ USD 344 (~458,700 KRW at estimated USD/KRW 1,333.43; pending CEO confirmation)
 - 2026-08-13 Samsung Electronics +1 @ 265,000 KRW
 - 2026-08-13 SOL AI Semiconductor TOP2 Plus +1 @ 17,580 KRW
