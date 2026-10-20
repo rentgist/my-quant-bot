@@ -32,6 +32,7 @@ from regime_playbook import (
     REGIME_POLICIES,
     build_holding_action,
     build_regime_action_plan,
+    apply_market_safety,
     calculate_entry_strategy_scenarios,
     classify_market_regime,
     run_regime_backtest,
@@ -75,6 +76,7 @@ try:
         get_us_strategic_advice,
         calculate_us_bottom_finder,
         calculate_kr_bottom_finder,
+        analyze_market_structure,
         calculate_recovery_confirmation,
         calculate_macro_risk_gauge,
         calculate_cashflow_signal,
@@ -516,6 +518,19 @@ kr_macro_details = kr_risk_alerts
 market_regime = classify_market_regime(
     kospi_10y,
     bottom_score=kr_score,
+)
+kr_structure = analyze_market_structure(kospi_10y["Close"]) if not kospi_10y.empty else {}
+regime_now = get_kst_now()
+regime_is_provisional = bool(
+    not kospi_10y.empty
+    and pd.Timestamp(kospi_10y.index[-1]).date() == regime_now.date()
+    and regime_now.weekday() < 5
+    and regime_now.time() < datetime.time(15, 40)
+)
+market_regime = apply_market_safety(
+    market_regime,
+    panic_detected=kr_structure.get("is_panic", False) or "칼날" in str(kr_verdict),
+    provisional=regime_is_provisional,
 )
 kr_scout_market_gate = evaluate_scout_market_gate(
     bottom_score=kr_score,
@@ -2678,7 +2693,7 @@ with tab_port:
                 st.markdown("### ✂️ 2. 지금 보유주식을 팔아야 하나요?")
                 regime_label = f"{market_regime.get('icon', '⚪')} {market_regime.get('label', '판별 중')}"
                 st.caption(
-                    f"한국시장 종가 기준 국면: {regime_label}. "
+                    f"한국시장 {'장중 잠정' if market_regime.get('is_provisional') else '일봉 관측'} 국면: {regime_label}. "
                     "손실률만으로 팔지 않고 시장 패닉·종목 추세·펀더멘탈을 함께 확인합니다."
                 )
                 holding_action_rows = []
@@ -2978,7 +2993,7 @@ with tab_calendar:
                 if calendar_manager.update_earnings_automatically():
                     st.success("실적 캘린더가 업데이트 되었습니다.")
                 else:
-                    st.warning("업데이트할 새로운 실적 일정이 없습니다.")
+                    st.warning("실적 날짜를 새로 확인하지 못했습니다. 기존 일정은 유지하며 기업 IR을 확인하세요.")
     with col_c2:
         if st.button("📌 확정 핵심 거시 일정 반영"):
             event_count = calendar_manager.sync_core_macro_events()
@@ -2992,18 +3007,22 @@ with tab_calendar:
                 else:
                     st.warning("추출된 새로운 매크로 일정이 없습니다.")
                     
-    cal_df = calendar_manager.load_calendar()
+    st.warning(calendar_manager.calendar_coverage_message())
+    st.caption("공식 확인 일정은 기본으로 표시됩니다. 예상 실적·뉴스 후보는 Notes에서 미확인으로 구분합니다.")
+    cal_df = calendar_manager.load_effective_calendar()
 
     if not cal_df.empty:
-        today_calendar = pd.Timestamp.now().date()
+        today_calendar = calendar_manager.calendar_today()
         upcoming_calendar = cal_df[cal_df["Date"] >= today_calendar].sort_values("Date")
         if not upcoming_calendar.empty:
             next_event = upcoming_calendar.iloc[0]
             high_count = int((upcoming_calendar["Impact"] == "High").sum())
             st.markdown(
-                f"**다음 주요 일정:** {next_event['Date'].strftime('%m/%d')} · {next_event['Event']}  "
+                f"**다음 등록 일정 (미확인 포함):** {next_event['Date'].strftime('%m/%d')} · {next_event['Event']}  "
                 f"&nbsp;&nbsp;|&nbsp;&nbsp; 향후 High 중요도 일정 **{high_count}건**"
             )
+        else:
+            st.warning("등록된 향후 일정이 없습니다. 실제 이벤트 부재가 아니라 수집·확인 범위 부족일 수 있습니다.")
         with st.expander("🧭 ORION 캘린더 해석 가이드", expanded=False):
             st.markdown("""
             - **물가·금리:** CPI·PPI·PCE가 예상보다 높으면 장기금리 상승과 기술주 할인율 부담을 우선 점검합니다.
@@ -3151,6 +3170,7 @@ with tab_hedging:
     defensive_performance_panel = st.container()
 
     st.markdown("### 3. 내 계좌 금액")
+    st.caption("초기 5,000만 원·국내주식 3,500만 원은 계산 예시이며 증권계좌와 연동되지 않습니다.")
     account_col1, account_col2 = st.columns(2)
     total_asset = account_col1.number_input(
         "총 투자자산 (만원)",
@@ -3163,6 +3183,11 @@ with tab_hedging:
         min_value=0,
         step=100,
         key="account_kr_equity",
+    )
+    account_confirmed = st.checkbox(
+        "입력한 금액이 현재 내 실제 계좌 금액임을 확인했습니다",
+        value=False,
+        key=f"account_confirmed_{total_asset}_{equity_amount}",
     )
     equity_weight_pct = (
         min(float(equity_amount) / float(total_asset) * 100, 100)
@@ -3691,6 +3716,7 @@ with tab_hedging:
         total_assets=total_asset,
         current_equity_amount=equity_amount,
         regime=market_regime,
+        account_confirmed=account_confirmed,
     )
     regime_backtest = get_regime_backtest(kospi_10y, transaction_cost_bps)
     regime_color = market_regime.get("color", "#475569")
@@ -3719,8 +3745,8 @@ with tab_hedging:
         )
         lower_band, upper_band = regime_action["equity_band"]
         safe_cols = st.columns(4)
-        safe_cols[0].metric("현재 주식", f"{regime_action['current_equity_amount']:,.0f}만원")
-        safe_cols[1].metric("현재 현금", f"{regime_action['current_cash_amount']:,.0f}만원")
+        safe_cols[0].metric("현재 주식" if account_confirmed else "입력 주식 (예시)", f"{regime_action['current_equity_amount']:,.0f}만원")
+        safe_cols[1].metric("현재 현금" if account_confirmed else "입력 현금 (예시)", f"{regime_action['current_cash_amount']:,.0f}만원")
         safe_cols[2].metric("주식 허용범위", f"{lower_band * 100:.0f}~{upper_band * 100:.0f}%")
         safe_cols[3].metric(
             "오늘 주문",
@@ -3735,7 +3761,7 @@ with tab_hedging:
         if market_regime.get("status") == "ok":
             indicators = market_regime.get("indicators", {})
             st.caption(
-                f"종가 기준 {market_regime['as_of']} · 국면 신뢰도 {market_regime['confidence']}% · "
+                f"{'장중 잠정 일봉' if market_regime.get('is_provisional') else '일봉 관측일'} {market_regime['as_of']} · 국면 신뢰도 {market_regime['confidence']}% · "
                 f"RSI {indicators.get('rsi', 0):.1f} · "
                 f"20일 실현변동성 {indicators.get('realized_volatility', 0) * 100:.1f}% · "
                 f"다음 판단 {regime_action['next_check']}"
