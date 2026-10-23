@@ -330,11 +330,22 @@ def classify_market_regime(
     }
 
 
+def apply_market_safety(regime, panic_detected=False, provisional=False):
+    """이미 계산된 패닉 거부를 화면 간 공유한다. 점수·임계값은 바꾸지 않는다."""
+    safe = dict(regime)
+    safe["panic_freeze"] = bool(regime.get("panic_freeze") or panic_detected)
+    safe["is_provisional"] = bool(provisional)
+    if safe["panic_freeze"]:
+        safe["message"] = "패닉 안전장치: 신규 매수·기술적 매도·인버스 추격을 동결합니다."
+    return safe
+
+
 def build_regime_action_plan(
     total_assets: float,
     current_equity_amount: float,
     regime: dict[str, Any],
     max_step: float = 0.05,
+    account_confirmed: bool = True,
 ) -> dict[str, Any]:
     """Translate a regime into one explicit account-level action."""
     total = max(_safe_float(total_assets, 0.0), 0.0)
@@ -357,12 +368,22 @@ def build_regime_action_plan(
         reason = regime.get("message", "국면 데이터가 부족합니다.")
     elif regime.get("panic_freeze"):
         action = "PANIC_FREEZE"
-        title = "패닉 중입니다 — 보유주식 급매도와 신규 인버스를 모두 멈추세요"
+        title = "패닉 중입니다 — 신규 매수·기술적 매도·인버스 추격을 멈추세요"
         reason = (
             f"현재 주식 {current_weight * 100:.0f}%는 그대로 둡니다. "
             "폭락 당일의 기술적 매도는 반등 손실 위험이 커서, 진정 신호 뒤에만 다시 판단합니다."
         )
         next_check = "다음 종가에서 패닉 해제 여부"
+    elif regime.get("is_provisional"):
+        action = "WAIT_CLOSE"
+        title = "장중 잠정 판독입니다 — 종가 확정 후 다음 거래일에 판단하세요"
+        reason = "오늘 일봉이 아직 확정되지 않아 비중 변경 주문을 제시하지 않습니다."
+        next_check = "오늘 종가 확정 후"
+    elif not account_confirmed:
+        action = "ACCOUNT_UNCONFIRMED"
+        title = "계좌 금액을 확인하면 조정 금액을 계산합니다"
+        reason = "현재 입력값은 예시입니다. 실제 총 투자자산·국내 주식 금액을 확인하세요."
+        next_check = "계좌 금액 확인 후"
     elif code == "CRASH":
         if current_weight > upper:
             action = "REDUCE"
@@ -459,6 +480,9 @@ def build_holding_action(
     if regime.get("panic_freeze"):
         label = "매도 동결"
         trigger = "폭락 중 기술적 손절을 하지 않습니다. 기업 훼손 공시가 있을 때만 별도 재검토합니다."
+    elif regime.get("is_provisional"):
+        label = "종가 확인 대기"
+        trigger = "장중 잠정 판독이므로 부분축소 금액은 제시하지 않습니다. 종가 확인 후 다음 거래일에 재검토합니다."
     elif fund <= 1 and np.isfinite(price) and np.isfinite(ma60) and price < ma60:
         action = "REVIEW_REDUCE"
         label = "25% 축소 검토"
