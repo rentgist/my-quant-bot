@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from regime_playbook import (
+    apply_market_safety,
     build_holding_action,
     build_market_features,
     build_regime_action_plan,
@@ -163,3 +164,27 @@ class RegimeBacktestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedSafetyTests(unittest.TestCase):
+    def test_external_panic_blocks_the_observed_250_reduction(self):
+        regime={"status":"ok","code":"CRASH","panic_freeze":False}
+        self.assertEqual(build_regime_action_plan(5000,3500,regime)["amount"],250)
+        safe=apply_market_safety(regime,panic_detected=True)
+        self.assertFalse(regime["panic_freeze"])
+        result=build_regime_action_plan(5000,3500,safe)
+        self.assertEqual((result["action"],result["amount"]),("PANIC_FREEZE",0))
+        holding=build_holding_action({"Price":70,"MA60":90},safe,fundamental_score=1,holding_value=1000)
+        self.assertEqual(holding["sell_fraction"],0)
+
+    def test_provisional_bar_cannot_generate_add_or_reduce(self):
+        for code,equity in [("CRASH",3500),("UPTREND",500)]:
+            safe=apply_market_safety({"status":"ok","code":code},provisional=True)
+            result=build_regime_action_plan(5000,equity,safe)
+            self.assertEqual((result["action"],result["amount"]),("WAIT_CLOSE",0))
+            holding=build_holding_action({"Price":70,"MA60":90},safe,fundamental_score=1,holding_value=1000)
+            self.assertEqual(holding["sell_fraction"],0)
+
+    def test_unconfirmed_example_does_not_become_order(self):
+        result=build_regime_action_plan(5000,3500,{"status":"ok","code":"CRASH"},account_confirmed=False)
+        self.assertEqual((result["action"],result["amount"]),("ACCOUNT_UNCONFIRMED",0))
