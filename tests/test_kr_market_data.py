@@ -9,7 +9,8 @@ import pandas as pd
 import requests
 
 from kr_market_data import (
-    INSTITUTIONS, KST, OI_SIGNALS, apply_session, session_current, fetch_daum_futures_flow, fetch_daum_open_interest,
+    INSTITUTIONS, KST, OI_SIGNALS, apply_session, near_month_contract, second_thursday,
+    session_current, fetch_daum_futures_flow, fetch_daum_open_interest,
     fetch_monthly_flow, fetch_naver_futures_flow, fetch_naver_snapshot,
     parse_daum_futures_flow, parse_daum_open_interest, parse_monthly_flow,
     parse_naver_futures_flow, parse_naver_snapshot, select_futures_flow, valid_flow,
@@ -261,13 +262,15 @@ class KoreanFuturesTests(unittest.TestCase):
         self.assertEqual(parse_naver_futures_flow(self.naver, self.now)["status"], "unavailable")
 
     def test_open_interest_signal_combinations(self):
-        cases = {(3.25, 260000): "가격 상승 + 미결제약정 증가 (신규 롱 가능성)",
-                 (3.25, 240000): "가격 상승 + 미결제약정 감소 (숏커버 가능성)",
-                 (-2.0, 260000): "가격 하락 + 미결제약정 증가 (신규 숏 가능성)",
-                 (-2.0, 240000): "가격 하락 + 미결제약정 감소 (롱청산 가능성)"}
-        for (change, oi), expected in cases.items():
-            with self.subTest(change=change, oi=oi):
-                self.oi_rows[0].update(changePrice=change, unsettledVolume=oi)
+        # 방향은 연속 두 거래일 가격으로 정한다. changePrice는 부호 없는 값으로 둔다.
+        cases = {(412.5, 260000): "가격 상승 + 미결제약정 증가 (신규 롱 가능성)",
+                 (412.5, 240000): "가격 상승 + 미결제약정 감소 (숏커버 가능성)",
+                 (405.0, 260000): "가격 하락 + 미결제약정 증가 (신규 숏 가능성)",
+                 (405.0, 240000): "가격 하락 + 미결제약정 감소 (롱청산 가능성)"}
+        for (price, oi), expected in cases.items():
+            with self.subTest(price=price, oi=oi):
+                self.oi_rows[0].update(tradePrice=price, changePrice=abs(price - 409.25),
+                                       unsettledVolume=oi)
                 result = parse_daum_open_interest(self.masters, self.oi_rows, self.now)
                 self.assertEqual(result["signal"], expected)
                 self.assertIn(result["signal"], OI_SIGNALS.values())
@@ -341,8 +344,70 @@ class KoreanFuturesTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertIn("finance.daum.net", get.call_args_list[0].kwargs["headers"]["Referer"])
         self.assertIn("KR4101VC0004", get.call_args_list[1].args[0])
-        bad = Mock(side_effect=[ok({"data": [{"symbolCode": "../x"}]})])
-        self.assertEqual(fetch_daum_open_interest(self.now, get=bad)["reason"], "월물 코드 형식 오류")
+        bad = Mock(side_effect=[ok({"data": [{"symbolCode": "../x", "name": "F 202612"}]})])
+        self.assertEqual(fetch_daum_open_interest(self.now, get=bad)["reason"], "근월물 식별 불가")
+        self.assertEqual(bad.call_count, 1)
+
+    def test_unsigned_change_price_cannot_flip_direction(self):
+        self.oi_rows[0].update(tradePrice=405.0, changePrice=4.25, unsettledVolume=260000)
+        result = parse_daum_open_interest(self.masters, self.oi_rows, self.now)
+        self.assertEqual(result["signal"], "가격 하락 + 미결제약정 증가 (신규 숏 가능성)")
+        self.assertEqual(result["change"], -4.25)
+        self.oi_rows[0]["change"] = "RISE"  # 방향 필드가 가격 차이와 모순되면 판정하지 않는다.
+        contradicted = parse_daum_open_interest(self.masters, self.oi_rows, self.now)
+        self.assertIsNone(contradicted["signal"])
+        self.assertIn("불일치", contradicted["reason"])
+        self.oi_rows[0]["change"] = "FALL"
+        self.assertIsNotNone(parse_daum_open_interest(self.masters, self.oi_rows, self.now)["signal"])
+        self.oi_rows[0]["change"] = "UNKNOWN"
+        self.assertEqual(parse_daum_open_interest(self.masters, self.oi_rows, self.now)["status"],
+                         "unavailable")
+
+    def test_near_month_ignores_order_and_expired_or_ambiguous_contracts(self):
+        entries = [{"symbolCode": "FAR", "name": "F 202703"},
+                   {"symbolCode": "SPREAD", "name": "SP 202612-202703"},
+                   {"symbolCode": "OLD", "name": "F 202609"},
+                   {"symbolCode": "NEAR", "name": "F 202612"}]
+        self.assertEqual(near_month_contract(entries, self.now)["symbolCode"], "NEAR")
+        expiry_day = dt.datetime(2026, 12, 10, 15, 0, tzinfo=KST)
+        self.assertEqual(near_month_contract(entries, expiry_day)["symbolCode"], "NEAR")
+        after_expiry = expiry_day.replace(hour=15, minute=20)
+        self.assertEqual(near_month_contract(entries, after_expiry)["symbolCode"], "FAR")
+        duplicate = entries + [{"symbolCode": "NEAR2", "name": "코스피200 F 202612"}]
+        self.assertIsNone(near_month_contract(duplicate, self.now))
+        self.assertIsNone(near_month_contract([{"symbolCode": "X", "name": "미니 F 202612"}], self.now))
+        self.assertEqual(second_thursday(2026, 12), dt.date(2026, 12, 10))
+        self.assertEqual(second_thursday(2027, 3), dt.date(2027, 3, 11))
+
+    def test_cached_values_keep_fetch_time_provisional_and_expire_contracts(self):
+        fetched = parse_naver_futures_flow(self.naver, self.now.replace(hour=15, minute=44))
+        self.assertTrue(apply_session(fetched, self.now.replace(hour=15, minute=46))["provisional"])
+        expiry_day = dt.datetime(2026, 12, 10, 15, 19, tzinfo=KST)
+        self.oi_rows[0]["date"], self.oi_rows[1]["date"] = "2026-12-10", "2026-12-09"
+        oi = parse_daum_open_interest(self.masters, self.oi_rows, expiry_day)
+        self.assertEqual(oi["expiry"], "2026-12-10")
+        self.assertIsNotNone(oi["signal"])
+        expired = apply_session(oi, expiry_day.replace(minute=20))
+        self.assertFalse(expired["current"])
+        self.assertIsNone(expired["signal"])
+        self.assertIn("만기 경과", expired["reason"])
+
+    def test_today_dated_payload_before_open_is_not_current(self):
+        monday_8am = self.now.replace(hour=8)
+        self.assertFalse(session_current(dt.date(2026, 11, 9), monday_8am))
+        self.naver["dealTrendInfo"]["foreignValue"] = "+6,000"
+        early = parse_naver_futures_flow(self.naver, monday_8am)
+        self.assertFalse(early["current"])
+        self.assertIsNone(select_futures_flow(early, {}))
+
+    def test_intraday_values_are_marked_provisional(self):
+        intraday = parse_naver_futures_flow(self.naver, self.now)
+        self.assertTrue(intraday["provisional"])
+        closed = parse_naver_futures_flow(self.naver, self.now.replace(hour=15, minute=45))
+        self.assertFalse(closed["provisional"])
+        self.naver["dealTrendInfo"]["bizdate"] = "20261106"
+        self.assertFalse(parse_naver_futures_flow(self.naver, self.now.replace(hour=8))["provisional"])
+        self.assertTrue(parse_daum_open_interest(self.masters, self.oi_rows, self.now)["provisional"])
 
     def test_flow_block_uses_auto_then_manual_override(self):
         from streamlit.testing.v1 import AppTest
@@ -366,16 +431,21 @@ def get_intraday_market_internals():
 summary_dict = {{}}
 kospi_10y = pd.DataFrame()
 rsp_change_pct = None
-""" + block + "\nst.session_state['captured'] = (foreign_futures_signal, oi_signal, kr_flow_score)\n"
+""" + block + ("\nst.session_state['captured'] = (foreign_futures_signal, oi_signal, kr_flow_score)"
+                       "\nst.session_state['note'] = foreign_futures_note\n")
         app = AppTest.from_string(harness).run(timeout=15)
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(app.session_state["captured"][:2],
                          (7409, "가격 상승 + 미결제약정 증가 (신규 롱 가능성)"))
         self.assertEqual(app.session_state["captured"][2], 15 + 10)
+        self.assertTrue(any("장중 잠정" in c.value for c in app.caption))
+        self.assertTrue(any("현재가 412.50" in c.value for c in app.caption))
+        self.assertEqual(app.session_state["note"], "네이버 자동, 장중 잠정")
         app.number_input[0].set_value(-2000)
         app.checkbox(key="futures_confirmed_main").check()
         app.run(timeout=15)
         self.assertEqual(app.session_state["captured"][0], -2000)
+        self.assertEqual(app.session_state["note"], "수동 확인")
 
 
 if __name__ == "__main__":

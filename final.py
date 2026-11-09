@@ -798,13 +798,16 @@ with tab_orion_kr:
                 st.caption(
                     f"선물 순매수({name}, 계약) · 기준 {snap['as_of']} · 외국인 {snap['foreign']:+,} · "
                     f"기관 {snap['institution']:+,} · 개인 {snap['personal']:+,}{extra} · {snap['reason']}"
+                    f"{' · 장중 잠정' if snap.get('provisional') else ''}"
                 )
             else:
                 st.caption(f"선물 순매수({name}): 미확인 · {snap['reason']}")
         if oi_auto["status"] == "ok":
             st.caption(
-                f"근월물 {oi_auto['contract']}(다음) · 기준 {oi_auto['as_of']} · 종가 {oi_auto['price']:,.2f} "
+                f"근월물 {oi_auto['contract']}(다음) · 기준 {oi_auto['as_of']} · "
+                f"{'현재가' if oi_auto.get('provisional') else '종가'} {oi_auto['price']:,.2f} "
                 f"({oi_auto['change']:+.2f}) · 미결제약정 {oi_auto['prev_oi']:,} → {oi_auto['oi']:,} · {oi_auto['reason']}"
+                f"{' · 장중 잠정' if oi_auto.get('provisional') else ''}"
             )
         else:
             st.caption(f"미결제약정(다음): 미확인 · {oi_auto['reason']}")
@@ -855,8 +858,14 @@ with tab_orion_kr:
         foreign_cashflow = summary_dict.get("Foreigner_raw") if summary_dict.get("flow_valid", False) else None
         if futures_confirmed_main:
             foreign_futures_signal = foreign_futures
+            foreign_futures_note = "수동 확인"
+        elif auto_futures:
+            foreign_futures_signal = auto_futures["foreign"]
+            source_name = "네이버" if auto_futures is futures_snap["naver"] else "다음"
+            foreign_futures_note = f"{source_name} 자동, {'장중 잠정' if auto_futures.get('provisional') else '일별 확정'}"
         else:
-            foreign_futures_signal = auto_futures["foreign"] if auto_futures else None
+            foreign_futures_signal = None
+            foreign_futures_note = None
         kr_flow_score, kr_flow_status, kr_flow_details = calculate_cashflow_signal(
             foreign_futures=foreign_futures_signal,
             oi_signal=oi_signal,
@@ -955,7 +964,7 @@ with tab_orion_kr:
     kospi_status_str = ("안착 완료" if is_above else f"미안착 (이격: {gap:+,.2f}p)") if 'is_above' in locals() and 'gap' in locals() else "N/A"
     
     rsp_val_str = f"{rsp_change_pct:+.2f}%" if rsp_change_pct is not None else "N/A"
-    foreign_futures_prompt = f"{foreign_futures_signal:+,.0f}계약" if foreign_futures_signal is not None else "미확인 (점수 제외)"
+    foreign_futures_prompt = f"{foreign_futures_signal:+,.0f}계약 ({foreign_futures_note})" if foreign_futures_signal is not None else "미확인 (점수 제외)"
     breadth_prompt = f"ADR {breadth_adr:.2f}" if breadth_adr is not None else "미확인"
 
     # 프롬프트 조립

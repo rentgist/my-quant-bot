@@ -185,6 +185,9 @@ OI_SIGNALS = {
 }
 # 근월물 만기 전후에는 차월물로 넘어가며 미결제약정이 크게 줄어 방향 신호가 아니다.
 OI_ROLLOVER_DROP = Decimal("0.2")
+FUTURES_CLOSE = dt.time(15, 45)
+FUTURES_EXPIRY_CLOSE = dt.time(15, 20)
+DIRECTION_FIELD = {"RISE": 1, "UPPER_LIMIT": 1, "EVEN": 0, "FALL": -1, "LOWER_LIMIT": -1}
 
 
 def previous_weekday(day):
@@ -200,10 +203,10 @@ def session_current(as_of, now):
     휴장 캘린더가 없으므로 공휴일로 생긴 공백은 단정하지 않고 점수에서 제외한다.
     """
     now = now.astimezone(KST)
-    if as_of == now.date():
-        return True
-    before_open = now.weekday() >= 5 or now.time() < dt.time(9)
-    return before_open and as_of == previous_weekday(now.date())
+    if now.weekday() >= 5 or now.time() < dt.time(9):
+        # 개장 전 오늘 날짜 응답은 초기화 값이거나 이월 값일 수 있어 인정하지 않는다.
+        return as_of == previous_weekday(now.date())
+    return as_of == now.date()
 
 
 def apply_session(result, now):
@@ -211,8 +214,23 @@ def apply_session(result, now):
     result = dict(result)
     if result.get("status") != "ok":
         return result
-    result["current"] = session_current(dt.date.fromisoformat(result["as_of"]), now)
-    if not result["current"]:
+    as_of = dt.date.fromisoformat(result["as_of"])
+    result["current"] = session_current(as_of, now)
+    # 잠정 여부는 표시 시각이 아니라 조회 시각으로 정한다. 마감 전에 받은 캐시 값은 마감 뒤에도 잠정이다.
+    fetched = dt.datetime.fromisoformat(result["fetched_at"]).astimezone(KST)
+    result["provisional"] = (result["current"] and as_of == fetched.date()
+                             and fetched.time() < FUTURES_CLOSE)
+    expiry = result.get("expiry")
+    local = now.astimezone(KST)
+    expired = expiry is not None and (
+        dt.date.fromisoformat(expiry) < local.date()
+        or (dt.date.fromisoformat(expiry) == local.date() and local.time() >= FUTURES_EXPIRY_CLOSE))
+    if expired:
+        # 캐시된 근월물이 만기를 지나면 다음 조회에서 차월물을 고를 때까지 쓰지 않는다.
+        result["current"] = result["provisional"] = False
+        result["signal"] = None
+        result["reason"] = "근월물 만기 경과 — 다음 조회 대기 (점수 제외)"
+    elif not result["current"]:
         result["reason"] = "지난 거래일 값 (점수 제외)"
         if "signal" in result:
             result["signal"] = None
@@ -288,28 +306,71 @@ def _oi_unavailable(reason, now):
             "prev_oi": None, "signal": None}
 
 
+def second_thursday(year, month):
+    first = dt.date(year, month, 1)
+    return first + dt.timedelta(days=(3 - first.weekday()) % 7 + 7)
+
+
+def contract_expiry(entry):
+    """KOSPI200 분기 선물 월물의 만기일. 이름·코드를 식별할 수 없으면 None."""
+    if not isinstance(entry, dict):
+        return None
+    name, code = str(entry.get("name") or ""), str(entry.get("symbolCode") or "")
+    match = re.fullmatch(r"(?:코스피200\s*)?F\s*(20\d{2})(03|06|09|12)", name.strip())
+    if not match or not re.fullmatch(r"[A-Za-z0-9]+", code):
+        return None
+    return second_thursday(int(match[1]), int(match[2]))
+
+
+def near_month_contract(entries, now):
+    """응답 순서에 기대지 않고 이름의 만기월(3·6·9·12월)로 만기 전 가장 가까운 월물을 고른다."""
+    now = now.astimezone(KST)
+    candidates = []
+    for entry in entries or []:
+        expiry = contract_expiry(entry)
+        if expiry is None:
+            continue
+        if expiry < now.date() or (expiry == now.date() and now.time() >= FUTURES_EXPIRY_CLOSE):
+            continue
+        candidates.append((expiry, entry))
+    if not candidates:
+        return None
+    nearest = min(expiry for expiry, _ in candidates)
+    matches = [entry for expiry, entry in candidates if expiry == nearest]
+    return matches[0] if len(matches) == 1 else None  # 같은 만기 후보가 둘이면 식별할 수 없다.
+
+
 def parse_daum_open_interest(masters, rows, now):
     """근월물 같은 월물의 연속 두 거래일로 가격 방향과 미결제약정 증감을 결합한다."""
     now = now.astimezone(KST)
     result = _oi_unavailable("응답 형식 또는 기준일 오류", now)
     try:
-        near = masters["data"][0]
-        contract = near.get("name") or near["symbolCode"]
+        near = near_month_contract(masters["data"], now)
+        if near is None:
+            result["reason"] = "근월물 식별 불가"
+            return result
         d0, d1 = (dt.date.fromisoformat(str(r["date"])[:10]) for r in rows[:2])
         if d0 <= d1:
             return result
         oi, prev_oi = _contracts(rows[0]["unsettledVolume"]), _contracts(rows[1]["unsettledVolume"])
-        change, price = _number(rows[0]["changePrice"]), _number(rows[0]["tradePrice"])
-        if oi <= 0 or prev_oi <= 0 or price <= 0:
+        price, prev_price = _number(rows[0]["tradePrice"]), _number(rows[1]["tradePrice"])
+        if oi <= 0 or prev_oi <= 0 or price <= 0 or prev_price <= 0:
+            return result
+        direction = rows[0].get("change")
+        if direction is not None and direction not in DIRECTION_FIELD:
             return result
     except (KeyError, IndexError, TypeError, ValueError, AttributeError):
         return result
-    result.update(as_of=d0.isoformat(), contract=contract, price=float(price),
+    # changePrice는 부호 없는 값일 수 있으므로 연속 두 거래일 가격으로 방향을 정한다.
+    change = price - prev_price
+    result.update(as_of=d0.isoformat(), contract=near.get("name"), price=float(price),
                   change=float(change), oi=oi, prev_oi=prev_oi, status="ok",
-                  candidate_signal=None)
+                  expiry=contract_expiry(near).isoformat(), candidate_signal=None)
     if d1 != previous_weekday(d0):
         # 휴장 공백이거나 누락된 거래일이면 여러 세션의 증감을 하루 가격 변화와 섞지 않는다.
         result["candidate_reason"] = "연속 거래일 아님 — 조합 판정 불가"
+    elif direction is not None and DIRECTION_FIELD[direction] != (change > 0) - (change < 0):
+        result["candidate_reason"] = "가격 방향 필드와 가격 차이 불일치 — 조합 판정 불가"
     elif change == 0 or oi == prev_oi:
         result["candidate_reason"] = "가격 또는 미결제약정 보합 — 조합 판정 불가"
     elif Decimal(prev_oi - oi) / prev_oi > OI_ROLLOVER_DROP:
@@ -356,10 +417,10 @@ def fetch_daum_open_interest(now, get=None):
     get = get or requests.get
     try:
         masters = _get_json(get, DAUM_FUT_MASTERS_URL, headers=DAUM_HEADERS)
-        code = str(masters["data"][0]["symbolCode"])
-        if not re.fullmatch(r"[A-Za-z0-9]+", code):
-            return _oi_unavailable("월물 코드 형식 오류", now)
-        days = _get_json(get, DAUM_FUT_DAYS_URL.format(code=code), headers=DAUM_HEADERS,
+        near = near_month_contract(masters["data"], now)
+        if near is None:
+            return _oi_unavailable("근월물 식별 불가", now)
+        days = _get_json(get, DAUM_FUT_DAYS_URL.format(code=near["symbolCode"]), headers=DAUM_HEADERS,
                          params={"page": 1, "perPage": 2})
         return parse_daum_open_interest(masters, days.get("data") or [], now)
     except requests.RequestException:
