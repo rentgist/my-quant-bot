@@ -166,3 +166,211 @@ def fetch_monthly_flow(now, fetch=None):
         result = unavailable("KRX / pykrx 일별 순매수", "KRX 조회 실패 (연결·라이브러리·응답 확인 필요)", now)
         result["requested_period"] = f"{start_date.isoformat()} ~ {end_date.isoformat()}"
         return result
+
+
+# ── KOSPI200 선물 수급·미결제약정 (비공식 공개 JSON, 로그인 불필요) ──
+NAVER_FUT_URL = "https://m.stock.naver.com/api/index/FUT/integration"
+DAUM_FUT_FLOW_URL = "https://finance.daum.net/api/investor/future/days"
+DAUM_FUT_MASTERS_URL = "https://finance.daum.net/api/futures/masters"
+DAUM_FUT_DAYS_URL = "https://finance.daum.net/api/future/{code}/days"
+DAUM_HEADERS = {"User-Agent": "Mozilla/5.0",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Referer": "https://finance.daum.net/domestic/investors/DERIVATIVES",
+                "X-Requested-With": "XMLHttpRequest"}
+OI_SIGNALS = {
+    (True, True): "가격 상승 + 미결제약정 증가 (신규 롱 가능성)",
+    (True, False): "가격 상승 + 미결제약정 감소 (숏커버 가능성)",
+    (False, True): "가격 하락 + 미결제약정 증가 (신규 숏 가능성)",
+    (False, False): "가격 하락 + 미결제약정 감소 (롱청산 가능성)",
+}
+# 근월물 만기 전후에는 차월물로 넘어가며 미결제약정이 크게 줄어 방향 신호가 아니다.
+OI_ROLLOVER_DROP = Decimal("0.2")
+
+
+def previous_weekday(day):
+    day -= dt.timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= dt.timedelta(days=1)
+    return day
+
+
+def session_current(as_of, now):
+    """기준일이 현재 세션 값인지. 주말·평일 개장 전에는 바로 앞 평일 종가만 허용한다.
+
+    휴장 캘린더가 없으므로 공휴일로 생긴 공백은 단정하지 않고 점수에서 제외한다.
+    """
+    now = now.astimezone(KST)
+    if as_of == now.date():
+        return True
+    before_open = now.weekday() >= 5 or now.time() < dt.time(9)
+    return before_open and as_of == previous_weekday(now.date())
+
+
+def apply_session(result, now):
+    """조회 시각 기준으로 현재 세션 여부를 다시 판정한다. 캐시된 응답도 09:00 경계를 넘으면 바뀐다."""
+    result = dict(result)
+    if result.get("status") != "ok":
+        return result
+    result["current"] = session_current(dt.date.fromisoformat(result["as_of"]), now)
+    if not result["current"]:
+        result["reason"] = "지난 거래일 값 (점수 제외)"
+        if "signal" in result:
+            result["signal"] = None
+    elif "candidate_signal" in result:
+        result["signal"] = result["candidate_signal"]
+        result["reason"] = result["candidate_reason"]
+    else:
+        result["reason"] = "현재 세션 값"
+    return result
+
+
+def _futures_unavailable(source, reason, now):
+    return {"status": "unavailable", "source": source, "as_of": None,
+            "fetched_at": now.isoformat(), "reason": reason, "current": False,
+            "foreign": None, "institution": None, "personal": None}
+
+
+def _contracts(value):
+    number = _number(value)
+    if number != int(number):
+        raise ValueError("계약 수는 정수")
+    return int(number)
+
+
+def parse_naver_futures_flow(integration, now):
+    """네이버 선물 integration의 당일 투자자별 순매수(계약)."""
+    now = now.astimezone(KST)
+    result = _futures_unavailable(NAVER_FUT_URL, "응답 형식 또는 기준일 오류", now)
+    try:
+        trend = integration["dealTrendInfo"]
+        as_of = dt.datetime.strptime(trend["bizdate"], "%Y%m%d").date()
+        values = [_contracts(trend[k]) for k in
+                  ("foreignValue", "institutionalValue", "personalValue")]
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return result
+    result.update(as_of=as_of.isoformat(), foreign=values[0], institution=values[1],
+                  personal=values[2], status="ok")
+    return apply_session(result, now)
+
+
+def parse_daum_futures_flow(rows, now):
+    """다음 일별 투자자별 선물 순매수(계약). 응답은 최신 거래일이 첫 행이다."""
+    now = now.astimezone(KST)
+    result = _futures_unavailable(DAUM_FUT_FLOW_URL, "응답 형식 또는 기준일 오류", now)
+    result.update(foreign_5d=None, foreign_20d=None)
+    try:
+        dates = [dt.date.fromisoformat(str(r["date"])[:10]) for r in rows]
+        if not dates or dates != sorted(dates, reverse=True) or len(set(dates)) != len(dates):
+            return result
+        values = [_contracts(rows[0][k]) for k in
+                  ("foreignSettlement", "institutionalSettlement", "privateSettlement")]
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return result
+
+    def window(n):
+        # 창 안에 하루라도 모르는 날이 있으면 합계도 모른다.
+        if len(rows) < n:
+            return None
+        try:
+            return sum(_contracts(r["foreignSettlement"]) for r in rows[:n])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    result.update(as_of=dates[0].isoformat(), foreign=values[0], institution=values[1],
+                  personal=values[2], status="ok", foreign_5d=window(5), foreign_20d=window(20))
+    return apply_session(result, now)
+
+
+def _oi_unavailable(reason, now):
+    return {"status": "unavailable", "source": DAUM_FUT_MASTERS_URL, "as_of": None,
+            "fetched_at": now.isoformat(), "reason": reason, "current": False,
+            "contract": None, "price": None, "change": None, "oi": None,
+            "prev_oi": None, "signal": None}
+
+
+def parse_daum_open_interest(masters, rows, now):
+    """근월물 같은 월물의 연속 두 거래일로 가격 방향과 미결제약정 증감을 결합한다."""
+    now = now.astimezone(KST)
+    result = _oi_unavailable("응답 형식 또는 기준일 오류", now)
+    try:
+        near = masters["data"][0]
+        contract = near.get("name") or near["symbolCode"]
+        d0, d1 = (dt.date.fromisoformat(str(r["date"])[:10]) for r in rows[:2])
+        if d0 <= d1:
+            return result
+        oi, prev_oi = _contracts(rows[0]["unsettledVolume"]), _contracts(rows[1]["unsettledVolume"])
+        change, price = _number(rows[0]["changePrice"]), _number(rows[0]["tradePrice"])
+        if oi <= 0 or prev_oi <= 0 or price <= 0:
+            return result
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        return result
+    result.update(as_of=d0.isoformat(), contract=contract, price=float(price),
+                  change=float(change), oi=oi, prev_oi=prev_oi, status="ok",
+                  candidate_signal=None)
+    if d1 != previous_weekday(d0):
+        # 휴장 공백이거나 누락된 거래일이면 여러 세션의 증감을 하루 가격 변화와 섞지 않는다.
+        result["candidate_reason"] = "연속 거래일 아님 — 조합 판정 불가"
+    elif change == 0 or oi == prev_oi:
+        result["candidate_reason"] = "가격 또는 미결제약정 보합 — 조합 판정 불가"
+    elif Decimal(prev_oi - oi) / prev_oi > OI_ROLLOVER_DROP:
+        result["candidate_reason"] = "미결제약정 급감 — 만기 롤오버 가능성, 점수 제외"
+    else:
+        result["candidate_signal"] = OI_SIGNALS[(change > 0, oi > prev_oi)]
+        result["candidate_reason"] = "현재 세션 값"
+    return apply_session(result, now)
+
+
+def _get_json(get, url, **kwargs):
+    response = get(url, timeout=5, **kwargs)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_naver_futures_flow(now, get=None):
+    get = get or requests.get
+    try:
+        data = _get_json(get, NAVER_FUT_URL, headers={
+            "User-Agent": "Mozilla/5.0", "Referer": "https://m.stock.naver.com/"})
+        return parse_naver_futures_flow(data, now)
+    except requests.RequestException:
+        return _futures_unavailable(NAVER_FUT_URL, "네이버 연결 또는 HTTP 오류", now)
+    except (ValueError, TypeError):
+        return _futures_unavailable(NAVER_FUT_URL, "네이버 JSON 응답 오류", now)
+
+
+def fetch_daum_futures_flow(now, get=None):
+    get = get or requests.get
+    try:
+        data = _get_json(get, DAUM_FUT_FLOW_URL, headers=DAUM_HEADERS, params={
+            "page": 1, "perPage": 20, "terms": "days", "pagination": "true"})
+        return parse_daum_futures_flow(data.get("data") or [], now)
+    except requests.RequestException:
+        result = _futures_unavailable(DAUM_FUT_FLOW_URL, "다음 연결 또는 HTTP 오류", now)
+    except (ValueError, TypeError, AttributeError):
+        result = _futures_unavailable(DAUM_FUT_FLOW_URL, "다음 JSON 응답 오류", now)
+    result.update(foreign_5d=None, foreign_20d=None)
+    return result
+
+
+def fetch_daum_open_interest(now, get=None):
+    get = get or requests.get
+    try:
+        masters = _get_json(get, DAUM_FUT_MASTERS_URL, headers=DAUM_HEADERS)
+        code = str(masters["data"][0]["symbolCode"])
+        if not re.fullmatch(r"[A-Za-z0-9]+", code):
+            return _oi_unavailable("월물 코드 형식 오류", now)
+        days = _get_json(get, DAUM_FUT_DAYS_URL.format(code=code), headers=DAUM_HEADERS,
+                         params={"page": 1, "perPage": 2})
+        return parse_daum_open_interest(masters, days.get("data") or [], now)
+    except requests.RequestException:
+        return _oi_unavailable("다음 연결 또는 HTTP 오류", now)
+    except (KeyError, IndexError, ValueError, TypeError, AttributeError):
+        return _oi_unavailable("다음 JSON 응답 오류", now)
+
+
+def select_futures_flow(naver, daum):
+    """현재 세션 값 중 네이버를 우선하고, 없으면 다음을 쓴다. 둘 다 없으면 None."""
+    for snap in (naver, daum):
+        if snap.get("status") == "ok" and snap.get("current") and snap.get("foreign") is not None:
+            return snap
+    return None

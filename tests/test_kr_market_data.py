@@ -9,8 +9,10 @@ import pandas as pd
 import requests
 
 from kr_market_data import (
-    INSTITUTIONS, KST, fetch_monthly_flow, fetch_naver_snapshot,
-    parse_monthly_flow, parse_naver_snapshot, valid_flow,
+    INSTITUTIONS, KST, OI_SIGNALS, apply_session, session_current, fetch_daum_futures_flow, fetch_daum_open_interest,
+    fetch_monthly_flow, fetch_naver_futures_flow, fetch_naver_snapshot,
+    parse_daum_futures_flow, parse_daum_open_interest, parse_monthly_flow,
+    parse_naver_futures_flow, parse_naver_snapshot, select_futures_flow, valid_flow,
 )
 
 
@@ -191,6 +193,189 @@ def get_1m_investor_flow_snapshot():
                 self.assertEqual(len(app.exception), 0)
                 self.assertEqual(len(app.metric), 9)
                 self.assertEqual(len(app.caption), 2)
+
+
+class KoreanFuturesTests(unittest.TestCase):
+    def setUp(self):
+        self.now = dt.datetime(2026, 11, 9, 15, 0, tzinfo=KST)  # 월요일 장중
+        self.naver = {"dealTrendInfo": {"bizdate": "20261109", "foreignValue": "+7,409",
+                                        "institutionalValue": "-3,120", "personalValue": "-4,289"}}
+        days = [d for d in range(9, 0, -1) if dt.date(2026, 11, d).weekday() < 5]
+        self.daum_rows = [{"date": f"2026-11-{d:02d} 00:00:00", "foreignSettlement": 100 * d,
+                           "institutionalSettlement": -50, "privateSettlement": -50}
+                          for d in days]
+        self.masters = {"data": [{"symbolCode": "KR4101VC0004", "name": "F 202612"}]}
+        self.oi_rows = [
+            {"date": "2026-11-09 00:00:00", "tradePrice": 412.5, "changePrice": 3.25,
+             "unsettledVolume": 260000},
+            {"date": "2026-11-06 00:00:00", "tradePrice": 409.25, "changePrice": -1.0,
+             "unsettledVolume": 250000},
+        ]
+
+    def test_naver_sign_and_current_session(self):
+        result = parse_naver_futures_flow(self.naver, self.now)
+        self.assertEqual((result["foreign"], result["institution"], result["personal"]),
+                         (7409, -3120, -4289))
+        self.assertTrue(result["current"])
+        self.assertIs(select_futures_flow(result, {}), result)
+
+    def test_naver_zero_is_valid_and_missing_is_unknown(self):
+        self.naver["dealTrendInfo"]["foreignValue"] = "0"
+        self.assertEqual(parse_naver_futures_flow(self.naver, self.now)["foreign"], 0)
+        del self.naver["dealTrendInfo"]["foreignValue"]
+        missing = parse_naver_futures_flow(self.naver, self.now)
+        self.assertEqual(missing["status"], "unavailable")
+        self.assertIsNone(missing["foreign"])
+        self.assertIsNone(select_futures_flow(missing, {}))
+
+    def test_prior_session_is_reference_only_after_open(self):
+        self.naver["dealTrendInfo"]["bizdate"] = "20261106"
+        after_open = parse_naver_futures_flow(self.naver, self.now)
+        self.assertEqual(after_open["status"], "ok")
+        self.assertFalse(after_open["current"])
+        self.assertIsNone(select_futures_flow(after_open, after_open))
+        before_open = parse_naver_futures_flow(self.naver, self.now.replace(hour=8))
+        self.assertTrue(before_open["current"])
+        future = parse_naver_futures_flow(self.naver, dt.datetime(2026, 11, 5, 15, tzinfo=KST))
+        self.assertFalse(future["current"])
+
+    def test_daum_windows_and_fallback(self):
+        result = parse_daum_futures_flow(self.daum_rows, self.now)
+        self.assertEqual(result["foreign"], 900)
+        self.assertEqual(result["foreign_5d"], 100 * (9 + 6 + 5 + 4 + 3))
+        self.assertIsNone(result["foreign_20d"])  # 11월 1~9일 평일은 7개뿐
+        naver_down = parse_naver_futures_flow({}, self.now)
+        self.assertIs(select_futures_flow(naver_down, result), result)
+
+    def test_daum_gap_in_window_and_bad_order_are_unknown(self):
+        self.daum_rows[2]["foreignSettlement"] = None
+        result = parse_daum_futures_flow(self.daum_rows, self.now)
+        self.assertEqual(result["foreign"], 900)
+        self.assertIsNone(result["foreign_5d"])
+        reversed_rows = list(reversed(self.daum_rows))
+        self.assertEqual(parse_daum_futures_flow(reversed_rows, self.now)["status"], "unavailable")
+        self.assertEqual(parse_daum_futures_flow([], self.now)["status"], "unavailable")
+
+    def test_fractional_contracts_are_rejected(self):
+        self.naver["dealTrendInfo"]["foreignValue"] = "12.5"
+        self.assertEqual(parse_naver_futures_flow(self.naver, self.now)["status"], "unavailable")
+
+    def test_open_interest_signal_combinations(self):
+        cases = {(3.25, 260000): "가격 상승 + 미결제약정 증가 (신규 롱 가능성)",
+                 (3.25, 240000): "가격 상승 + 미결제약정 감소 (숏커버 가능성)",
+                 (-2.0, 260000): "가격 하락 + 미결제약정 증가 (신규 숏 가능성)",
+                 (-2.0, 240000): "가격 하락 + 미결제약정 감소 (롱청산 가능성)"}
+        for (change, oi), expected in cases.items():
+            with self.subTest(change=change, oi=oi):
+                self.oi_rows[0].update(changePrice=change, unsettledVolume=oi)
+                result = parse_daum_open_interest(self.masters, self.oi_rows, self.now)
+                self.assertEqual(result["signal"], expected)
+                self.assertIn(result["signal"], OI_SIGNALS.values())
+
+    def test_open_interest_rollover_flat_stale_and_malformed(self):
+        self.oi_rows[0]["unsettledVolume"] = 150000
+        self.assertIsNone(parse_daum_open_interest(self.masters, self.oi_rows, self.now)["signal"])
+        self.oi_rows[0]["unsettledVolume"] = 250000
+        self.assertIsNone(parse_daum_open_interest(self.masters, self.oi_rows, self.now)["signal"])
+        same_day = [dict(r) for r in self.oi_rows]
+        same_day[0].update(unsettledVolume=260000, date="2026-11-06")
+        self.assertEqual(parse_daum_open_interest(self.masters, same_day, self.now)["status"],
+                         "unavailable")
+        stale_rows = [dict(r) for r in self.oi_rows]
+        stale_rows[0]["date"], stale_rows[1]["date"] = "2026-11-06", "2026-11-05"
+        stale = parse_daum_open_interest(self.masters, stale_rows, self.now)
+        self.assertFalse(stale["current"])
+        self.assertIsNone(stale["signal"])
+        self.assertEqual(parse_daum_open_interest(self.masters, self.oi_rows[:1], self.now)["status"],
+                         "unavailable")
+
+    def test_before_open_accepts_only_immediately_previous_weekday(self):
+        monday_8am = self.now.replace(hour=8)
+        self.assertTrue(session_current(dt.date(2026, 11, 6), monday_8am))
+        self.assertFalse(session_current(dt.date(2026, 11, 5), monday_8am))
+        sunday = dt.datetime(2026, 11, 8, 20, tzinfo=KST)
+        self.assertTrue(session_current(dt.date(2026, 11, 6), sunday))
+        self.assertFalse(session_current(dt.date(2026, 11, 5), sunday))
+        self.assertFalse(session_current(dt.date(2026, 11, 10), self.now))
+
+    def test_cached_snapshot_is_revalidated_across_open(self):
+        self.naver["dealTrendInfo"]["bizdate"] = "20261106"
+        self.oi_rows[0]["date"], self.oi_rows[1]["date"] = "2026-11-06", "2026-11-05"
+        before = self.now.replace(hour=8, minute=59)
+        flow = parse_naver_futures_flow(self.naver, before)
+        oi = parse_daum_open_interest(self.masters, self.oi_rows, before)
+        self.assertTrue(flow["current"])
+        self.assertIsNotNone(oi["signal"])
+        after = self.now.replace(hour=9, minute=1)
+        self.assertFalse(apply_session(flow, after)["current"])
+        self.assertIsNone(select_futures_flow(apply_session(flow, after), {}))
+        self.assertIsNone(apply_session(oi, after)["signal"])
+        self.assertTrue(flow["current"])  # 원본 캐시 객체는 바꾸지 않는다.
+
+    def test_open_interest_requires_consecutive_sessions_and_integer_counts(self):
+        self.oi_rows[1]["date"] = "2026-11-02"
+        gap = parse_daum_open_interest(self.masters, self.oi_rows, self.now)
+        self.assertEqual(gap["status"], "ok")
+        self.assertIsNone(gap["signal"])
+        self.assertIn("연속 거래일 아님", gap["reason"])
+        self.oi_rows[1].update(date="2026-11-06", unsettledVolume=260000)
+        self.oi_rows[0]["unsettledVolume"] = 260000.5
+        self.assertEqual(parse_daum_open_interest(self.masters, self.oi_rows, self.now)["status"],
+                         "unavailable")
+
+    def test_fetch_errors_and_headers(self):
+        get = Mock(side_effect=requests.Timeout())
+        for fetch in (fetch_naver_futures_flow, fetch_daum_futures_flow, fetch_daum_open_interest):
+            with self.subTest(fetch=fetch.__name__):
+                result = fetch(self.now, get=get)
+                self.assertEqual(result["status"], "unavailable")
+                self.assertIsNone(result.get("foreign"))
+                self.assertIsNone(result.get("signal"))
+
+        def ok(payload):
+            response = Mock()
+            response.json.return_value = payload
+            return response
+        get = Mock(side_effect=[ok(self.masters), ok({"data": self.oi_rows})])
+        result = fetch_daum_open_interest(self.now, get=get)
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("finance.daum.net", get.call_args_list[0].kwargs["headers"]["Referer"])
+        self.assertIn("KR4101VC0004", get.call_args_list[1].args[0])
+        bad = Mock(side_effect=[ok({"data": [{"symbolCode": "../x"}]})])
+        self.assertEqual(fetch_daum_open_interest(self.now, get=bad)["reason"], "월물 코드 형식 오류")
+
+    def test_flow_block_uses_auto_then_manual_override(self):
+        from streamlit.testing.v1 import AppTest
+        source = (Path(__file__).resolve().parents[1] / "final.py").read_text(encoding="utf-8")
+        start = source.index("        # 파생 데이터는 현재 세션 자동값")
+        end = source.index('        st.markdown(f"**상태:** {kr_flow_status}")', start)
+        block = textwrap.dedent(source[start:end])
+        snap = {"naver": parse_naver_futures_flow(self.naver, self.now),
+                "daum": parse_daum_futures_flow(self.daum_rows, self.now),
+                "oi": parse_daum_open_interest(self.masters, self.oi_rows, self.now)}
+        harness = f"""import streamlit as st
+import pandas as pd
+from kr_market_data import select_futures_flow
+from signals import calculate_cashflow_signal
+def get_kr_futures_snapshot():
+    return {snap!r}
+def sync_futures_sniper():
+    pass
+def get_intraday_market_internals():
+    return {{'as_of': None, 'breadth_reason': '테스트', 'advancing': None, 'declining': None}}
+summary_dict = {{}}
+kospi_10y = pd.DataFrame()
+rsp_change_pct = None
+""" + block + "\nst.session_state['captured'] = (foreign_futures_signal, oi_signal, kr_flow_score)\n"
+        app = AppTest.from_string(harness).run(timeout=15)
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(app.session_state["captured"][:2],
+                         (7409, "가격 상승 + 미결제약정 증가 (신규 롱 가능성)"))
+        self.assertEqual(app.session_state["captured"][2], 15 + 10)
+        app.number_input[0].set_value(-2000)
+        app.checkbox(key="futures_confirmed_main").check()
+        app.run(timeout=15)
+        self.assertEqual(app.session_state["captured"][0], -2000)
 
 
 if __name__ == "__main__":

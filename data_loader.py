@@ -461,6 +461,23 @@ def get_1m_investor_flow_snapshot():
     return fetch_monthly_flow(get_kst_now())
 
 
+@st.cache_data(ttl=300)
+def _fetch_kr_futures_snapshot():
+    from kr_market_data import (fetch_daum_futures_flow, fetch_daum_open_interest,
+                                fetch_naver_futures_flow)
+    now = get_kst_now()
+    return {"naver": fetch_naver_futures_flow(now), "daum": fetch_daum_futures_flow(now),
+            "oi": fetch_daum_open_interest(now)}
+
+
+def get_kr_futures_snapshot():
+    """외국인 선물 순매수(네이버·다음)와 근월물 미결제약정(다음). 세션 여부는 캐시 밖에서 다시 판정한다."""
+    from kr_market_data import apply_session
+    snapshot = _fetch_kr_futures_snapshot()
+    now = get_kst_now()  # 조회가 09:00을 넘길 수 있으므로 조회 뒤 시각으로 판정한다.
+    return {k: apply_session(v, now) for k, v in snapshot.items()}
+
+
 def get_1m_investor_flow():
     """외국인·기관·개인 누적 순매수(억원). 조회 실패는 None."""
     return get_1m_investor_flow_snapshot()["values"]
