@@ -55,7 +55,9 @@ from data_loader import (
     get_kr_market_snapshot,
     get_1m_investor_flow_snapshot,
     get_us_flow_snapshot,
+    get_kr_futures_snapshot,
 )
+from kr_market_data import select_futures_flow
 import sys
 if "signals" in sys.modules:
     import importlib
@@ -782,25 +784,50 @@ with tab_orion_kr:
     with c_flow:
         st.markdown("#### Step 2: 💸 자금흐름 강도 (Flow Signal)")
 
-        # 파생 데이터는 직접 확인한 경우에만 보조 확인값으로 사용한다.
+        # 파생 데이터는 현재 세션 자동값 또는 직접 확인한 수동값만 보조 확인값으로 사용한다.
+        futures_snap = get_kr_futures_snapshot()
+        auto_futures = select_futures_flow(futures_snap["naver"], futures_snap["daum"])
+        oi_auto = futures_snap["oi"]
+        for name, snap in (("네이버", futures_snap["naver"]), ("다음", futures_snap["daum"])):
+            if snap["status"] == "ok":
+                extra = ""
+                if snap.get("foreign_5d") is not None:
+                    extra += f" · 외국인 5일 {snap['foreign_5d']:+,}"
+                if snap.get("foreign_20d") is not None:
+                    extra += f" · 20일 {snap['foreign_20d']:+,}"
+                st.caption(
+                    f"선물 순매수({name}, 계약) · 기준 {snap['as_of']} · 외국인 {snap['foreign']:+,} · "
+                    f"기관 {snap['institution']:+,} · 개인 {snap['personal']:+,}{extra} · {snap['reason']}"
+                )
+            else:
+                st.caption(f"선물 순매수({name}): 미확인 · {snap['reason']}")
+        if oi_auto["status"] == "ok":
+            st.caption(
+                f"근월물 {oi_auto['contract']}(다음) · 기준 {oi_auto['as_of']} · 종가 {oi_auto['price']:,.2f} "
+                f"({oi_auto['change']:+.2f}) · 미결제약정 {oi_auto['prev_oi']:,} → {oi_auto['oi']:,} · {oi_auto['reason']}"
+            )
+        else:
+            st.caption(f"미결제약정(다음): 미확인 · {oi_auto['reason']}")
+
         f_col1, f_col2 = st.columns(2)
         with f_col1:
             foreign_futures = st.number_input(
-                "① 외국인 선물 순매수 (계약)",
+                "① 외국인 선물 순매수 (계약) — 수동 덮어쓰기",
                 step=100,
                 key="sniper_futures",
                 on_change=sync_futures_sniper,
-                help="모르면 0을 입력하지 말고 아래 확인란을 해제하세요. 미확인은 점수에서 제외되며 매수를 차단하지 않습니다.",
+                help="자동값이 없거나 틀릴 때만 입력하세요. 모르면 0을 입력하지 말고 확인란을 해제하세요.",
             )
         with f_col2:
             futures_confirmed_main = st.checkbox(
-                "선물 수치를 오늘 최신값으로 확인함",
+                "수동 선물 수치를 오늘 최신값으로 확인함 (자동값보다 우선)",
                 key="futures_confirmed_main",
             )
 
-        oi_signal = st.selectbox(
+        oi_choice = st.selectbox(
             "② 선물 가격·미결제약정 조합",
             [
+                "자동 (다음 근월물 미결제약정)",
                 "미확인",
                 "가격 상승 + 미결제약정 증가 (신규 롱 가능성)",
                 "가격 상승 + 미결제약정 감소 (숏커버 가능성)",
@@ -809,6 +836,10 @@ with tab_orion_kr:
             ],
             help="미결제약정 증가만으로는 상승·하락 방향을 알 수 없습니다. 선물 가격 방향을 함께 확인하세요.",
         )
+        if oi_choice.startswith("자동"):
+            oi_signal = oi_auto["signal"] or "미확인"
+        else:
+            oi_signal = oi_choice
 
         st.markdown("<br>", unsafe_allow_html=True)
         save_col1, save_col2 = st.columns([2, 1])
@@ -822,7 +853,10 @@ with tab_orion_kr:
 
         market_internals = get_intraday_market_internals()
         foreign_cashflow = summary_dict.get("Foreigner_raw") if summary_dict.get("flow_valid", False) else None
-        foreign_futures_signal = foreign_futures if futures_confirmed_main else None
+        if futures_confirmed_main:
+            foreign_futures_signal = foreign_futures
+        else:
+            foreign_futures_signal = auto_futures["foreign"] if auto_futures else None
         kr_flow_score, kr_flow_status, kr_flow_details = calculate_cashflow_signal(
             foreign_futures=foreign_futures_signal,
             oi_signal=oi_signal,
@@ -921,7 +955,7 @@ with tab_orion_kr:
     kospi_status_str = ("안착 완료" if is_above else f"미안착 (이격: {gap:+,.2f}p)") if 'is_above' in locals() and 'gap' in locals() else "N/A"
     
     rsp_val_str = f"{rsp_change_pct:+.2f}%" if rsp_change_pct is not None else "N/A"
-    foreign_futures_prompt = f"{foreign_futures:+,.0f}계약" if futures_confirmed_main else "미확인 (점수 제외)"
+    foreign_futures_prompt = f"{foreign_futures_signal:+,.0f}계약" if foreign_futures_signal is not None else "미확인 (점수 제외)"
     breadth_prompt = f"ADR {breadth_adr:.2f}" if breadth_adr is not None else "미확인"
 
     # 프롬프트 조립
