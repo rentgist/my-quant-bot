@@ -78,6 +78,7 @@ try:
         calculate_us_bottom_finder,
         calculate_kr_bottom_finder,
         calculate_recovery_confirmation,
+        kr_recovery_score_from_regime,
         calculate_macro_risk_gauge,
         calculate_cashflow_signal,
         evaluate_market_execution_quality,
@@ -502,8 +503,8 @@ irx_10y   = macro_charts.get("irx_10y", pd.DataFrame())
 mu_2y     = macro_charts.get("mu_2y", pd.DataFrame())
 soxx_2y   = macro_charts.get("soxx_2y", pd.DataFrame())
 
-us_score, us_verdict, us_details, us_phase = calculate_us_bottom_finder(spy_10y, vix_10y, cnn_score)
-kr_score, kr_verdict, kr_details, kr_phase = calculate_kr_bottom_finder(kospi_10y, vkospi_10y, usd_krw)
+us_score, us_verdict, us_details, us_phase, us_is_knife = calculate_us_bottom_finder(spy_10y, vix_10y, cnn_score)
+kr_score, kr_verdict, kr_details, kr_phase, kr_is_knife = calculate_kr_bottom_finder(kospi_10y, vkospi_10y, usd_krw)
 
 # 한국 매크로 리스크 레이더 (최신 V23 로직)
 kr_risk_grade, kr_risk_color, kr_risk_alerts, kr_danger = calculate_kr_risk_radar(vkospi_10y, usd_krw, kospi_10y)
@@ -519,11 +520,13 @@ market_regime = classify_market_regime(
     kospi_10y,
     bottom_score=kr_score,
 )
+# GO 게이트용 한국 반등 확인 점수. 위험도(kr_macro_score)는 회복 확인이 아니다.
+kr_recovery_score = kr_recovery_score_from_regime(market_regime)
 kr_scout_market_gate = evaluate_scout_market_gate(
     bottom_score=kr_score,
     data_valid=not kospi_10y.empty,
     falling_knife=(
-        "칼날" in str(kr_verdict)
+        bool(kr_is_knife)
         or bool(market_regime.get("panic_freeze"))
     ),
     systemic_risk=kr_danger >= 3,
@@ -569,14 +572,15 @@ with tab_orion_kr:
     st.caption("ORION은 기다릴 때와 움직일 때를 구별합니다.")
 
     adv_head, adv_color, adv_actions = get_strategic_advice(
-        kr_danger, kr_score, kr_verdict, kr_phase, recovery_score=kr_macro_score
+        kr_danger, kr_score, kr_verdict, kr_phase,
+        recovery_score=kr_recovery_score, is_falling_knife=kr_is_knife,
     )
 
     st.markdown(
         f"<div style='background:{adv_color}22; border-left: 8px solid {adv_color}; "
         f"padding:20px; border-radius:10px; margin-bottom:20px;'>"
         f"<h2 style='margin-top:0; color:{adv_color};'>{adv_head}</h2>"
-        f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>위험도 {kr_danger}점 · 바닥점수 {kr_score}점 · 매크로안전도 {kr_macro_score}점 · {kr_phase}</p>"
+        f"<p style='font-size:0.95em; color:#888; margin-bottom:10px;'>위험도 {kr_danger}점 · 바닥점수 {kr_score}점 · 매크로안전도 {kr_macro_score}점 · 반등확인 {kr_recovery_score}점 · {kr_phase}</p>"
         f"<ul>" + "".join([f"<li style='font-size:1.05em; margin-bottom:5px;'>{a}</li>" for a in adv_actions]) + "</ul>"
         f"</div>", unsafe_allow_html=True
     )
@@ -1546,7 +1550,7 @@ with tab_orion_us:
     us_scout_market_gate = evaluate_scout_market_gate(
         bottom_score=us_score,
         data_valid=final_us_phase != "DATA_ERROR" and not spy_10y.empty,
-        falling_knife=entry_state == "FALLING_KNIFE_VETO" or "칼날" in str(us_verdict),
+        falling_knife=entry_state == "FALLING_KNIFE_VETO" or bool(us_is_knife),
         systemic_risk=entry_state in {"DATA_VETO", "CREDIT_STRESS_VETO"},
         trend_confirmed=entry_state in {"STARTER_GO_5", "STARTER_GO_10"},
     )
@@ -2189,10 +2193,12 @@ with tab_radar: # Merged AI Report
     )
 
     us_adv_head, us_adv_color, us_adv_actions = get_strategic_advice(
-        us_danger, us_score, us_verdict, us_phase, recovery_score=us_rec_score
+        us_danger, us_score, us_verdict, us_phase,
+        recovery_score=us_rec_score, is_falling_knife=us_is_knife,
     )
     kr_adv_head, kr_adv_color, kr_adv_actions = get_strategic_advice(
-        kr_danger, kr_score, kr_verdict, kr_phase, recovery_score=kr_macro_score
+        kr_danger, kr_score, kr_verdict, kr_phase,
+        recovery_score=kr_recovery_score, is_falling_knife=kr_is_knife,
     )
 
     adv_col1, adv_col2 = st.columns(2)
@@ -2212,7 +2218,7 @@ with tab_radar: # Merged AI Report
             f"padding:15px; border-radius:8px; font-weight:bold; font-size:1.05em; margin-bottom:10px;'>"
             f"🐯 {kr_adv_head}</div>", unsafe_allow_html=True
         )
-        st.caption(f"판단 근거: 위험 {kr_danger}점 · 바닥 {kr_score}점 · 매크로 안전도 {kr_macro_score} · {kr_phase}")
+        st.caption(f"판단 근거: 위험 {kr_danger}점 · 바닥 {kr_score}점 · 매크로 안전도 {kr_macro_score} · 반등 확인 {kr_recovery_score} · {kr_phase}")
         for act in kr_adv_actions:
             st.markdown(f"- {act}")
 
