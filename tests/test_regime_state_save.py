@@ -130,10 +130,28 @@ class GithubPathTests(unittest.TestCase):
         self.assertEqual(put.call_args.kwargs["json"]["branch"], "regime-state")
         self.assertEqual(get.call_args.kwargs["params"], {"ref": "regime-state"})
 
-    def test_main_branch_is_refused(self):
-        _, put = self._save(branch="main")
-        put.assert_not_called()
+    def test_any_other_branch_is_refused(self):
+        for branch in ("main", "master", "refs/heads/main", "regime-state-x", ""):
+            get, put = self._save(branch=branch)
+            put.assert_not_called()
+            get.assert_not_called()
         self.assertTrue(Path("regime_state.json").exists())
+
+    def test_load_other_branch_never_reads_remote(self):
+        get = mock.Mock()
+        with mock.patch.object(signals.st, "secrets", {"GITHUB_TOKEN": "dummy"}), mock.patch("requests.get", get):
+            signals.load_state_from_github("regime_state.json", branch="main")
+        get.assert_not_called()
+
+    def test_local_write_failure_does_not_break_classification(self):
+        with mock.patch("builtins.open", side_effect=PermissionError("read-only")):
+            save_state_to_github("regime_state.json", {"last_date": "2026-11-11", "warning_days": 1})
+            regime, _, _ = calculate_regime_classification(
+                25, 50, False, save_state=True, as_of_date="2026-11-11",
+                prev_trading_date="2026-11-10",
+                now_kst=datetime.datetime(2026, 11, 11, 16, tzinfo=KST),
+            )
+        self.assertIn("경고 국면", regime)
 
     def test_source_has_no_main_write(self):
         root = Path(__file__).resolve().parents[1]

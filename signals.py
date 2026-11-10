@@ -913,7 +913,7 @@ def load_state_from_github(tracker_file, branch="regime-state"):
     except Exception:
         pass
         
-    if not token:
+    if not token or branch != "regime-state":
         if os.path.exists(tracker_file):
             try:
                 with open(tracker_file, "r") as f:
@@ -954,10 +954,14 @@ def save_state_to_github(tracker_file, state, branch="regime-state"):
     import os, json, base64
     import streamlit as st
     
-    with open(tracker_file, "w") as f:
-        json.dump(state, f)
+    try:
+        with open(tracker_file, "w") as f:
+            json.dump(state, f)
+    except OSError:
+        pass
 
-    if branch in ("main", "master"):
+    # 원격 저장은 전용 데이터 브랜치에만 허용한다 (main·refs/heads/main 등 다른 값은 거부).
+    if branch != "regime-state":
         return
         
     token = None
