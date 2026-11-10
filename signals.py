@@ -1093,7 +1093,10 @@ def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", 
     is_falling_knife: 바닥 탐지기가 돌려준 구조화된 칼날 상태. None이면 예전처럼 문구로 판단한다.
     """
     actions = []
-    is_knife = bool(is_falling_knife) or "칼날" in str(bottom_verdict)
+    if is_falling_knife is None:
+        is_knife = "칼날" in str(bottom_verdict)
+    else:
+        is_knife = bool(is_falling_knife)
     is_top   = "고점" in bottom_verdict
 
     # 1순위: 떨어지는 칼날 (매수 보류)

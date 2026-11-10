@@ -58,6 +58,11 @@ class FallingKnifeFlagTests(unittest.TestCase):
         head, _, _ = get_strategic_advice(0, 40, "⚠️ 떨어지는 칼날 (관망 권장)")
         self.assertIn("STOP", head)
 
+    def test_explicit_false_flag_is_not_overridden_by_text(self):
+        head, _, _ = get_strategic_advice(0, 60, "칼날", recovery_score=100, is_falling_knife=False)
+        self.assertIn("GO", head)
+        self.assertNotIn("STOP", head)
+
     def test_no_knife_low_score_is_clear(self):
         head, _, _ = get_strategic_advice(0, 20, "⚪ 바닥 조건 미충족", is_falling_knife=False)
         self.assertIn("CLEAR", head)
