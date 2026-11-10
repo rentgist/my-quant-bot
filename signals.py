@@ -467,7 +467,7 @@ def _verdict_from_score(score, drawdown, is_knife):
 
 def calculate_us_bottom_finder(spy_hist, vix_hist, cnn_score):
     if spy_hist is None or spy_hist.empty:
-        return 0, "데이터 부족", [], "알 수 없음"
+        return 0, "데이터 부족", [], "알 수 없음", False
 
     spy_close = spy_hist['Close']
     struct = analyze_market_structure(spy_close)
@@ -483,12 +483,14 @@ def calculate_us_bottom_finder(spy_hist, vix_hist, cnn_score):
     score, is_knife = _apply_falling_knife(score, spy_close, details)
     verdict = _verdict_from_score(score, drawdown, is_knife)
 
-    return score, verdict, details, market_phase
+    # is_knife는 점수와 무관한 구조화된 안전 상태다. 판정 문구는 점수 35 미만이면
+    # "칼날"을 담지 않으므로 하위 판단은 문구가 아니라 이 값을 써야 한다.
+    return score, verdict, details, market_phase, is_knife
 
 
 def calculate_kr_bottom_finder(kospi_hist, vkospi_hist, usdkrw_hist):
     if kospi_hist is None or kospi_hist.empty:
-        return 0, "데이터 부족", [], "알 수 없음"
+        return 0, "데이터 부족", [], "알 수 없음", False
 
     kospi_close = kospi_hist['Close']
     struct = analyze_market_structure(kospi_close)
@@ -580,7 +582,7 @@ def calculate_kr_bottom_finder(kospi_hist, vkospi_hist, usdkrw_hist):
     score, is_knife = _apply_falling_knife(score, kospi_close, details)
     verdict = _verdict_from_score(score, drawdown, is_knife)
 
-    return score, verdict, details, market_phase
+    return score, verdict, details, market_phase, is_knife
 
 
 # ═════════════════════════════════════════
@@ -628,6 +630,20 @@ def calculate_recovery_confirmation(rsp_hist, spy_hist, hyg_hist, ief_hist):
     else: verdict = "🔴 반등 신뢰도 낮음 — 아직 회복 확인 안 됨"
 
     return verdict, signals, recovery_score
+
+
+def kr_recovery_score_from_regime(market_regime):
+    """한국 반등 확인 점수 (0 또는 100).
+
+    위험도(danger)는 '나쁜 신호가 적다'일 뿐 회복 확인이 아니다. 새 임계값을 만들지 않고
+    기존 국면 판별기(classify_market_regime)의 추세 확인을 그대로 쓴다:
+    바닥 회복·상승 추세이고 패닉 동결이 아닐 때만 100, 나머지(데이터 부족 포함)는 0.
+    """
+    if not isinstance(market_regime, dict) or market_regime.get("status") != "ok":
+        return 0
+    if market_regime.get("panic_freeze"):
+        return 0
+    return 100 if market_regime.get("code") in {"BOTTOM_RECOVERY", "UPTREND"} else 0
 
 
 def calculate_macro_risk_gauge(kospi_hist, usdkrw_hist):
@@ -1069,13 +1085,15 @@ def calculate_regime_classification(
 # 교차 결합해 '지금 매수해도 되는가'를 실전 액션으로 번역한다.
 # 포지션 비율은 11원칙(위기 줍줍·분할 매수) 철학 기준.
 # ═════════════════════════════════════════
-def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", recovery_score=None):
+def get_strategic_advice(danger_count, bottom_score, bottom_verdict, regime="", recovery_score=None,
+                         is_falling_knife=None):
     """
     반환: (headline, color, actions[])
     ORION v28.1 — 상황 → 체크리스트 → 타점 안내를 한 흐름으로 전달
+    is_falling_knife: 바닥 탐지기가 돌려준 구조화된 칼날 상태. None이면 예전처럼 문구로 판단한다.
     """
     actions = []
-    is_knife = "칼날" in bottom_verdict
+    is_knife = bool(is_falling_knife) or "칼날" in str(bottom_verdict)
     is_top   = "고점" in bottom_verdict
 
     # 1순위: 떨어지는 칼날 (매수 보류)
