@@ -13,6 +13,8 @@ def load_signal_functions():
     required_names = {
         "load_state_from_github",
         "save_state_to_github",
+        "regime_save_allowed",
+        "next_warning_state",
         "calculate_cashflow_signal",
         "evaluate_market_execution_quality",
         "calculate_regime_classification",

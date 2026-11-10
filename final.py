@@ -83,6 +83,7 @@ try:
         calculate_cashflow_signal,
         evaluate_market_execution_quality,
         calculate_regime_classification,
+        regime_save_allowed,
         get_strategic_advice,
         run_historical_backtest,
         run_kr_historical_backtest,
@@ -851,8 +852,25 @@ with tab_orion_kr:
         st.markdown("<br>", unsafe_allow_html=True)
         save_col1, save_col2 = st.columns([2, 1])
         with save_col1:
-            st.info("💡 장중에는 체크를 풀고 자유롭게 테스트하세요. 장 마감 후 최종 확정 시에만 체크하세요.")
-            save_regime = st.checkbox("✅ 오늘 장마감 결과로 확정 및 영구 저장 (GitHub 연동)", value=False)
+            # 경고일은 KOSPI 거래일(마지막 봉 날짜) 기준이다. 저장은 1회성 버튼이라
+            # 5분 자동 새로고침에서 다시 저장되지 않고, 오늘 봉은 장마감 뒤에만 저장된다.
+            kospi_as_of, kospi_prev_date = None, None
+            try:
+                if not kospi_10y.empty:
+                    kospi_as_of = pd.Timestamp(kospi_10y.index[-1]).date().isoformat()
+                    if len(kospi_10y.index) >= 2:
+                        kospi_prev_date = pd.Timestamp(kospi_10y.index[-2]).date().isoformat()
+            except (TypeError, ValueError):
+                kospi_as_of, kospi_prev_date = None, None
+            regime_now_kst = get_kst_now()
+            save_allowed, save_reason = regime_save_allowed(kospi_as_of, regime_now_kst)
+            st.info("💡 경고일은 KOSPI 거래일 종가 기준으로 셉니다. 장마감(15:40) 뒤에 한 번 눌러 확정하세요.")
+            save_regime = st.button(
+                "✅ 오늘 장마감 결과로 확정 저장",
+                disabled=not save_allowed,
+                help="전용 데이터 브랜치(regime-state)에 저장합니다. main에는 쓰지 않습니다.",
+            )
+            st.caption(save_reason)
         with save_col2:
             with st.expander("⚙️ 강제 오버라이드"):
                 wdo = st.number_input("수동 경고일수 (-1: 자동)", min_value=-1, max_value=5, value=-1, step=1)
@@ -920,9 +938,14 @@ with tab_orion_kr:
         kr_flow_score,
         kospi_above_ma20,
         warning_days_override=override_val,
-        save_state=save_regime,
+        save_state=save_regime and save_allowed,
         execution_quality=execution_quality,
+        as_of_date=kospi_as_of,
+        prev_trading_date=kospi_prev_date,
+        now_kst=regime_now_kst,
     )
+    if save_regime and save_allowed:
+        st.caption(f"✅ {kospi_as_of} 종가 기준 국면 상태 저장을 요청했습니다.")
     
     st.markdown(
         f"<div style='background:{r_color}22; border-left: 8px solid {r_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"

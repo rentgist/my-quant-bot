@@ -901,7 +901,8 @@ def evaluate_market_execution_quality(kospi_hist):
     return result
 
 
-def load_state_from_github(tracker_file):
+def load_state_from_github(tracker_file, branch="regime-state"):
+    """국면 상태를 전용 데이터 브랜치(main 아님)에서 읽고, 실패하면 로컬 파일을 쓴다."""
     import os, json, base64
     import streamlit as st
     
@@ -927,7 +928,7 @@ def load_state_from_github(tracker_file):
     
     try:
         import requests
-        r = requests.get(url, headers=headers, timeout=5)
+        r = requests.get(url, headers=headers, params={"ref": branch}, timeout=5)
         if r.status_code == 200:
             content = base64.b64decode(r.json()["content"]).decode("utf-8")
             state = json.loads(content)
@@ -945,12 +946,19 @@ def load_state_from_github(tracker_file):
             pass
     return state
 
-def save_state_to_github(tracker_file, state):
+def save_state_to_github(tracker_file, state, branch="regime-state"):
+    """국면 상태를 로컬 파일과 전용 데이터 브랜치에 저장한다.
+
+    main에는 절대 쓰지 않는다(직접 푸시 금지). 브랜치가 없거나 토큰이 없으면 로컬에만 남는다.
+    """
     import os, json, base64
     import streamlit as st
     
     with open(tracker_file, "w") as f:
         json.dump(state, f)
+
+    if branch in ("main", "master"):
+        return
         
     token = None
     try:
@@ -968,7 +976,7 @@ def save_state_to_github(tracker_file, state):
     sha = None
     try:
         import requests
-        r = requests.get(url, headers=headers, timeout=5)
+        r = requests.get(url, headers=headers, params={"ref": branch}, timeout=5)
         if r.status_code == 200:
             sha = r.json().get("sha")
     except:
@@ -978,7 +986,7 @@ def save_state_to_github(tracker_file, state):
     data = {
         "message": f"Update {tracker_file} by Bot",
         "content": content_b64,
-        "branch": "main"
+        "branch": branch
     }
     if sha:
         data["sha"] = sha
@@ -990,6 +998,45 @@ def save_state_to_github(tracker_file, state):
         pass
 
 
+def regime_save_allowed(as_of_date, now_kst=None):
+    """국면 상태 저장 허용 여부 (allowed, reason).
+
+    as_of_date: KOSPI 마지막 봉의 날짜(YYYY-MM-DD). 오늘 봉은 15:40 KST 이후에만 확정으로 본다.
+    """
+    import datetime
+    if not as_of_date:
+        return False, "KOSPI 기준일을 확인할 수 없어 저장하지 않습니다."
+    if now_kst is None:
+        now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+    today = now_kst.date().isoformat()
+    if as_of_date > today:
+        return False, f"KOSPI 기준일({as_of_date})이 오늘({today})보다 늦어 저장하지 않습니다."
+    if as_of_date == today and (now_kst.hour, now_kst.minute) < (15, 40):
+        return False, "장마감(15:40 KST) 전에는 오늘 봉이 확정되지 않아 저장할 수 없습니다."
+    return True, f"{as_of_date} KOSPI 종가 기준으로 저장합니다."
+
+
+def next_warning_state(state, is_warning, as_of_date, prev_trading_date=None):
+    """경고일 카운터를 KOSPI 거래일 기준으로 갱신한 새 상태를 돌려준다.
+
+    같은 봉은 두 번 세지 않고, 직전 거래일에 이어질 때만 +1, 거래일이 비면 1부터 다시 센다.
+    """
+    try:
+        days = int((state or {}).get("warning_days", 0) or 0)
+    except (TypeError, ValueError):
+        days = 0
+    last = (state or {}).get("last_date") or ""
+    if not is_warning:
+        return {"last_date": as_of_date, "warning_days": 0}
+    if last == as_of_date:
+        days = max(days, 1)
+    elif last and prev_trading_date and last == prev_trading_date and days > 0:
+        days += 1
+    else:
+        days = 1
+    return {"last_date": as_of_date, "warning_days": min(days, 5)}
+
+
 def calculate_regime_classification(
     macro_score,
     flow_score,
@@ -997,10 +1044,14 @@ def calculate_regime_classification(
     warning_days_override=None,
     save_state=False,
     execution_quality=None,
+    as_of_date=None,
+    prev_trading_date=None,
+    now_kst=None,
 ):
     import datetime
     tracker_file = "regime_state.json"
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    if now_kst is None:
+        now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
     
     state = load_state_from_github(tracker_file)
             
@@ -1018,23 +1069,17 @@ def calculate_regime_classification(
         if isinstance(execution_quality, dict)
         else ""
     )
-    warning_days = state.get("warning_days", 0)
-    last_date = state.get("last_date")
-    
-    if is_warning:
-        if last_date != today_str:
-            warning_days += 1
-            state["warning_days"] = warning_days
-            state["last_date"] = today_str
-            if save_state:
-                save_state_to_github(tracker_file, state)
-    else:
-        if warning_days != 0 or last_date != today_str:
-            state["warning_days"] = 0
-            state["last_date"] = today_str
-            if save_state:
-                save_state_to_github(tracker_file, state)
-        warning_days = 0
+    # 경고일은 KOSPI 거래일(마지막 봉 날짜) 기준으로 센다. 서버 시간대(UTC)와 무관하다.
+    bar_date = as_of_date or now_kst.date().isoformat()
+    new_state = next_warning_state(state, is_warning, bar_date, prev_trading_date)
+    warning_days = new_state["warning_days"]
+    if save_state:
+        allowed, _reason = regime_save_allowed(as_of_date, now_kst)
+        if allowed and (
+            new_state["last_date"] != state.get("last_date")
+            or new_state["warning_days"] != state.get("warning_days")
+        ):
+            save_state_to_github(tracker_file, new_state)
         
     warning_days = warning_days_override if warning_days_override is not None else max(1, min(5, warning_days)) if is_warning else 0
     

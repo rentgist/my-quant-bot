@@ -421,7 +421,8 @@ class KoreanFuturesTests(unittest.TestCase):
         harness = f"""import streamlit as st
 import pandas as pd
 from kr_market_data import select_futures_flow
-from signals import calculate_cashflow_signal
+from signals import calculate_cashflow_signal, regime_save_allowed
+from config import get_kst_now
 def get_kr_futures_snapshot():
     return {snap!r}
 def sync_futures_sniper():
