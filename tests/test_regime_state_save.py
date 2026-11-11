@@ -11,6 +11,7 @@ import signals
 from signals import (
     calculate_regime_classification,
     next_warning_state,
+    post_close_refresh_due,
     regime_auto_confirm_ready,
     regime_save_allowed,
     save_state_to_github,
@@ -74,6 +75,18 @@ class AutoConfirmReadyTests(unittest.TestCase):
             self.assertFalse(self.ready(flow=flow)[0], flow)
 
 
+class PostCloseRefreshTests(unittest.TestCase):
+    def test_refreshes_once_after_close_when_snapshot_is_intraday(self):
+        self.assertTrue(post_close_refresh_due(kst(11, 16), "11-11 15:25:00", False))
+        self.assertTrue(post_close_refresh_due(kst(11, 16), "11-10 15:25:00", False))
+
+    def test_no_refresh_when_already_fresh_tried_or_not_due(self):
+        self.assertFalse(post_close_refresh_due(kst(11, 16), "11-11 15:45:00", False))
+        self.assertFalse(post_close_refresh_due(kst(11, 16), "11-11 15:25:00", True))
+        self.assertFalse(post_close_refresh_due(kst(11, 15, 35), "11-11 15:25:00", False))
+        self.assertFalse(post_close_refresh_due(kst(14, 16), "11-13 15:25:00", False))  # Saturday
+
+
 class TradingDayCounterTests(unittest.TestCase):
     def test_consecutive_trading_days_count_up(self):
         state = {"last_date": "", "warning_days": 0}
@@ -128,10 +141,16 @@ class ClassificationSaveTests(unittest.TestCase):
         Path("regime_state.json").write_text(json.dumps({"last_date": "2026-11-10", "warning_days": 1}))
         regime, _, _ = self.classify(kst(11, 16))
         self.assertIn("2/3일", regime)
-        self.assertEqual(self.saved(), {"last_date": "2026-11-11", "warning_days": 2})
-        regime, _, _ = self.classify(kst(11, 16, 5))  # 5-minute rerun
-        self.assertIn("2/3일", regime)
-        self.assertEqual(self.saved(), {"last_date": "2026-11-11", "warning_days": 2})
+        expected = {"last_date": "2026-11-11", "warning_days": 2, "storage": "local"}
+        self.assertEqual(self.saved(), expected)
+        result = {}
+        regime, _, _ = calculate_regime_classification(  # rerun, flow now 0
+            25, 0, False, save_state=True, as_of_date="2026-11-11", prev_trading_date="2026-11-10",
+            now_kst=kst(11, 16, 5), save_result=result,
+        )
+        # local-only confirmation stays visible as "local" and keeps the confirmed value
+        self.assertEqual(result["status"], "local")
+        self.assertEqual(self.saved(), expected)
 
     def test_confirmed_bar_is_not_rewritten_by_later_inputs(self):
         Path("regime_state.json").write_text(json.dumps({"last_date": "2026-11-11", "warning_days": 3}))
@@ -196,6 +215,29 @@ class GithubPathTests(unittest.TestCase):
         _, put = self._save(get_response=response)
         self.assertEqual(self.status, "already")
         put.assert_not_called()
+        # the remote (winning) value is mirrored locally instead of our attempt
+        saved = json.loads(Path("regime_state.json").read_text())
+        self.assertEqual(saved, {"last_date": "2026-11-11", "warning_days": 2, "storage": "remote"})
+
+    def test_put_conflict_adopts_winner(self):
+        import base64
+        remote = base64.b64encode(json.dumps({"last_date": "2026-11-11", "warning_days": 3}).encode()).decode()
+        winner = mock.Mock(status_code=200)
+        winner.json.return_value = {"sha": "def", "content": remote}
+        get = mock.Mock(side_effect=[mock.Mock(status_code=404), winner])
+        put = mock.Mock(return_value=mock.Mock(status_code=409))
+        with mock.patch.object(signals.st, "secrets", {"GITHUB_TOKEN": "dummy"}), \
+                mock.patch("requests.get", get), mock.patch("requests.put", put):
+            status = save_state_to_github("regime_state.json", {"last_date": "2026-11-11", "warning_days": 1})
+        self.assertEqual(status, "already")
+        saved = json.loads(Path("regime_state.json").read_text())
+        self.assertEqual(saved["warning_days"], 3)
+
+    def test_remote_success_and_failure_mark_storage(self):
+        self._save(put_status=201)
+        self.assertEqual(json.loads(Path("regime_state.json").read_text())["storage"], "remote")
+        self._save(put_status=404)
+        self.assertEqual(json.loads(Path("regime_state.json").read_text())["storage"], "local")
 
     def test_save_targets_data_branch_not_main(self):
         get, put = self._save()
@@ -235,6 +277,8 @@ class GithubPathTests(unittest.TestCase):
         self.assertIn("save_state=regime_auto_save", final)
         self.assertIn("regime_auto_save = regime_ready and not regime_manual_inputs", final)
         self.assertIn("save_result=regime_save_result", final)
+        self.assertIn("post_close_refresh_due(", final)
+        self.assertIn("auto_refresh_due or post_close_due", final)
 
 
 if __name__ == "__main__":

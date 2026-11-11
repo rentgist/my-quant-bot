@@ -84,6 +84,7 @@ try:
         evaluate_market_execution_quality,
         calculate_regime_classification,
         regime_auto_confirm_ready,
+        post_close_refresh_due,
         get_strategic_advice,
         run_historical_backtest,
         run_kr_historical_backtest,
@@ -434,7 +435,19 @@ auto_refresh_due = (
     and is_market_session(now_kst)
     and refresh_is_due(st.session_state["macro_refresh_last_attempt"], now_kst)
 )
-refresh_mode = "manual" if refresh_market_data else "automatic" if auto_refresh_due else None
+# 5분 자동 갱신은 15:30에 멈춘다. 장마감 뒤 첫 로드에서 한 번만 새로 받아 국면 자동 확정에 쓴다.
+post_close_due = "macro_charts" in st.session_state and post_close_refresh_due(
+    now_kst,
+    st.session_state["macro_charts"].get("fetched_at"),
+    st.session_state.get("post_close_refresh_date") == now_kst.date().isoformat(),
+)
+if post_close_due:
+    st.session_state["post_close_refresh_date"] = now_kst.date().isoformat()
+refresh_mode = (
+    "manual" if refresh_market_data
+    else "automatic" if (auto_refresh_due or post_close_due)
+    else None
+)
 
 if refresh_mode:
     st.session_state["macro_refresh_last_attempt"] = now_kst
