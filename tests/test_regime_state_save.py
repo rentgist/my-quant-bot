@@ -11,6 +11,7 @@ import signals
 from signals import (
     calculate_regime_classification,
     next_warning_state,
+    regime_auto_confirm_ready,
     regime_save_allowed,
     save_state_to_github,
 )
@@ -39,6 +40,38 @@ class SaveTimingTests(unittest.TestCase):
     def test_missing_or_future_bar_blocked(self):
         self.assertFalse(regime_save_allowed(None, kst(11, 18))[0])
         self.assertFalse(regime_save_allowed("2026-11-12", kst(11, 18))[0])
+
+
+class AutoConfirmReadyTests(unittest.TestCase):
+    CLOSED_FLOW = {"status": "ok", "market_status": "CLOSE", "as_of": "2026-11-11T15:30:00+09:00"}
+
+    def ready(self, as_of="2026-11-11", now=None, fetched="11-11 15:55:02", flow=None):
+        return regime_auto_confirm_ready(as_of, now or kst(11, 16), fetched, flow or self.CLOSED_FLOW)
+
+    def test_fresh_close_data_is_ready(self):
+        self.assertTrue(self.ready()[0])
+
+    def test_before_close_is_not_ready(self):
+        self.assertFalse(self.ready(now=kst(11, 15, 45))[0])
+
+    def test_previous_bar_is_never_auto_confirmed(self):
+        ok, reason = self.ready(as_of="2026-11-10", fetched="11-10 16:00:00")
+        self.assertFalse(ok)
+        self.assertIn("오늘이 아니", reason)
+
+    def test_intraday_snapshot_is_not_ready(self):
+        for fetched in ("11-11 15:20:00", "11-11 15:35:00", "11-10 16:00:00", "시간 정보 없음", None):
+            ok, reason = self.ready(fetched=fetched)
+            self.assertFalse(ok, fetched)
+        self.assertIn("최신 데이터 불러오기", reason)
+
+    def test_intraday_or_stale_flow_is_not_ready(self):
+        for flow in (
+            {**self.CLOSED_FLOW, "market_status": "OPEN"},
+            {**self.CLOSED_FLOW, "as_of": "2026-11-10T15:30:00+09:00"},
+            {**self.CLOSED_FLOW, "status": "unavailable"},
+        ):
+            self.assertFalse(self.ready(flow=flow)[0], flow)
 
 
 class TradingDayCounterTests(unittest.TestCase):
@@ -100,6 +133,25 @@ class ClassificationSaveTests(unittest.TestCase):
         self.assertIn("2/3일", regime)
         self.assertEqual(self.saved(), {"last_date": "2026-11-11", "warning_days": 2})
 
+    def test_confirmed_bar_is_not_rewritten_by_later_inputs(self):
+        Path("regime_state.json").write_text(json.dumps({"last_date": "2026-11-11", "warning_days": 3}))
+        result = {}
+        # same bar, now non-warning inputs (flow 0): must not reset the confirmed counter
+        calculate_regime_classification(
+            25, 0, False, save_state=True, as_of_date="2026-11-11", prev_trading_date="2026-11-10",
+            now_kst=kst(11, 17), save_result=result,
+        )
+        self.assertEqual(result["status"], "already")
+        self.assertEqual(self.saved(), {"last_date": "2026-11-11", "warning_days": 3})
+
+    def test_save_result_reports_blocked_intraday(self):
+        result = {}
+        calculate_regime_classification(
+            25, 50, False, save_state=True, as_of_date="2026-11-11", prev_trading_date="2026-11-10",
+            now_kst=kst(11, 13), save_result=result,
+        )
+        self.assertEqual(result["status"], "blocked")
+
     def test_preview_without_save_leaves_state_untouched(self):
         Path("regime_state.json").write_text(json.dumps({"last_date": "2026-11-10", "warning_days": 1}))
         self.classify(kst(11, 16), save=False)
@@ -116,13 +168,34 @@ class GithubPathTests(unittest.TestCase):
         os.chdir(self._cwd)
         self._tmp.cleanup()
 
-    def _save(self, **kwargs):
-        get = mock.Mock(return_value=mock.Mock(status_code=404))
-        put = mock.Mock()
-        with mock.patch.object(signals.st, "secrets", {"GITHUB_TOKEN": "dummy"}), \
+    def _save(self, get_response=None, put_status=201, secrets=None, **kwargs):
+        get = mock.Mock(return_value=get_response or mock.Mock(status_code=404))
+        put = mock.Mock(return_value=mock.Mock(status_code=put_status))
+        secrets = {"GITHUB_TOKEN": "dummy"} if secrets is None else secrets
+        with mock.patch.object(signals.st, "secrets", secrets), \
                 mock.patch("requests.get", get), mock.patch("requests.put", put):
-            save_state_to_github("regime_state.json", {"last_date": "2026-11-11", "warning_days": 1}, **kwargs)
+            self.status = save_state_to_github(
+                "regime_state.json", {"last_date": "2026-11-11", "warning_days": 1}, **kwargs
+            )
         return get, put
+
+    def test_save_status_values(self):
+        self._save(put_status=201)
+        self.assertEqual(self.status, "remote")
+        self._save(put_status=404)  # e.g. regime-state branch missing
+        self.assertEqual(self.status, "remote_failed")
+        _, put = self._save(secrets={})
+        self.assertEqual(self.status, "local")
+        put.assert_not_called()
+
+    def test_remote_already_confirmed_is_not_overwritten(self):
+        import base64
+        remote = base64.b64encode(json.dumps({"last_date": "2026-11-11", "warning_days": 2}).encode()).decode()
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"sha": "abc", "content": remote}
+        _, put = self._save(get_response=response)
+        self.assertEqual(self.status, "already")
+        put.assert_not_called()
 
     def test_save_targets_data_branch_not_main(self):
         get, put = self._save()
@@ -160,7 +233,8 @@ class GithubPathTests(unittest.TestCase):
         self.assertNotIn("영구 저장 (GitHub 연동)", final)
         self.assertNotIn("save_regime", final)  # no manual save control left
         self.assertIn("save_state=regime_auto_save", final)
-        self.assertIn("regime_auto_save = save_allowed and not regime_manual_inputs and regime_flow_ok", final)
+        self.assertIn("regime_auto_save = regime_ready and not regime_manual_inputs", final)
+        self.assertIn("save_result=regime_save_result", final)
 
 
 if __name__ == "__main__":

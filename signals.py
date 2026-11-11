@@ -950,19 +950,22 @@ def save_state_to_github(tracker_file, state, branch="regime-state"):
     """국면 상태를 로컬 파일과 전용 데이터 브랜치에 저장한다.
 
     main에는 절대 쓰지 않는다(직접 푸시 금지). 브랜치가 없거나 토큰이 없으면 로컬에만 남는다.
+    반환: "remote"(원격 저장 성공), "already"(원격에 같은·더 늦은 날짜가 이미 확정됨),
+          "local"(로컬만 저장), "remote_failed"(로컬 저장, 원격 실패), "failed"(둘 다 실패).
     """
     import os, json, base64
     import streamlit as st
     
+    local_ok = True
     try:
         with open(tracker_file, "w") as f:
             json.dump(state, f)
     except OSError:
-        pass
+        local_ok = False
 
     # 원격 저장은 전용 데이터 브랜치에만 허용한다 (main·refs/heads/main 등 다른 값은 거부).
     if branch != "regime-state":
-        return
+        return "local" if local_ok else "failed"
         
     token = None
     try:
@@ -971,7 +974,7 @@ def save_state_to_github(tracker_file, state, branch="regime-state"):
         pass
         
     if not token:
-        return
+        return "local" if local_ok else "failed"
         
     repo = "rentgist/my-quant-bot"
     url = f"https://api.github.com/repos/{repo}/contents/{tracker_file}"
@@ -982,7 +985,15 @@ def save_state_to_github(tracker_file, state, branch="regime-state"):
         import requests
         r = requests.get(url, headers=headers, params={"ref": branch}, timeout=5)
         if r.status_code == 200:
-            sha = r.json().get("sha")
+            body = r.json()
+            sha = body.get("sha")
+            # 다른 화면·세션이 이미 같은(또는 더 늦은) 봉을 확정했으면 덮어쓰지 않는다.
+            try:
+                remote = json.loads(base64.b64decode(body.get("content", "")).decode("utf-8"))
+                if str(remote.get("last_date") or "") >= str(state.get("last_date") or ""):
+                    return "already"
+            except Exception:
+                pass
     except:
         pass
         
@@ -997,9 +1008,12 @@ def save_state_to_github(tracker_file, state, branch="regime-state"):
         
     try:
         import requests
-        requests.put(url, headers=headers, json=data, timeout=5)
+        resp = requests.put(url, headers=headers, json=data, timeout=5)
+        if getattr(resp, "status_code", None) in (200, 201):
+            return "remote"
     except:
         pass
+    return "remote_failed" if local_ok else "failed"
 
 
 def regime_save_allowed(as_of_date, now_kst=None):
@@ -1019,6 +1033,39 @@ def regime_save_allowed(as_of_date, now_kst=None):
     if as_of_date == today and (now_kst.hour, now_kst.minute) < (15, 50):
         return False, "장마감(15:50 KST) 전에는 오늘 봉이 확정되지 않아 저장하지 않습니다."
     return True, f"{as_of_date} KOSPI 종가 기준으로 저장합니다."
+
+
+def regime_auto_confirm_ready(as_of_date, now_kst, kospi_fetched_at, flow_meta):
+    """자동 확정 가능 여부 (ready, reason). 사람이 누르지 않으므로 데이터 신선도를 직접 확인한다.
+
+    - KOSPI 마지막 봉이 오늘(KST)이고 15:50 이후일 것 (지난 봉은 자동 확정하지 않는다)
+    - KOSPI 스냅샷이 오늘 15:40 이후 새로 수집됐을 것 (fetched_at "MM-DD HH:MM[:SS]", 시세 지연 감안)
+    - 수급 응답이 정상이고 장 마감 상태(CLOSE/CLOSED)이며 기준일이 오늘일 것
+    """
+    allowed, reason = regime_save_allowed(as_of_date, now_kst)
+    if not allowed:
+        return False, reason
+    today = now_kst.date()
+    if as_of_date != today.isoformat():
+        return False, f"KOSPI 마지막 봉({as_of_date})이 오늘이 아니어서 자동 확정하지 않습니다."
+    try:
+        month_day, clock = str(kospi_fetched_at).split()[:2]
+        month, day = (int(x) for x in month_day.split("-"))
+        hour, minute = (int(x) for x in clock.split(":")[:2])
+        fresh = (month, day) == (today.month, today.day) and (hour, minute) >= (15, 40)
+    except (TypeError, ValueError):
+        fresh = False
+    if not fresh:
+        return False, "KOSPI 데이터가 장마감 뒤 새로 수집되지 않았습니다. '최신 데이터 불러오기' 후 자동 확정합니다."
+    flow_meta = flow_meta if isinstance(flow_meta, dict) else {}
+    flow_date = str(flow_meta.get("as_of") or "")[:10]
+    if (
+        flow_meta.get("status") != "ok"
+        or flow_meta.get("market_status") not in ("CLOSE", "CLOSED")
+        or flow_date != today.isoformat()
+    ):
+        return False, "오늘 장마감 수급이 확인되지 않아 자동 확정을 건너뜁니다."
+    return True, f"{as_of_date} 종가·마감 수급 기준으로 자동 확정합니다."
 
 
 def next_warning_state(state, is_warning, as_of_date, prev_trading_date=None):
@@ -1052,6 +1099,7 @@ def calculate_regime_classification(
     as_of_date=None,
     prev_trading_date=None,
     now_kst=None,
+    save_result=None,
 ):
     import datetime
     tracker_file = "regime_state.json"
@@ -1080,11 +1128,15 @@ def calculate_regime_classification(
     warning_days = new_state["warning_days"]
     if save_state:
         allowed, _reason = regime_save_allowed(as_of_date, now_kst)
-        if allowed and (
-            new_state["last_date"] != state.get("last_date")
-            or new_state["warning_days"] != state.get("warning_days")
-        ):
-            save_state_to_github(tracker_file, new_state)
+        # 이미 확정된 봉(같은 날짜)이나 더 이른 봉은 다시 저장하지 않는다.
+        if not allowed:
+            status = "blocked"
+        elif as_of_date and as_of_date > str(state.get("last_date") or ""):
+            status = save_state_to_github(tracker_file, new_state)
+        else:
+            status = "already"
+        if isinstance(save_result, dict):
+            save_result["status"] = status
         
     warning_days = warning_days_override if warning_days_override is not None else max(1, min(5, warning_days)) if is_warning else 0
     

@@ -83,7 +83,7 @@ try:
         calculate_cashflow_signal,
         evaluate_market_execution_quality,
         calculate_regime_classification,
-        regime_save_allowed,
+        regime_auto_confirm_ready,
         get_strategic_advice,
         run_historical_backtest,
         run_kr_historical_backtest,
@@ -863,7 +863,6 @@ with tab_orion_kr:
             except (TypeError, ValueError):
                 kospi_as_of, kospi_prev_date = None, None
             regime_now_kst = get_kst_now()
-            save_allowed, save_reason = regime_save_allowed(kospi_as_of, regime_now_kst)
             st.info("💡 경고일은 KOSPI 거래일 종가 기준으로 셉니다. 장마감(15:50) 뒤 자동으로 확정·저장합니다.")
         with save_col2:
             with st.expander("⚙️ 강제 오버라이드"):
@@ -929,9 +928,12 @@ with tab_orion_kr:
 
     # 수동 선물·미결제약정 입력은 화면 실험용이므로 자동 확정에 섞지 않는다.
     regime_manual_inputs = bool(futures_confirmed_main) or not str(oi_choice).startswith("자동")
-    # 수급 조회가 실패한 날 자동 저장하면 경고일이 0으로 잘못 초기화될 수 있으므로 건너뛴다.
-    regime_flow_ok = bool(summary_dict.get("flow_valid", False))
-    regime_auto_save = save_allowed and not regime_manual_inputs and regime_flow_ok
+    # 사람이 누르지 않으므로 장마감 뒤 새로 수집한 KOSPI·마감 수급일 때만 자동 확정한다.
+    regime_ready, regime_ready_reason = regime_auto_confirm_ready(
+        kospi_as_of, regime_now_kst, macro_charts.get("fetched_at"), flow_metadata
+    )
+    regime_auto_save = regime_ready and not regime_manual_inputs
+    regime_save_result = {}
     regime, action, r_color = calculate_regime_classification(
         kr_macro_score,
         kr_flow_score,
@@ -942,15 +944,21 @@ with tab_orion_kr:
         as_of_date=kospi_as_of,
         prev_trading_date=kospi_prev_date,
         now_kst=regime_now_kst,
+        save_result=regime_save_result,
     )
+    regime_save_messages = {
+        "remote": f"✅ 자동 확정: {kospi_as_of} 종가 기준으로 저장했습니다(regime-state 브랜치).",
+        "already": f"✅ {kospi_as_of} 종가 기준 국면 상태는 이미 확정되어 있습니다.",
+        "local": f"⚠️ {kospi_as_of} 자동 확정을 앱 서버 파일에만 저장했습니다(GitHub 연결 없음 · 재시작 시 사라짐).",
+        "remote_failed": f"⚠️ {kospi_as_of} 자동 확정: GitHub 저장 실패(regime-state 브랜치 확인 필요) · 앱 서버 파일에만 저장.",
+        "failed": "❌ 자동 확정 저장에 실패했습니다. 다음 화면 로드에서 다시 시도합니다.",
+    }
     if regime_auto_save:
-        st.caption(f"✅ 자동 확정: {kospi_as_of} 종가 기준 국면 상태를 저장했습니다(regime-state 브랜치).")
+        st.caption(regime_save_messages.get(regime_save_result.get("status"), "⏳ 자동 확정 대기"))
     elif regime_manual_inputs:
         st.caption("⏸ 수동 입력(선물·미결제약정)이 켜져 있어 자동 확정을 건너뜁니다.")
-    elif save_allowed and not regime_flow_ok:
-        st.caption("⏸ 수급 데이터를 확인하지 못해 자동 확정을 건너뜁니다. 다음 화면 로드에서 다시 시도합니다.")
     else:
-        st.caption(f"⏳ 자동 확정 대기: {save_reason}")
+        st.caption(f"⏳ 자동 확정 대기: {regime_ready_reason}")
     
     st.markdown(
         f"<div style='background:{r_color}22; border-left: 8px solid {r_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"
