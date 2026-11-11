@@ -852,8 +852,8 @@ with tab_orion_kr:
         st.markdown("<br>", unsafe_allow_html=True)
         save_col1, save_col2 = st.columns([2, 1])
         with save_col1:
-            # 경고일은 KOSPI 거래일(마지막 봉 날짜) 기준이다. 저장은 1회성 버튼이라
-            # 5분 자동 새로고침에서 다시 저장되지 않고, 오늘 봉은 장마감 뒤에만 저장된다.
+            # 경고일은 KOSPI 거래일(마지막 봉 날짜) 기준이다. 사람이 누르지 않고,
+            # 장마감(15:50 KST) 뒤 첫 화면 로드에서 자동 확정한다. 같은 봉은 다시 세지 않는다.
             kospi_as_of, kospi_prev_date = None, None
             try:
                 if not kospi_10y.empty:
@@ -864,13 +864,7 @@ with tab_orion_kr:
                 kospi_as_of, kospi_prev_date = None, None
             regime_now_kst = get_kst_now()
             save_allowed, save_reason = regime_save_allowed(kospi_as_of, regime_now_kst)
-            st.info("💡 경고일은 KOSPI 거래일 종가 기준으로 셉니다. 장마감(15:40) 뒤에 한 번 눌러 확정하세요.")
-            save_regime = st.button(
-                "✅ 오늘 장마감 결과로 확정 저장",
-                disabled=not save_allowed,
-                help="전용 데이터 브랜치(regime-state)에 저장합니다. main에는 쓰지 않습니다.",
-            )
-            st.caption(save_reason)
+            st.info("💡 경고일은 KOSPI 거래일 종가 기준으로 셉니다. 장마감(15:50) 뒤 자동으로 확정·저장합니다.")
         with save_col2:
             with st.expander("⚙️ 강제 오버라이드"):
                 wdo = st.number_input("수동 경고일수 (-1: 자동)", min_value=-1, max_value=5, value=-1, step=1)
@@ -933,19 +927,30 @@ with tab_orion_kr:
     )
     st.caption(execution_quality["reason"])
 
+    # 수동 선물·미결제약정 입력은 화면 실험용이므로 자동 확정에 섞지 않는다.
+    regime_manual_inputs = bool(futures_confirmed_main) or not str(oi_choice).startswith("자동")
+    # 수급 조회가 실패한 날 자동 저장하면 경고일이 0으로 잘못 초기화될 수 있으므로 건너뛴다.
+    regime_flow_ok = bool(summary_dict.get("flow_valid", False))
+    regime_auto_save = save_allowed and not regime_manual_inputs and regime_flow_ok
     regime, action, r_color = calculate_regime_classification(
         kr_macro_score,
         kr_flow_score,
         kospi_above_ma20,
         warning_days_override=override_val,
-        save_state=save_regime and save_allowed,
+        save_state=regime_auto_save,
         execution_quality=execution_quality,
         as_of_date=kospi_as_of,
         prev_trading_date=kospi_prev_date,
         now_kst=regime_now_kst,
     )
-    if save_regime and save_allowed:
-        st.caption(f"✅ {kospi_as_of} 종가 기준 국면 상태 저장을 요청했습니다.")
+    if regime_auto_save:
+        st.caption(f"✅ 자동 확정: {kospi_as_of} 종가 기준 국면 상태를 저장했습니다(regime-state 브랜치).")
+    elif regime_manual_inputs:
+        st.caption("⏸ 수동 입력(선물·미결제약정)이 켜져 있어 자동 확정을 건너뜁니다.")
+    elif save_allowed and not regime_flow_ok:
+        st.caption("⏸ 수급 데이터를 확인하지 못해 자동 확정을 건너뜁니다. 다음 화면 로드에서 다시 시도합니다.")
+    else:
+        st.caption(f"⏳ 자동 확정 대기: {save_reason}")
     
     st.markdown(
         f"<div style='background:{r_color}22; border-left: 8px solid {r_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"

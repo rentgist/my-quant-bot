@@ -1005,7 +1005,8 @@ def save_state_to_github(tracker_file, state, branch="regime-state"):
 def regime_save_allowed(as_of_date, now_kst=None):
     """국면 상태 저장 허용 여부 (allowed, reason).
 
-    as_of_date: KOSPI 마지막 봉의 날짜(YYYY-MM-DD). 오늘 봉은 15:40 KST 이후에만 확정으로 본다.
+    as_of_date: KOSPI 마지막 봉의 날짜(YYYY-MM-DD). 오늘 봉은 15:50 KST 이후에만 확정으로 본다
+    (현물 15:30 마감, 선물 15:45 마감 뒤 일별 값 확정).
     """
     import datetime
     if not as_of_date:
@@ -1015,8 +1016,8 @@ def regime_save_allowed(as_of_date, now_kst=None):
     today = now_kst.date().isoformat()
     if as_of_date > today:
         return False, f"KOSPI 기준일({as_of_date})이 오늘({today})보다 늦어 저장하지 않습니다."
-    if as_of_date == today and (now_kst.hour, now_kst.minute) < (15, 40):
-        return False, "장마감(15:40 KST) 전에는 오늘 봉이 확정되지 않아 저장할 수 없습니다."
+    if as_of_date == today and (now_kst.hour, now_kst.minute) < (15, 50):
+        return False, "장마감(15:50 KST) 전에는 오늘 봉이 확정되지 않아 저장하지 않습니다."
     return True, f"{as_of_date} KOSPI 종가 기준으로 저장합니다."
 
 

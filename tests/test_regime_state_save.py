@@ -24,13 +24,13 @@ def kst(day, hour, minute=0):
 
 class SaveTimingTests(unittest.TestCase):
     def test_today_bar_blocked_before_close(self):
-        for hour, minute in ((9, 0), (13, 0), (15, 39)):
+        for hour, minute in ((9, 0), (13, 0), (15, 40), (15, 49)):
             allowed, reason = regime_save_allowed("2026-11-11", kst(11, hour, minute))
             self.assertFalse(allowed)
             self.assertIn("장마감", reason)
 
     def test_today_bar_allowed_after_close(self):
-        self.assertTrue(regime_save_allowed("2026-11-11", kst(11, 15, 40))[0])
+        self.assertTrue(regime_save_allowed("2026-11-11", kst(11, 15, 50))[0])
         self.assertTrue(regime_save_allowed("2026-11-11", kst(11, 20, 0))[0])
 
     def test_previous_completed_bar_allowed_before_open(self):
@@ -157,9 +157,10 @@ class GithubPathTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         self.assertNotIn('"branch": "main"', (root / "signals.py").read_text(encoding="utf-8"))
         final = (root / "final.py").read_text(encoding="utf-8")
-        self.assertNotIn("영구 저장 (GitHub 연동)\", value=False", final)
-        self.assertIn("save_regime = st.button(", final)
-        self.assertIn("save_state=save_regime and save_allowed", final)
+        self.assertNotIn("영구 저장 (GitHub 연동)", final)
+        self.assertNotIn("save_regime", final)  # no manual save control left
+        self.assertIn("save_state=regime_auto_save", final)
+        self.assertIn("regime_auto_save = save_allowed and not regime_manual_inputs and regime_flow_ok", final)
 
 
 if __name__ == "__main__":
