@@ -11,6 +11,8 @@ def load_regime_classifier():
     required_names = {
         "load_state_from_github",
         "save_state_to_github",
+        "regime_save_allowed",
+        "next_warning_state",
         "calculate_regime_classification",
     }
     function_nodes = [
