@@ -83,6 +83,8 @@ try:
         calculate_cashflow_signal,
         evaluate_market_execution_quality,
         calculate_regime_classification,
+        regime_auto_confirm_ready,
+        post_close_refresh_due,
         get_strategic_advice,
         run_historical_backtest,
         run_kr_historical_backtest,
@@ -433,7 +435,19 @@ auto_refresh_due = (
     and is_market_session(now_kst)
     and refresh_is_due(st.session_state["macro_refresh_last_attempt"], now_kst)
 )
-refresh_mode = "manual" if refresh_market_data else "automatic" if auto_refresh_due else None
+# 5분 자동 갱신은 15:30에 멈춘다. 장마감 뒤 첫 로드에서 한 번만 새로 받아 국면 자동 확정에 쓴다.
+post_close_due = "macro_charts" in st.session_state and post_close_refresh_due(
+    now_kst,
+    st.session_state["macro_charts"].get("fetched_at"),
+    st.session_state.get("post_close_refresh_date") == now_kst.date().isoformat(),
+)
+if post_close_due:
+    st.session_state["post_close_refresh_date"] = now_kst.date().isoformat()
+refresh_mode = (
+    "manual" if refresh_market_data
+    else "automatic" if (auto_refresh_due or post_close_due)
+    else None
+)
 
 if refresh_mode:
     st.session_state["macro_refresh_last_attempt"] = now_kst
@@ -851,8 +865,18 @@ with tab_orion_kr:
         st.markdown("<br>", unsafe_allow_html=True)
         save_col1, save_col2 = st.columns([2, 1])
         with save_col1:
-            st.info("💡 장중에는 체크를 풀고 자유롭게 테스트하세요. 장 마감 후 최종 확정 시에만 체크하세요.")
-            save_regime = st.checkbox("✅ 오늘 장마감 결과로 확정 및 영구 저장 (GitHub 연동)", value=False)
+            # 경고일은 KOSPI 거래일(마지막 봉 날짜) 기준이다. 사람이 누르지 않고,
+            # 장마감(15:50 KST) 뒤 첫 화면 로드에서 자동 확정한다. 같은 봉은 다시 세지 않는다.
+            kospi_as_of, kospi_prev_date = None, None
+            try:
+                if not kospi_10y.empty:
+                    kospi_as_of = pd.Timestamp(kospi_10y.index[-1]).date().isoformat()
+                    if len(kospi_10y.index) >= 2:
+                        kospi_prev_date = pd.Timestamp(kospi_10y.index[-2]).date().isoformat()
+            except (TypeError, ValueError):
+                kospi_as_of, kospi_prev_date = None, None
+            regime_now_kst = get_kst_now()
+            st.info("💡 경고일은 KOSPI 거래일 종가 기준으로 셉니다. 장마감(15:50) 뒤 자동으로 확정·저장합니다.")
         with save_col2:
             with st.expander("⚙️ 강제 오버라이드"):
                 wdo = st.number_input("수동 경고일수 (-1: 자동)", min_value=-1, max_value=5, value=-1, step=1)
@@ -915,14 +939,39 @@ with tab_orion_kr:
     )
     st.caption(execution_quality["reason"])
 
+    # 수동 선물·미결제약정 입력은 화면 실험용이므로 자동 확정에 섞지 않는다.
+    regime_manual_inputs = bool(futures_confirmed_main) or not str(oi_choice).startswith("자동")
+    # 사람이 누르지 않으므로 장마감 뒤 새로 수집한 KOSPI·마감 수급일 때만 자동 확정한다.
+    regime_ready, regime_ready_reason = regime_auto_confirm_ready(
+        kospi_as_of, regime_now_kst, macro_charts.get("fetched_at"), flow_metadata
+    )
+    regime_auto_save = regime_ready and not regime_manual_inputs
+    regime_save_result = {}
     regime, action, r_color = calculate_regime_classification(
         kr_macro_score,
         kr_flow_score,
         kospi_above_ma20,
         warning_days_override=override_val,
-        save_state=save_regime,
+        save_state=regime_auto_save,
         execution_quality=execution_quality,
+        as_of_date=kospi_as_of,
+        prev_trading_date=kospi_prev_date,
+        now_kst=regime_now_kst,
+        save_result=regime_save_result,
     )
+    regime_save_messages = {
+        "remote": f"✅ 자동 확정: {kospi_as_of} 종가 기준으로 저장했습니다(regime-state 브랜치).",
+        "already": f"✅ {kospi_as_of} 종가 기준 국면 상태는 이미 확정되어 있습니다.",
+        "local": f"⚠️ {kospi_as_of} 자동 확정을 앱 서버 파일에만 저장했습니다(GitHub 연결 없음 · 재시작 시 사라짐).",
+        "remote_failed": f"⚠️ {kospi_as_of} 자동 확정: GitHub 저장 실패(regime-state 브랜치 확인 필요) · 앱 서버 파일에만 저장.",
+        "failed": "❌ 자동 확정 저장에 실패했습니다. 다음 화면 로드에서 다시 시도합니다.",
+    }
+    if regime_auto_save:
+        st.caption(regime_save_messages.get(regime_save_result.get("status"), "⏳ 자동 확정 대기"))
+    elif regime_manual_inputs:
+        st.caption("⏸ 수동 입력(선물·미결제약정)이 켜져 있어 자동 확정을 건너뜁니다.")
+    else:
+        st.caption(f"⏳ 자동 확정 대기: {regime_ready_reason}")
     
     st.markdown(
         f"<div style='background:{r_color}22; border-left: 8px solid {r_color}; padding:20px; border-radius:10px; margin-bottom:20px;'>"

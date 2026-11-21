@@ -422,6 +422,7 @@ class KoreanFuturesTests(unittest.TestCase):
 import pandas as pd
 from kr_market_data import select_futures_flow
 from signals import calculate_cashflow_signal
+from config import get_kst_now
 def get_kr_futures_snapshot():
     return {snap!r}
 def sync_futures_sniper():
