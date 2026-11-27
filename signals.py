@@ -901,7 +901,8 @@ def evaluate_market_execution_quality(kospi_hist):
     return result
 
 
-def load_state_from_github(tracker_file):
+def load_state_from_github(tracker_file, branch="regime-state"):
+    """국면 상태를 전용 데이터 브랜치(main 아님)에서 읽고, 실패하면 로컬 파일을 쓴다."""
     import os, json, base64
     import streamlit as st
     
@@ -912,7 +913,7 @@ def load_state_from_github(tracker_file):
     except Exception:
         pass
         
-    if not token:
+    if not token or branch != "regime-state":
         if os.path.exists(tracker_file):
             try:
                 with open(tracker_file, "r") as f:
@@ -927,7 +928,7 @@ def load_state_from_github(tracker_file):
     
     try:
         import requests
-        r = requests.get(url, headers=headers, timeout=5)
+        r = requests.get(url, headers=headers, params={"ref": branch}, timeout=5)
         if r.status_code == 200:
             content = base64.b64decode(r.json()["content"]).decode("utf-8")
             state = json.loads(content)
@@ -945,49 +946,186 @@ def load_state_from_github(tracker_file):
             pass
     return state
 
-def save_state_to_github(tracker_file, state):
+def save_state_to_github(tracker_file, state, branch="regime-state"):
+    """국면 상태를 로컬 파일과 전용 데이터 브랜치에 저장한다.
+
+    main에는 절대 쓰지 않는다(직접 푸시 금지). 브랜치가 없거나 토큰이 없으면 로컬에만 남는다.
+    반환: "remote"(원격 저장 성공), "already"(원격에 같은·더 늦은 날짜가 이미 확정됨),
+          "local"(로컬만 저장), "remote_failed"(로컬 저장, 원격 실패), "failed"(둘 다 실패).
+    로컬 파일에는 저장 위치("storage": "remote"|"local")를 함께 남겨, 로컬 전용 저장을
+    다음 실행에서도 확정과 구분하고 원격 저장을 다시 시도할 수 있게 한다.
+    """
     import os, json, base64
     import streamlit as st
-    
-    with open(tracker_file, "w") as f:
-        json.dump(state, f)
-        
+
+    record = {"last_date": state.get("last_date"), "warning_days": state.get("warning_days", 0)}
+
+    def _write_local(payload):
+        try:
+            with open(tracker_file, "w") as f:
+                json.dump(payload, f)
+            return True
+        except OSError:
+            return False
+
+    def _local_only():
+        return "local" if _write_local({**record, "storage": "local"}) else "failed"
+
+    # 원격 저장은 전용 데이터 브랜치에만 허용한다 (main·refs/heads/main 등 다른 값은 거부).
+    if branch != "regime-state":
+        return _local_only()
+
     token = None
     try:
         token = st.secrets.get("GITHUB_TOKEN")
     except Exception:
         pass
-        
+
     if not token:
-        return
-        
+        return _local_only()
+
     repo = "rentgist/my-quant-bot"
     url = f"https://api.github.com/repos/{repo}/contents/{tracker_file}"
     headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-    
-    sha = None
-    try:
-        import requests
-        r = requests.get(url, headers=headers, timeout=5)
-        if r.status_code == 200:
-            sha = r.json().get("sha")
-    except:
-        pass
-        
-    content_b64 = base64.b64encode(json.dumps(state, indent=4).encode("utf-8")).decode("utf-8")
+
+    def _remote_confirmed():
+        """(sha, 원격 상태가 같은·더 늦은 날짜면 그 상태, 아니면 None)."""
+        try:
+            import requests
+            r = requests.get(url, headers=headers, params={"ref": branch}, timeout=5)
+            if r.status_code != 200:
+                return None, None
+            body = r.json()
+            remote = json.loads(base64.b64decode(body.get("content", "")).decode("utf-8"))
+            if str(remote.get("last_date") or "") >= str(record.get("last_date") or ""):
+                return body.get("sha"), remote
+            return body.get("sha"), None
+        except Exception:
+            return None, None
+
+    # 원격을 먼저 확인한다. 이미 확정돼 있으면 그 값을 로컬에 반영하고 덮어쓰지 않는다.
+    sha, remote = _remote_confirmed()
+    if remote is not None:
+        _write_local({**remote, "storage": "remote"})
+        return "already"
+
+    content_b64 = base64.b64encode(json.dumps(record, indent=4).encode("utf-8")).decode("utf-8")
     data = {
         "message": f"Update {tracker_file} by Bot",
         "content": content_b64,
-        "branch": "main"
+        "branch": branch
     }
     if sha:
         data["sha"] = sha
         
+    put_status = None
     try:
         import requests
-        requests.put(url, headers=headers, json=data, timeout=5)
+        resp = requests.put(url, headers=headers, json=data, timeout=5)
+        put_status = getattr(resp, "status_code", None)
     except:
         pass
+    if put_status in (200, 201):
+        _write_local({**record, "storage": "remote"})
+        return "remote"
+    if put_status in (409, 422):
+        # 동시 저장 충돌: 승자의 상태를 다시 읽어 그대로 따른다.
+        _sha, remote = _remote_confirmed()
+        if remote is not None:
+            _write_local({**remote, "storage": "remote"})
+            return "already"
+    return "remote_failed" if _write_local({**record, "storage": "local"}) else "failed"
+
+
+def snapshot_fetched_after(fetched_at, now_kst, hour, minute):
+    """스냅샷 수집 시각("MM-DD HH:MM[:SS]")이 오늘(KST) hour:minute 이후인지."""
+    try:
+        month_day, clock = str(fetched_at).split()[:2]
+        month, day = (int(x) for x in month_day.split("-"))
+        h, m = (int(x) for x in clock.split(":")[:2])
+    except (TypeError, ValueError):
+        return False
+    today = now_kst.date()
+    return (month, day) == (today.month, today.day) and (h, m) >= (hour, minute)
+
+
+def post_close_refresh_due(now_kst, fetched_at, already_tried_today):
+    """장마감 뒤 첫 화면 로드에서 시장 데이터를 한 번 새로 받아야 하는지.
+
+    5분 자동 갱신은 15:30에 멈추므로, 평일 15:40 이후 스냅샷이 그 전에 수집됐다면
+    세션당 하루 한 번만 다시 수집한다(실패해도 반복하지 않는다).
+    """
+    if already_tried_today or now_kst.weekday() >= 5:
+        return False
+    if (now_kst.hour, now_kst.minute) < (15, 40):
+        return False
+    return not snapshot_fetched_after(fetched_at, now_kst, 15, 40)
+
+
+def regime_save_allowed(as_of_date, now_kst=None):
+    """국면 상태 저장 허용 여부 (allowed, reason).
+
+    as_of_date: KOSPI 마지막 봉의 날짜(YYYY-MM-DD). 오늘 봉은 15:50 KST 이후에만 확정으로 본다
+    (현물 15:30 마감, 선물 15:45 마감 뒤 일별 값 확정).
+    """
+    import datetime
+    if not as_of_date:
+        return False, "KOSPI 기준일을 확인할 수 없어 저장하지 않습니다."
+    if now_kst is None:
+        now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+    today = now_kst.date().isoformat()
+    if as_of_date > today:
+        return False, f"KOSPI 기준일({as_of_date})이 오늘({today})보다 늦어 저장하지 않습니다."
+    if as_of_date == today and (now_kst.hour, now_kst.minute) < (15, 50):
+        return False, "장마감(15:50 KST) 전에는 오늘 봉이 확정되지 않아 저장하지 않습니다."
+    return True, f"{as_of_date} KOSPI 종가 기준으로 저장합니다."
+
+
+def regime_auto_confirm_ready(as_of_date, now_kst, kospi_fetched_at, flow_meta):
+    """자동 확정 가능 여부 (ready, reason). 사람이 누르지 않으므로 데이터 신선도를 직접 확인한다.
+
+    - KOSPI 마지막 봉이 오늘(KST)이고 15:50 이후일 것 (지난 봉은 자동 확정하지 않는다)
+    - KOSPI 스냅샷이 오늘 15:40 이후 새로 수집됐을 것 (fetched_at "MM-DD HH:MM[:SS]", 시세 지연 감안)
+    - 수급 응답이 정상이고 장 마감 상태(CLOSE/CLOSED)이며 기준일이 오늘일 것
+    """
+    allowed, reason = regime_save_allowed(as_of_date, now_kst)
+    if not allowed:
+        return False, reason
+    today = now_kst.date()
+    if as_of_date != today.isoformat():
+        return False, f"KOSPI 마지막 봉({as_of_date})이 오늘이 아니어서 자동 확정하지 않습니다."
+    if not snapshot_fetched_after(kospi_fetched_at, now_kst, 15, 40):
+        return False, "KOSPI 데이터가 장마감 뒤 새로 수집되지 않았습니다. '최신 데이터 불러오기' 후 자동 확정합니다."
+    flow_meta = flow_meta if isinstance(flow_meta, dict) else {}
+    flow_date = str(flow_meta.get("as_of") or "")[:10]
+    if (
+        flow_meta.get("status") != "ok"
+        or flow_meta.get("market_status") not in ("CLOSE", "CLOSED")
+        or flow_date != today.isoformat()
+    ):
+        return False, "오늘 장마감 수급이 확인되지 않아 자동 확정을 건너뜁니다."
+    return True, f"{as_of_date} 종가·마감 수급 기준으로 자동 확정합니다."
+
+
+def next_warning_state(state, is_warning, as_of_date, prev_trading_date=None):
+    """경고일 카운터를 KOSPI 거래일 기준으로 갱신한 새 상태를 돌려준다.
+
+    같은 봉은 두 번 세지 않고, 직전 거래일에 이어질 때만 +1, 거래일이 비면 1부터 다시 센다.
+    """
+    try:
+        days = int((state or {}).get("warning_days", 0) or 0)
+    except (TypeError, ValueError):
+        days = 0
+    last = (state or {}).get("last_date") or ""
+    if not is_warning:
+        return {"last_date": as_of_date, "warning_days": 0}
+    if last == as_of_date:
+        days = max(days, 1)
+    elif last and prev_trading_date and last == prev_trading_date and days > 0:
+        days += 1
+    else:
+        days = 1
+    return {"last_date": as_of_date, "warning_days": min(days, 5)}
 
 
 def calculate_regime_classification(
@@ -997,10 +1135,15 @@ def calculate_regime_classification(
     warning_days_override=None,
     save_state=False,
     execution_quality=None,
+    as_of_date=None,
+    prev_trading_date=None,
+    now_kst=None,
+    save_result=None,
 ):
     import datetime
     tracker_file = "regime_state.json"
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    if now_kst is None:
+        now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
     
     state = load_state_from_github(tracker_file)
             
@@ -1018,23 +1161,27 @@ def calculate_regime_classification(
         if isinstance(execution_quality, dict)
         else ""
     )
-    warning_days = state.get("warning_days", 0)
-    last_date = state.get("last_date")
-    
-    if is_warning:
-        if last_date != today_str:
-            warning_days += 1
-            state["warning_days"] = warning_days
-            state["last_date"] = today_str
-            if save_state:
-                save_state_to_github(tracker_file, state)
-    else:
-        if warning_days != 0 or last_date != today_str:
-            state["warning_days"] = 0
-            state["last_date"] = today_str
-            if save_state:
-                save_state_to_github(tracker_file, state)
-        warning_days = 0
+    # 경고일은 KOSPI 거래일(마지막 봉 날짜) 기준으로 센다. 서버 시간대(UTC)와 무관하다.
+    bar_date = as_of_date or now_kst.date().isoformat()
+    new_state = next_warning_state(state, is_warning, bar_date, prev_trading_date)
+    warning_days = new_state["warning_days"]
+    if save_state:
+        allowed, _reason = regime_save_allowed(as_of_date, now_kst)
+        # 이미 확정된 봉(같은 날짜)이나 더 이른 봉은 다시 저장하지 않는다.
+        if not allowed:
+            status = "blocked"
+        elif as_of_date and as_of_date > str(state.get("last_date") or ""):
+            status = save_state_to_github(tracker_file, new_state)
+        elif as_of_date and as_of_date == state.get("last_date") and state.get("storage") == "local":
+            # 로컬에만 확정된 봉: 값은 그대로 두고 원격 저장만 다시 시도한다(입력 재계산 없음).
+            status = save_state_to_github(
+                tracker_file,
+                {"last_date": state.get("last_date"), "warning_days": state.get("warning_days", 0)},
+            )
+        else:
+            status = "already"
+        if isinstance(save_result, dict):
+            save_result["status"] = status
         
     warning_days = warning_days_override if warning_days_override is not None else max(1, min(5, warning_days)) if is_warning else 0
     
